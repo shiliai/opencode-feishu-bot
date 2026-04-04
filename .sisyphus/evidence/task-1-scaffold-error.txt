@@ -1,0 +1,16 @@
+=== QA Scenario 2: Lint contract rejects malformed TypeScript ===
+Date: 2026-04-04T13:58:23+08:00
+
+Input: const bad:any = 1
+
+
+/home/chriswang/project/Shili/workspaces/general-study/opencode-feishu-bridge/tests/tmp/bad.ts
+  1:7   warning  'bad' is assigned a value but never used  @typescript-eslint/no-unused-vars
+  1:11  error    Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+
+✖ 2 problems (1 error, 1 warning)
+
+
+ESLint exit code: 1
+
+PASS: ESLint rejected malformed TypeScript (non-zero exit)

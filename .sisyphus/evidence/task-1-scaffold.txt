@@ -1,0 +1,42 @@
+=== QA Scenario 1: Fresh scaffold is runnable ===
+Date: 2026-04-04T13:55:17+08:00
+
+--- npm install ---
+
+--- npm run lint ---
+
+> opencode-feishu-bridge@0.1.0 lint
+> eslint src --ext .ts --max-warnings=0
+
+Exit code: 0
+
+--- npm run build ---
+
+> opencode-feishu-bridge@0.1.0 build
+> tsc
+
+Exit code: 0
+
+--- npm run test ---
+
+> opencode-feishu-bridge@0.1.0 test
+> vitest run
+
+
+ RUN  v3.2.4 /home/chriswang/project/Shili/workspaces/general-study/opencode-feishu-bridge
+
+No test files found, exiting with code 0
+
+include: **/*.{test,spec}.?(c|m)[jt]s?(x)
+exclude:  **/node_modules/**, **/dist/**, **/cypress/**, **/.{idea,git,cache,output,temp}/**, **/{karma,rollup,webpack,vite,vitest,jest,ava,babel,nyc,cypress,tsup,build,eslint,prettier}.config.*
+
+Exit code: 0
+
+--- npm run verify:contracts ---
+
+> opencode-feishu-bridge@0.1.0 verify:contracts
+> tsc --noEmit
+
+Exit code: 0
+
+=== ALL QA SCENARIO 1 CHECKS PASSED ===
