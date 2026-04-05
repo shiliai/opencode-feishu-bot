@@ -1,0 +1,252 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`Feishu Card Builders > buildControlCard - no cancel 1`] = `
+{
+  "elements": [
+    {
+      "content": "**Current Status**: Running",
+      "tag": "markdown",
+    },
+  ],
+  "header": {
+    "template": "blue",
+    "title": {
+      "content": "OpenCode Control",
+      "tag": "plain_text",
+    },
+  },
+}
+`;
+
+exports[`Feishu Card Builders > buildControlCard - with cancel 1`] = `
+{
+  "elements": [
+    {
+      "content": "**Current Status**: Running",
+      "tag": "markdown",
+    },
+    {
+      "actions": [
+        {
+          "tag": "button",
+          "text": {
+            "content": "Cancel Task",
+            "tag": "plain_text",
+          },
+          "type": "danger",
+          "value": {
+            "action": "control_cancel",
+          },
+        },
+      ],
+      "tag": "action",
+    },
+  ],
+  "header": {
+    "template": "blue",
+    "title": {
+      "content": "OpenCode Control",
+      "tag": "plain_text",
+    },
+  },
+}
+`;
+
+exports[`Feishu Card Builders > buildPermissionCard 1`] = `
+{
+  "elements": [
+    {
+      "content": "**Permission Requested: fs.write**
+Target:
+- /tmp/test.txt",
+      "tag": "markdown",
+    },
+    {
+      "actions": [
+        {
+          "tag": "button",
+          "text": {
+            "content": "Approve",
+            "tag": "plain_text",
+          },
+          "type": "primary",
+          "value": {
+            "action": "permission_reply",
+            "reply": "approve",
+            "requestId": "req-1",
+          },
+        },
+        {
+          "tag": "button",
+          "text": {
+            "content": "Always Approve",
+            "tag": "plain_text",
+          },
+          "value": {
+            "action": "permission_reply",
+            "reply": "always",
+            "requestId": "req-1",
+          },
+        },
+        {
+          "tag": "button",
+          "text": {
+            "content": "Deny",
+            "tag": "plain_text",
+          },
+          "type": "danger",
+          "value": {
+            "action": "permission_reply",
+            "reply": "deny",
+            "requestId": "req-1",
+          },
+        },
+      ],
+      "tag": "action",
+    },
+  ],
+  "header": {
+    "template": "red",
+    "title": {
+      "content": "Permission Request",
+      "tag": "plain_text",
+    },
+  },
+}
+`;
+
+exports[`Feishu Card Builders > buildQuestionCard - multiple choice 1`] = `
+{
+  "elements": [
+    {
+      "content": "**Color Selection**
+Which colors?",
+      "tag": "markdown",
+    },
+    {
+      "actions": [
+        {
+          "tag": "button",
+          "text": {
+            "content": "Red",
+            "tag": "plain_text",
+          },
+          "value": {
+            "action": "question_answer",
+            "messageId": "msg-2",
+            "optionIndex": 0,
+          },
+        },
+        {
+          "tag": "button",
+          "text": {
+            "content": "Blue",
+            "tag": "plain_text",
+          },
+          "value": {
+            "action": "question_answer",
+            "messageId": "msg-2",
+            "optionIndex": 1,
+          },
+        },
+      ],
+      "tag": "action",
+    },
+    {
+      "content": "*This is a multiple-choice question. Please select all that apply.*",
+      "tag": "markdown",
+    },
+  ],
+  "header": {
+    "template": "orange",
+    "title": {
+      "content": "Input Required",
+      "tag": "plain_text",
+    },
+  },
+}
+`;
+
+exports[`Feishu Card Builders > buildQuestionCard - single choice 1`] = `
+{
+  "elements": [
+    {
+      "content": "**Color Selection**
+Which color?",
+      "tag": "markdown",
+    },
+    {
+      "actions": [
+        {
+          "tag": "button",
+          "text": {
+            "content": "Red",
+            "tag": "plain_text",
+          },
+          "value": {
+            "action": "question_answer",
+            "messageId": "msg-1",
+            "optionIndex": 0,
+          },
+        },
+        {
+          "tag": "button",
+          "text": {
+            "content": "Blue",
+            "tag": "plain_text",
+          },
+          "value": {
+            "action": "question_answer",
+            "messageId": "msg-1",
+            "optionIndex": 1,
+          },
+        },
+      ],
+      "tag": "action",
+    },
+  ],
+  "header": {
+    "template": "orange",
+    "title": {
+      "content": "Input Required",
+      "tag": "plain_text",
+    },
+  },
+}
+`;
+
+exports[`Feishu Card Builders > buildStatusCard - completed 1`] = `
+{
+  "elements": [
+    {
+      "content": "Done!",
+      "tag": "markdown",
+    },
+  ],
+  "header": {
+    "template": "green",
+    "title": {
+      "content": "Status",
+      "tag": "plain_text",
+    },
+  },
+}
+`;
+
+exports[`Feishu Card Builders > buildStatusCard - ongoing 1`] = `
+{
+  "elements": [
+    {
+      "content": "Working on it...",
+      "tag": "markdown",
+    },
+  ],
+  "header": {
+    "template": "blue",
+    "title": {
+      "content": "Status",
+      "tag": "plain_text",
+    },
+  },
+}
+`;

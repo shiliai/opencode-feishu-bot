@@ -9,6 +9,7 @@ function clearAllConfigKeys(): void {
   const keys = [
     "FEISHU_APP_ID",
     "FEISHU_APP_SECRET",
+    "FEISHU_BOT_OPEN_ID",
     "FEISHU_CONNECTION_TYPE",
     "FEISHU_CARD_CALLBACK_URL",
     "FEISHU_CARD_CALLBACK_VERIFICATION_TOKEN",
@@ -19,6 +20,7 @@ function clearAllConfigKeys(): void {
     "SERVICE_HOST",
     "LOG_LEVEL",
     "THROTTLE_STATUS_CARD_UPDATE_INTERVAL_MS",
+    "FEISHU_EVENT_DEDUP_TTL_MS",
   ];
   for (const key of keys) {
     delete process.env[key];

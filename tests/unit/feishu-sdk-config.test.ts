@@ -5,7 +5,7 @@ import { createFeishuClients, type FeishuClients } from "../../src/feishu/sdk.js
 function makeConfig(overrides: Partial<AppConfig> = {}): AppConfig {
   return {
     opencode: { apiUrl: "http://localhost:4096", apiKey: "" },
-    feishu: { appId: "test-app-id", appSecret: "test-app-secret" },
+    feishu: { appId: "test-app-id", appSecret: "test-app-secret", eventDedupTtlMs: 300000 },
     connectionType: "ws",
     cardCallback: null,
     throttle: { statusCardUpdateIntervalMs: 2000 },
@@ -38,6 +38,20 @@ describe("createFeishuClients", () => {
 
     expect(clients.client).toBeDefined();
     expect(clients.wsClient).toBeDefined();
+    expect(clients.cardActionHandler).not.toBeNull();
+  });
+
+  it("returns cardActionHandler in ws mode when card callback config is present", () => {
+    const clients = createFeishuClients(
+      makeConfig({
+        cardCallback: {
+          callbackUrl: "https://example.com/webhook/card",
+          verificationToken: "test-token",
+          encryptKey: "",
+        },
+      }),
+    );
+
     expect(clients.cardActionHandler).not.toBeNull();
   });
 

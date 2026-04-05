@@ -35,7 +35,7 @@ export function createFeishuClients(
   });
 
   let cardActionHandler: CardActionHandler | null = null;
-  if (config.connectionType === "webhook" && config.cardCallback) {
+  if (config.cardCallback) {
     cardActionHandler = new CardActionHandler(
       {
         verificationToken: config.cardCallback.verificationToken,

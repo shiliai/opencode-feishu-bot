@@ -1,0 +1,191 @@
+import { InteractiveCard } from "@larksuiteoapi/node-sdk";
+import type { FeishuClients } from "./client.js";
+import type { Question } from "../question/types.js";
+import type { PermissionRequest } from "../permission/types.js";
+import {
+  buildPostPayload,
+  splitTextPayload,
+  truncateCardPayload,
+} from "./payloads.js";
+import {
+  buildStatusCard,
+  buildQuestionCard,
+  buildPermissionCard,
+  buildControlCard,
+} from "./cards.js";
+
+export interface FeishuSendOptions {
+  uuid?: string;
+}
+
+export interface FeishuSendCardOptions extends FeishuSendOptions {
+  updateMulti?: boolean;
+}
+
+export interface FeishuRendererOptions {
+  client: FeishuClients["client"];
+  receiveIdType?: "open_id" | "user_id" | "union_id" | "email" | "chat_id";
+}
+
+export class FeishuRenderer {
+  private client: FeishuClients["client"];
+  private defaultReceiveIdType: "open_id" | "user_id" | "union_id" | "email" | "chat_id";
+
+  constructor(options: FeishuRendererOptions) {
+    this.client = options.client;
+    this.defaultReceiveIdType = options.receiveIdType || "chat_id";
+  }
+
+  // Raw primitive sends
+  async sendText(
+    receiveId: string,
+    text: string,
+    receiveIdType?: "open_id" | "user_id" | "union_id" | "email" | "chat_id",
+    options: FeishuSendOptions = {},
+  ): Promise<string[]> {
+    const payloads = splitTextPayload(text);
+    const messageIds: string[] = [];
+
+    for (const payload of payloads) {
+      const res = await this.client.im.message.create({
+        params: {
+          receive_id_type: receiveIdType || this.defaultReceiveIdType,
+        },
+        data: {
+          receive_id: receiveId,
+          msg_type: "text",
+          content: payload,
+          uuid: options.uuid,
+        },
+      });
+      if (res.data?.message_id) {
+        messageIds.push(res.data.message_id);
+      }
+    }
+    return messageIds;
+  }
+
+  async sendPost(
+    receiveId: string,
+    title: string,
+    paragraphs: string[][],
+    receiveIdType?: "open_id" | "user_id" | "union_id" | "email" | "chat_id",
+    options: FeishuSendOptions = {},
+  ): Promise<string | undefined> {
+    const payload = buildPostPayload(title, paragraphs);
+    const res = await this.client.im.message.create({
+      params: {
+        receive_id_type: receiveIdType || this.defaultReceiveIdType,
+      },
+      data: {
+        receive_id: receiveId,
+        msg_type: "post",
+        content: payload,
+        uuid: options.uuid,
+      },
+    });
+    return res.data?.message_id;
+  }
+
+  async sendCard(
+    receiveId: string,
+    card: InteractiveCard,
+    receiveIdType?: "open_id" | "user_id" | "union_id" | "email" | "chat_id",
+    options: FeishuSendCardOptions = {},
+  ): Promise<string | undefined> {
+    const payload = truncateCardPayload(card, options.updateMulti ?? false);
+    const res = await this.client.im.message.create({
+      params: {
+        receive_id_type: receiveIdType || this.defaultReceiveIdType,
+      },
+      data: {
+        receive_id: receiveId,
+        msg_type: "interactive",
+        content: payload,
+        uuid: options.uuid,
+      },
+    });
+    return res.data?.message_id;
+  }
+
+  async replyPost(
+    messageId: string,
+    title: string,
+    paragraphs: string[][],
+    options: FeishuSendOptions = {},
+  ): Promise<string | undefined> {
+    const payload = buildPostPayload(title, paragraphs);
+    const res = await this.client.im.message.reply({
+      path: {
+        message_id: messageId,
+      },
+      data: {
+        msg_type: "post",
+        content: payload,
+        uuid: options.uuid,
+      },
+    });
+    return res.data?.message_id;
+  }
+
+  async updateCard(messageId: string, card: InteractiveCard): Promise<void> {
+    const payload = truncateCardPayload(card, true);
+    await this.client.im.message.patch({
+      path: {
+        message_id: messageId
+      },
+      data: {
+        content: payload
+      }
+    });
+  }
+
+  // Pre-bound card senders
+  async renderStatusCard(
+    receiveId: string,
+    title: string,
+    content: string,
+    isCompleted: boolean = false,
+    template?: "blue" | "green" | "red" | "orange" | "grey",
+  ): Promise<string | undefined> {
+    const card = buildStatusCard(title, content, isCompleted, template);
+    return this.sendCard(receiveId, card, undefined, { updateMulti: true });
+  }
+
+  async updateStatusCard(
+    messageId: string,
+    title: string,
+    content: string,
+    isCompleted: boolean = false,
+    template?: "blue" | "green" | "red" | "orange" | "grey",
+  ): Promise<void> {
+    const card = buildStatusCard(title, content, isCompleted, template);
+    return this.updateCard(messageId, card);
+  }
+
+  async renderQuestionCard(
+    receiveId: string,
+    question: Question,
+    associatedMessageId: string,
+  ): Promise<string | undefined> {
+    const card = buildQuestionCard(question, associatedMessageId);
+    return this.sendCard(receiveId, card);
+  }
+
+  async renderPermissionCard(
+    receiveId: string,
+    request: PermissionRequest,
+  ): Promise<string | undefined> {
+    const card = buildPermissionCard(request);
+    return this.sendCard(receiveId, card);
+  }
+
+  async renderControlCard(
+    receiveId: string,
+    status: string,
+    options?: { showCancel?: boolean },
+  ): Promise<string | undefined> {
+    const card = buildControlCard(status, options);
+    return this.sendCard(receiveId, card);
+  }
+}

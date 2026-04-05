@@ -1,0 +1,259 @@
+// biome-ignore assist/source/organizeImports: test imports are intentionally arranged for vitest mocks
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { ResponsePipelineController } from "../../src/feishu/response-pipeline.js";
+import {
+  StatusStore,
+  type ResponsePipelineTurnContext,
+} from "../../src/feishu/status-store.js";
+import type { SummaryCallbacks } from "../../src/summary/types.js";
+
+vi.mock("../../src/opencode/events.js", () => ({
+  openCodeEventSubscriber: {
+    subscribeToEvents: vi.fn(),
+  },
+}));
+
+type ControllerOptions = ConstructorParameters<typeof ResponsePipelineController>[0];
+type EventSubscriber = NonNullable<ControllerOptions["eventSubscriber"]>;
+type SummaryAggregator = NonNullable<ControllerOptions["summaryAggregator"]>;
+type Renderer = ControllerOptions["renderer"];
+type SettingsManager = ControllerOptions["settingsManager"];
+type InteractionManager = ControllerOptions["interactionManager"];
+type Logger = NonNullable<ControllerOptions["logger"]>;
+
+function makeTurnContext(sessionId: string = "session-1"): ResponsePipelineTurnContext {
+  return {
+    sessionId,
+    directory: `/workspace/${sessionId}`,
+    receiveId: `chat-${sessionId}`,
+    sourceMessageId: `source-${sessionId}`,
+  };
+}
+
+function createHarness() {
+  const statusStore = new StatusStore();
+  let callbacks: SummaryCallbacks | undefined;
+
+  const renderStatusCard = vi.fn<Renderer["renderStatusCard"]>().mockResolvedValue("status-card-1");
+  const updateStatusCard = vi
+    .fn<Renderer["updateStatusCard"]>()
+    .mockResolvedValue(undefined);
+  const replyPost = vi.fn<Renderer["replyPost"]>().mockResolvedValue("reply-msg-1");
+  const sendPost = vi.fn<Renderer["sendPost"]>().mockResolvedValue("send-msg-1");
+
+  const renderer = {
+    renderStatusCard,
+    updateStatusCard,
+    replyPost,
+    sendPost,
+  } satisfies Renderer;
+
+  const summaryAggregator = {
+    setCallbacks: vi.fn((nextCallbacks: SummaryCallbacks): void => {
+      callbacks = nextCallbacks;
+    }),
+    setSession: vi.fn((sessionId: string): void => {
+      void sessionId;
+    }),
+    processEvent: vi.fn((): void => undefined),
+  } satisfies SummaryAggregator;
+
+  const eventSubscriber = {
+    subscribeToEvents: vi
+      .fn<EventSubscriber["subscribeToEvents"]>()
+      .mockImplementation(() => new Promise<void>(() => undefined)),
+  } satisfies EventSubscriber;
+
+  const settingsManager = {
+    setStatusMessageId: vi.fn((messageId: string): void => {
+      void messageId;
+    }),
+    clearStatusMessageId: vi.fn((): void => undefined),
+  } satisfies SettingsManager;
+
+  const interactionManager = {
+    clearBusy: vi.fn((): void => undefined),
+  } satisfies InteractionManager;
+
+  const logger = {
+    info: vi.fn((message: string, ...args: unknown[]): void => {
+      void message;
+      void args;
+    }),
+    warn: vi.fn((message: string, ...args: unknown[]): void => {
+      void message;
+      void args;
+    }),
+    error: vi.fn((message: string, ...args: unknown[]): void => {
+      void message;
+      void args;
+    }),
+    debug: vi.fn((message: string, ...args: unknown[]): void => {
+      void message;
+      void args;
+    }),
+  } satisfies Logger;
+
+  const setTimeoutFn = vi.fn(
+    (...args: Parameters<typeof setTimeout>): ReturnType<typeof setTimeout> => setTimeout(...args),
+  );
+  const clearTimeoutFn = vi.fn(
+    (...args: Parameters<typeof clearTimeout>): ReturnType<typeof clearTimeout> =>
+      clearTimeout(...args),
+  );
+
+  const controller = new ResponsePipelineController({
+    eventSubscriber,
+    summaryAggregator,
+    renderer,
+    settingsManager,
+    interactionManager,
+    statusStore,
+    logger,
+    scheduleAsync: (task): void => task(),
+    setTimeoutFn,
+    clearTimeoutFn,
+    config: {
+      throttle: {
+        statusCardUpdateIntervalMs: 1_000,
+        statusCardPatchRetryDelayMs: 25,
+        statusCardPatchMaxAttempts: 3,
+      },
+    },
+  });
+
+  if (!callbacks) {
+    throw new Error("summary callbacks were not captured");
+  }
+
+  return {
+    controller,
+    callbacks,
+    statusStore,
+    renderer,
+    settingsManager,
+    interactionManager,
+    setTimeoutFn,
+    clearTimeoutFn,
+  };
+}
+
+async function drainSession(
+  controller: ResponsePipelineController,
+  sessionId: string,
+): Promise<void> {
+  await controller.enqueueSessionTask(sessionId, async () => undefined);
+}
+
+async function createLiveStatusCard(
+  harness: ReturnType<typeof createHarness>,
+  context: ResponsePipelineTurnContext,
+): Promise<void> {
+  harness.controller.startTurn(context);
+  harness.callbacks.onTypingStart?.(context.sessionId);
+  await drainSession(harness.controller, context.sessionId);
+}
+
+describe("ResponsePipelineController status card throttling", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("batches multiple partial events into one throttled status card update", async () => {
+    const harness = createHarness();
+    const context = makeTurnContext();
+
+    await createLiveStatusCard(harness, context);
+
+    harness.callbacks.onPartial?.(context.sessionId, "assistant-msg-1", "Hel");
+    harness.callbacks.onPartial?.(context.sessionId, "assistant-msg-1", "Hello");
+    harness.callbacks.onPartial?.(context.sessionId, "assistant-msg-1", "Hello world");
+
+    expect(harness.renderer.updateStatusCard).not.toHaveBeenCalled();
+    expect(harness.setTimeoutFn).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(999);
+    expect(harness.renderer.updateStatusCard).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(1);
+    await drainSession(harness.controller, context.sessionId);
+
+    expect(harness.renderer.updateStatusCard).toHaveBeenCalledTimes(1);
+    expect(harness.renderer.updateStatusCard).toHaveBeenCalledWith(
+      "status-card-1",
+      "OpenCode is working",
+      "Hello world",
+      false,
+      "blue",
+    );
+  });
+
+  it("schedules only one timer at a time while partials keep arriving", async () => {
+    const harness = createHarness();
+    const context = makeTurnContext();
+
+    await createLiveStatusCard(harness, context);
+
+    harness.callbacks.onPartial?.(context.sessionId, "assistant-msg-1", "A");
+    harness.callbacks.onPartial?.(context.sessionId, "assistant-msg-1", "AB");
+    harness.callbacks.onPartial?.(context.sessionId, "assistant-msg-1", "ABC");
+
+    expect(harness.setTimeoutFn).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    await drainSession(harness.controller, context.sessionId);
+
+    expect(harness.renderer.updateStatusCard).toHaveBeenCalledTimes(1);
+
+    harness.callbacks.onPartial?.(context.sessionId, "assistant-msg-1", "ABCD");
+
+    expect(harness.setTimeoutFn).toHaveBeenCalledTimes(2);
+  });
+
+  it("skips duplicate PATCH calls when the latest content is already patched", async () => {
+    const harness = createHarness();
+    const context = makeTurnContext();
+
+    await createLiveStatusCard(harness, context);
+
+    harness.callbacks.onPartial?.(context.sessionId, "assistant-msg-1", "Latest partial");
+    await vi.advanceTimersByTimeAsync(1_000);
+    await drainSession(harness.controller, context.sessionId);
+
+    const state = harness.statusStore.get(context.sessionId);
+    expect(state?.lastPartialSignature).toBe(state?.lastPatchedSignature);
+
+    harness.renderer.updateStatusCard.mockClear();
+
+    harness.callbacks.onComplete?.(context.sessionId, "assistant-msg-1", "Final reply");
+    await drainSession(harness.controller, context.sessionId);
+
+    expect(harness.renderer.updateStatusCard).not.toHaveBeenCalled();
+    expect(harness.renderer.replyPost).toHaveBeenCalledTimes(1);
+  });
+
+  it("flushes a pending status timer before sending the final reply", async () => {
+    const harness = createHarness();
+    const context = makeTurnContext();
+
+    await createLiveStatusCard(harness, context);
+
+    harness.callbacks.onPartial?.(context.sessionId, "assistant-msg-1", "Queued partial");
+    harness.callbacks.onComplete?.(context.sessionId, "assistant-msg-1", "Final reply");
+    await drainSession(harness.controller, context.sessionId);
+
+    expect(harness.clearTimeoutFn).toHaveBeenCalledTimes(1);
+    expect(harness.renderer.updateStatusCard).toHaveBeenCalledTimes(1);
+    expect(harness.renderer.updateStatusCard.mock.invocationCallOrder[0]).toBeLessThan(
+      harness.renderer.replyPost.mock.invocationCallOrder[0],
+    );
+    expect(harness.renderer.replyPost).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(harness.renderer.updateStatusCard).toHaveBeenCalledTimes(1);
+  });
+});

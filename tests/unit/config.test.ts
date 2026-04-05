@@ -9,6 +9,7 @@ import {
 const VALID_ENV = {
   FEISHU_APP_ID: "test-app-id",
   FEISHU_APP_SECRET: "test-app-secret",
+  FEISHU_BOT_OPEN_ID: "ou_bot_test",
   FEISHU_CONNECTION_TYPE: "ws",
   OPENCODE_API_BASE_URL: "http://localhost:4096",
   SERVICE_PORT: "3000",
@@ -19,6 +20,12 @@ const VALID_ENV = {
 const WEBHOOK_ENV = {
   ...VALID_ENV,
   FEISHU_CONNECTION_TYPE: "webhook",
+  FEISHU_CARD_CALLBACK_URL: "https://example.com/webhook/card",
+  FEISHU_CARD_CALLBACK_VERIFICATION_TOKEN: "test-verification-token",
+};
+
+const DUAL_INGRESS_ENV = {
+  ...VALID_ENV,
   FEISHU_CARD_CALLBACK_URL: "https://example.com/webhook/card",
   FEISHU_CARD_CALLBACK_VERIFICATION_TOKEN: "test-verification-token",
 };
@@ -63,6 +70,8 @@ describe("loadConfig", () => {
 
     expect(config.feishu.appId).toBe("test-app-id");
     expect(config.feishu.appSecret).toBe("test-app-secret");
+    expect(config.feishu.botOpenId).toBe("ou_bot_test");
+    expect(config.feishu.eventDedupTtlMs).toBe(300000);
     expect(config.connectionType).toBe("ws");
     expect(config.opencode.apiUrl).toBe("http://localhost:4096");
     expect(config.opencode.apiKey).toBe("");
@@ -86,6 +95,15 @@ describe("loadConfig", () => {
       "test-verification-token",
     );
     expect(config.cardCallback!.encryptKey).toBe("");
+  });
+
+  it("allows dual ingress card callback settings in ws mode", () => {
+    setEnv(DUAL_INGRESS_ENV);
+    const config = loadConfig();
+
+    expect(config.connectionType).toBe("ws");
+    expect(config.cardCallback).not.toBeNull();
+    expect(config.cardCallback!.callbackUrl).toBe("https://example.com/webhook/card");
   });
 
   it("defaults connection type to ws when FEISHU_CONNECTION_TYPE is unset", () => {
@@ -142,6 +160,13 @@ describe("loadConfig", () => {
     expect(config.throttle.statusCardUpdateIntervalMs).toBe(5000);
   });
 
+  it("reads optional FEISHU_EVENT_DEDUP_TTL_MS", () => {
+    setEnv({ ...VALID_ENV, FEISHU_EVENT_DEDUP_TTL_MS: "60000" });
+    const config = loadConfig();
+
+    expect(config.feishu.eventDedupTtlMs).toBe(60000);
+  });
+
   it("falls back to default for invalid throttle value", () => {
     setEnv({ ...VALID_ENV, THROTTLE_STATUS_CARD_UPDATE_INTERVAL_MS: "abc" });
     const config = loadConfig();
@@ -157,6 +182,13 @@ describe("loadConfig", () => {
     const config = loadConfig();
 
     expect(config.throttle.statusCardUpdateIntervalMs).toBe(2000);
+  });
+
+  it("falls back to default for invalid dedup ttl", () => {
+    setEnv({ ...VALID_ENV, FEISHU_EVENT_DEDUP_TTL_MS: "abc" });
+    const config = loadConfig();
+
+    expect(config.feishu.eventDedupTtlMs).toBe(300000);
   });
 
   it("reads optional FEISHU_CARD_CALLBACK_ENCRYPT_KEY in webhook mode", () => {

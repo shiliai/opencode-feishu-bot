@@ -10,6 +10,8 @@ export interface OpenCodeConfig {
 export interface FeishuConfig {
   appId: string;
   appSecret: string;
+  botOpenId: string;
+  eventDedupTtlMs: number;
 }
 
 export interface CardCallbackConfig {
@@ -20,6 +22,8 @@ export interface CardCallbackConfig {
 
 export interface ThrottleConfig {
   statusCardUpdateIntervalMs: number;
+  statusCardPatchRetryDelayMs: number;
+  statusCardPatchMaxAttempts: number;
 }
 
 export interface ServiceConfig {
@@ -85,12 +89,27 @@ export function loadConfig(): AppConfig {
     getEnvVar("FEISHU_CONNECTION_TYPE", false) || "ws",
   );
 
+  const callbackUrl = getEnvVar("FEISHU_CARD_CALLBACK_URL", false);
+  const verificationToken = getEnvVar(
+    "FEISHU_CARD_CALLBACK_VERIFICATION_TOKEN",
+    false,
+  );
+  const hasCardCallbackConfig = Boolean(callbackUrl || verificationToken);
+
   let cardCallback: CardCallbackConfig | null = null;
-  if (connectionType === "webhook") {
-    const callbackUrl = getEnvVar("FEISHU_CARD_CALLBACK_URL");
-    const verificationToken = getEnvVar(
-      "FEISHU_CARD_CALLBACK_VERIFICATION_TOKEN",
-    );
+  if (connectionType === "webhook" || hasCardCallbackConfig) {
+    if (!callbackUrl) {
+      throw new ConfigValidationError(
+        "FEISHU_CARD_CALLBACK_URL",
+        "Missing required environment variable: FEISHU_CARD_CALLBACK_URL. Set it in your .env file or environment.",
+      );
+    }
+    if (!verificationToken) {
+      throw new ConfigValidationError(
+        "FEISHU_CARD_CALLBACK_VERIFICATION_TOKEN",
+        "Missing required environment variable: FEISHU_CARD_CALLBACK_VERIFICATION_TOKEN. Set it in your .env file or environment.",
+      );
+    }
     cardCallback = {
       callbackUrl,
       verificationToken,
@@ -106,6 +125,11 @@ export function loadConfig(): AppConfig {
     feishu: {
       appId: getEnvVar("FEISHU_APP_ID"),
       appSecret: getEnvVar("FEISHU_APP_SECRET"),
+      botOpenId: getEnvVar("FEISHU_BOT_OPEN_ID", false),
+      eventDedupTtlMs: getOptionalPositiveIntEnvVar(
+        "FEISHU_EVENT_DEDUP_TTL_MS",
+        300_000,
+      ),
     },
     connectionType,
     cardCallback,
@@ -113,6 +137,14 @@ export function loadConfig(): AppConfig {
       statusCardUpdateIntervalMs: getOptionalPositiveIntEnvVar(
         "THROTTLE_STATUS_CARD_UPDATE_INTERVAL_MS",
         2_000,
+      ),
+      statusCardPatchRetryDelayMs: getOptionalPositiveIntEnvVar(
+        "THROTTLE_STATUS_CARD_PATCH_RETRY_DELAY_MS",
+        500,
+      ),
+      statusCardPatchMaxAttempts: getOptionalPositiveIntEnvVar(
+        "THROTTLE_STATUS_CARD_PATCH_MAX_ATTEMPTS",
+        3,
       ),
     },
     service: {

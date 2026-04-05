@@ -1,10 +1,6 @@
-import "dotenv/config";
+import { startFeishuApp } from "./app/start-feishu-app.js";
 
-async function main(): Promise<void> {
-  console.log("opencode-feishu-bridge starting...");
-}
-
-main().catch((error: unknown) => {
+startFeishuApp().catch((error: unknown) => {
   console.error("Fatal error:", error);
   process.exit(1);
 });
