@@ -21,6 +21,7 @@ function clearAllConfigKeys(): void {
     "LOG_LEVEL",
     "THROTTLE_STATUS_CARD_UPDATE_INTERVAL_MS",
     "FEISHU_EVENT_DEDUP_TTL_MS",
+    "CONTROL_CATALOG_CACHE_TTL_MS",
   ];
   for (const key of keys) {
     delete process.env[key];

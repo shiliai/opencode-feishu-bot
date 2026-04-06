@@ -26,6 +26,10 @@ export interface ThrottleConfig {
   statusCardPatchMaxAttempts: number;
 }
 
+export interface ControlCatalogConfig {
+  cacheTtlMs: number;
+}
+
 export interface ServiceConfig {
   port: number;
   host: string;
@@ -37,9 +41,12 @@ export interface AppConfig {
   connectionType: ConnectionType;
   cardCallback: CardCallbackConfig | null;
   throttle: ThrottleConfig;
+  controlCatalog: ControlCatalogConfig;
   service: ServiceConfig;
   logLevel: string;
 }
+
+export const DEFAULT_CONTROL_CATALOG_CACHE_TTL_MS = 600_000;
 
 export class ConfigValidationError extends Error {
   constructor(
@@ -119,7 +126,8 @@ export function loadConfig(): AppConfig {
 
   return {
     opencode: {
-      apiUrl: getEnvVar("OPENCODE_API_BASE_URL", false) || "http://localhost:4096",
+      apiUrl:
+        getEnvVar("OPENCODE_API_BASE_URL", false) || "http://localhost:4096",
       apiKey: getEnvVar("OPENCODE_API_KEY", false),
     },
     feishu: {
@@ -145,6 +153,12 @@ export function loadConfig(): AppConfig {
       statusCardPatchMaxAttempts: getOptionalPositiveIntEnvVar(
         "THROTTLE_STATUS_CARD_PATCH_MAX_ATTEMPTS",
         3,
+      ),
+    },
+    controlCatalog: {
+      cacheTtlMs: getOptionalPositiveIntEnvVar(
+        "CONTROL_CATALOG_CACHE_TTL_MS",
+        DEFAULT_CONTROL_CATALOG_CACHE_TTL_MS,
       ),
     },
     service: {
