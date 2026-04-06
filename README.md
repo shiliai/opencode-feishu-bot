@@ -35,7 +35,7 @@ Common optional settings:
 - `THROTTLE_STATUS_CARD_UPDATE_INTERVAL_MS`
 - `THROTTLE_STATUS_CARD_PATCH_RETRY_DELAY_MS`
 - `THROTTLE_STATUS_CARD_PATCH_MAX_ATTEMPTS`
-- `CONTROL_CATALOG_MODEL_STATE_PATH` — defaults to `~/.local/state/opencode/model.json` for favorites/recent enrichment ordering
+- `CONTROL_CATALOG_MODEL_STATE_PATH` — defaults to `${HOME}/.local/state/opencode/model.json` for favorites/recent enrichment ordering (when overriding, use an absolute path like `/home/your-user/.local/state/opencode/model.json`)
 
 Copy `.env.example` and fill in the values that apply to your environment.
 
@@ -55,19 +55,19 @@ The service exposes `/healthz` on the same HTTP server used for Feishu card call
 
 The bridge currently supports these slash commands in Feishu chat:
 
-| Command         | Usage              | What it does                                                      |
-| --------------- | ------------------ | ----------------------------------------------------------------- |
-| `/help`         | `/help`            | Shows the command help card                                       |
-| `/new`          | `/new`             | Creates a new OpenCode session and switches to it                 |
-| `/sessions`     | `/sessions`        | Lists available/recent sessions                                   |
-| `/session`      | `/session`         | Opens a session picker card                                       |
-| `/session [id]` | `/session ses_xxx` | Switches current session to the given id                          |
-| `/model`        | `/model`           | Opens model picker card (shows currently available model entries) |
-| `/model [name]` | `/model gpt-4o`    | Sets current model to `[name]`                                    |
-| `/agent`        | `/agent`           | Opens agent picker card (shows currently available agent entries) |
-| `/agent [name]` | `/agent build`     | Sets current agent to `[name]`                                    |
-| `/status`       | `/status`          | Shows current Session / Model / Agent / State                     |
-| `/abort`        | `/abort`           | Aborts the current session and clears busy state                  |
+| Command         | Usage                  | What it does                                                      |
+| --------------- | ---------------------- | ----------------------------------------------------------------- |
+| `/help`         | `/help`                | Shows the command help card                                       |
+| `/new`          | `/new`                 | Creates a new OpenCode session and switches to it                 |
+| `/sessions`     | `/sessions`            | Lists available/recent sessions                                   |
+| `/session`      | `/session`             | Opens a session picker card                                       |
+| `/session [id]` | `/session ses_xxx`     | Switches current session to the given id                          |
+| `/model`        | `/model`               | Opens model picker card (shows currently available model entries) |
+| `/model [name]` | `/model openai/gpt-4o` | Sets current model to `[name]`                                    |
+| `/agent`        | `/agent`               | Opens agent picker card (shows currently available agent entries) |
+| `/agent [name]` | `/agent build`         | Sets current agent to `[name]`                                    |
+| `/status`       | `/status`              | Shows current Session / Model / Agent / State                     |
+| `/abort`        | `/abort`               | Aborts the current session and clears busy state                  |
 
 ### Notes on command behavior
 
@@ -86,7 +86,7 @@ Use this sequence for one-by-one validation:
 4. `/status` — verify session field changed.
 5. `/model` — verify the model picker card renders real catalog options.
 6. Click a model picker button, then `/status` — verify model field updates from picker selection.
-7. `/model <name>` then `/status` — verify direct model selection still works.
+7. `/model openai/gpt-4o` then `/status` — verify direct model selection still works.
 8. `/agent` — verify the agent picker card renders real catalog options.
 9. Click an agent picker button, then `/status` — verify agent field updates from picker selection.
 10. `/agent <name>` then `/status` — verify direct agent selection still works.

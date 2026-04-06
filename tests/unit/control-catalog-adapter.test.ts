@@ -164,6 +164,56 @@ describe("ControlCatalogAdapter", () => {
     expect(openCodeClient.config.providers).toHaveBeenCalledTimes(2);
   });
 
+  it("keeps cache scoped to the resolved directory", async () => {
+    const settingsManager = createMockSettingsManager();
+    let currentDirectory = "/workspace/project-a";
+    settingsManager.getCurrentProject.mockImplementation(() => ({
+      id: currentDirectory,
+      worktree: currentDirectory,
+      name: "Project",
+    }));
+
+    const openCodeClient = createMockOpenCodeClient();
+    openCodeClient.config.providers.mockImplementation(async (parameters) => {
+      const directory = parameters?.directory;
+      if (directory === "/workspace/project-b") {
+        return {
+          data: {
+            providers: [{ id: "openai", models: { "gpt-4.1": {} } }],
+            default: {},
+          },
+        };
+      }
+
+      return {
+        data: {
+          providers: [{ id: "openai", models: { "gpt-4o": {} } }],
+          default: {},
+        },
+      };
+    });
+
+    const adapter = new ControlCatalogAdapter({
+      settingsManager: settingsManager as never,
+      openCodeClient: openCodeClient as never,
+      cacheTtlMs: 60_000,
+      now: () => 1_000,
+    });
+
+    const firstScopeModels = await adapter.getAvailableModels();
+    currentDirectory = "/workspace/project-b";
+    const secondScopeModels = await adapter.getAvailableModels();
+
+    expect(firstScopeModels).toEqual(["openai/gpt-4o"]);
+    expect(secondScopeModels).toEqual(["openai/gpt-4.1"]);
+    expect(openCodeClient.config.providers).toHaveBeenNthCalledWith(1, {
+      directory: "/workspace/project-a",
+    });
+    expect(openCodeClient.config.providers).toHaveBeenNthCalledWith(2, {
+      directory: "/workspace/project-b",
+    });
+  });
+
   it("prioritizes favorites/recent models from OpenCode local state when available", async () => {
     const settingsManager = createMockSettingsManager();
     const openCodeClient = createMockOpenCodeClient();

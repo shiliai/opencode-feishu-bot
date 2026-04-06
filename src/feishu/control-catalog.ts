@@ -44,6 +44,7 @@ export interface ControlCatalogAdapterOptions {
 }
 
 interface CacheEntry {
+  scopeKey: string;
   expiresAt: number;
   values: string[];
 }
@@ -191,23 +192,35 @@ export class ControlCatalogAdapter implements ControlCatalogProvider {
   }
 
   async getAvailableModels(): Promise<string[]> {
+    const directory = resolveDirectoryScope(
+      this.settingsManager.getCurrentProject(),
+      this.settingsManager.getCurrentSession(),
+    );
+
     return this.resolveWithCache({
       cache: this.modelCache,
       updateCache: (entry) => {
         this.modelCache = entry;
       },
-      fetchCatalog: () => this.fetchModels(),
+      fetchCatalog: () => this.fetchModels(directory),
+      scopeKey: directory,
       kind: "model",
     });
   }
 
   async getAvailableAgents(): Promise<string[]> {
+    const directory = resolveDirectoryScope(
+      this.settingsManager.getCurrentProject(),
+      this.settingsManager.getCurrentSession(),
+    );
+
     return this.resolveWithCache({
       cache: this.agentCache,
       updateCache: (entry) => {
         this.agentCache = entry;
       },
-      fetchCatalog: () => this.fetchAgents(),
+      fetchCatalog: () => this.fetchAgents(directory),
+      scopeKey: directory,
       kind: "agent",
     });
   }
@@ -216,22 +229,28 @@ export class ControlCatalogAdapter implements ControlCatalogProvider {
     cache: CacheEntry | undefined;
     updateCache: (entry: CacheEntry) => void;
     fetchCatalog: () => Promise<string[]>;
+    scopeKey: string;
     kind: "model" | "agent";
   }): Promise<string[]> {
     const now = this.now();
-    if (options.cache && options.cache.expiresAt > now) {
+    if (
+      options.cache &&
+      options.cache.scopeKey === options.scopeKey &&
+      options.cache.expiresAt > now
+    ) {
       return [...options.cache.values];
     }
 
     try {
       const values = await options.fetchCatalog();
       options.updateCache({
+        scopeKey: options.scopeKey,
         values,
         expiresAt: now + this.cacheTtlMs,
       });
       return [...values];
     } catch (error) {
-      if (options.cache) {
+      if (options.cache && options.cache.scopeKey === options.scopeKey) {
         this.logger.warn(
           `[ControlCatalogAdapter] Falling back to stale ${options.kind} catalog cache`,
           error,
@@ -247,11 +266,7 @@ export class ControlCatalogAdapter implements ControlCatalogProvider {
     }
   }
 
-  private async fetchModels(): Promise<string[]> {
-    const directory = resolveDirectoryScope(
-      this.settingsManager.getCurrentProject(),
-      this.settingsManager.getCurrentSession(),
-    );
+  private async fetchModels(directory: string): Promise<string[]> {
     const response = await this.openCodeClient.config.providers({ directory });
 
     const providers = this.extractProviders(response.data);
@@ -336,11 +351,7 @@ export class ControlCatalogAdapter implements ControlCatalogProvider {
     return [];
   }
 
-  private async fetchAgents(): Promise<string[]> {
-    const directory = resolveDirectoryScope(
-      this.settingsManager.getCurrentProject(),
-      this.settingsManager.getCurrentSession(),
-    );
+  private async fetchAgents(directory: string): Promise<string[]> {
     const response = await this.openCodeClient.app.agents({ directory });
     const data = response.data;
     if (!Array.isArray(data)) {

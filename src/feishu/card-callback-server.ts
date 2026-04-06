@@ -97,7 +97,7 @@ function verifyToken(
     }
 
     if (typeof parsed.encrypt === "string") {
-      return true;
+      return Boolean(options.encryptKey?.trim());
     }
 
     return false;

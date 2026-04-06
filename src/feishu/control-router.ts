@@ -333,9 +333,22 @@ export class ControlRouter {
     }
 
     const modelName = args.trim();
-    this.settings.setCurrentModel(this.parseModelSelection(modelName));
-    this.logger.info(`[ControlRouter] Switched to model: ${modelName}`);
-    return { success: true, message: `Model switched to: ${modelName}` };
+    const selectedModel = await this.resolveModelSelection(modelName);
+    if (!selectedModel) {
+      return {
+        success: false,
+        message:
+          "Unknown model. Use provider/model (for example openai/gpt-4o) or a unique bare model name from the catalog.",
+      };
+    }
+
+    const selectedModelName = `${selectedModel.providerID}/${selectedModel.modelID}`;
+    this.settings.setCurrentModel(selectedModel);
+    this.logger.info(`[ControlRouter] Switched to model: ${selectedModelName}`);
+    return {
+      success: true,
+      message: `Model switched to: ${selectedModelName}`,
+    };
   }
 
   private async handleAgent(
@@ -397,18 +410,36 @@ export class ControlRouter {
     }
   }
 
-  private parseModelSelection(modelName: string): ModelInfo {
+  private parseModelSelection(modelName: string): ModelInfo | null {
     const separator = modelName.indexOf("/");
     if (separator <= 0 || separator >= modelName.length - 1) {
-      return {
-        providerID: modelName,
-        modelID: modelName,
-      };
+      return null;
     }
 
     return {
       providerID: modelName.slice(0, separator),
       modelID: modelName.slice(separator + 1),
     };
+  }
+
+  private async resolveModelSelection(
+    modelName: string,
+  ): Promise<ModelInfo | null> {
+    const explicitModel = this.parseModelSelection(modelName);
+    if (explicitModel) {
+      return explicitModel;
+    }
+
+    const availableModels = await this.catalogAdapter.getAvailableModels();
+    const suffixMatches = availableModels.filter((candidate) => {
+      const separator = candidate.indexOf("/");
+      return separator > 0 && candidate.slice(separator + 1) === modelName;
+    });
+
+    if (suffixMatches.length !== 1) {
+      return null;
+    }
+
+    return this.parseModelSelection(suffixMatches[0]);
   }
 }

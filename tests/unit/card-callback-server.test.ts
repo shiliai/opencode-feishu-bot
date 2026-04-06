@@ -163,4 +163,35 @@ describe("card callback server", () => {
     expect(adaptedHandler).toHaveBeenCalledTimes(1);
     expect(end).toHaveBeenCalledWith("ok");
   });
+
+  it("rejects encrypted payload when verification token is configured without encrypt key", async () => {
+    const adaptedHandler = vi.fn(async (_req, res) => {
+      res.statusCode = 200;
+      res.end("ok");
+    });
+    const adaptDefaultImpl = vi.fn(() => adaptedHandler);
+
+    const handler = createCardCallbackRequestHandler(
+      { invoke: vi.fn() } as never,
+      adaptDefaultImpl,
+      {
+        verificationToken: "verification-token",
+      },
+    );
+
+    const body = JSON.stringify({ encrypt: "ciphertext" });
+    const req = Readable.from([body]) as Readable & Partial<IncomingMessage>;
+    req.method = "POST";
+    req.url = FEISHU_CARD_CALLBACK_PATH;
+    req.headers = {};
+
+    const end = vi.fn();
+    const res = { statusCode: 0, end };
+
+    await handler(req as IncomingMessage, res as never);
+
+    expect(adaptedHandler).not.toHaveBeenCalled();
+    expect(res.statusCode).toBe(401);
+    expect(end).toHaveBeenCalledWith("Invalid token");
+  });
 });

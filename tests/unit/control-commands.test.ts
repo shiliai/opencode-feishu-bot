@@ -193,7 +193,7 @@ describe("ControlRouter — command dispatch", () => {
 
     expect(result.success).toBe(true);
     expect(settings.setCurrentModel).toHaveBeenCalledWith({
-      providerID: "gpt-4",
+      providerID: "openai",
       modelID: "gpt-4",
     });
   });
@@ -212,6 +212,38 @@ describe("ControlRouter — command dispatch", () => {
       providerID: "openai",
       modelID: "gpt-4.1",
     });
+  });
+
+  it("/model <name> returns failure when bare model name is ambiguous", async () => {
+    const settings = createMockSettings();
+    const openCodeClient = createMockOpenCodeClient();
+    openCodeClient.config.providers.mockResolvedValue({
+      data: {
+        providers: [
+          { id: "openai", models: { "gpt-4o": {} } },
+          { id: "anthropic", models: { "gpt-4o": {} } },
+        ],
+        default: {},
+      },
+    });
+
+    const router = createRouter({ settingsManager: settings, openCodeClient });
+    const result = await router.handleCommand("chat-1", "/model gpt-4o");
+
+    expect(result.success).toBe(false);
+    expect(result.message).toContain("provider/model");
+    expect(settings.setCurrentModel).not.toHaveBeenCalled();
+  });
+
+  it("/model <name> returns failure when bare model name is unknown", async () => {
+    const settings = createMockSettings();
+    const router = createRouter({ settingsManager: settings });
+
+    const result = await router.handleCommand("chat-1", "/model not-real");
+
+    expect(result.success).toBe(false);
+    expect(result.message).toContain("Unknown model");
+    expect(settings.setCurrentModel).not.toHaveBeenCalled();
   });
 
   it("/agent <name> updates agent in settings", async () => {
