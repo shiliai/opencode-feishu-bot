@@ -28,6 +28,18 @@ function getRawMessage(
   return normalized.message as Record<string, unknown> | null;
 }
 
+function getCardActionQueueKey(event: Record<string, unknown>): string {
+  const context = isRecord(event.context) ? event.context : null;
+  const openMessageId =
+    typeof event.open_message_id === "string"
+      ? event.open_message_id
+      : typeof context?.open_message_id === "string"
+        ? context.open_message_id
+        : null;
+
+  return openMessageId ? `card:${openMessageId}` : "card:__default__";
+}
+
 function inferMimeType(fileName: string): string {
   switch (extname(fileName).toLowerCase()) {
     case ".md":
@@ -89,6 +101,110 @@ export function createRuntimeEventHandlers(
   ): Promise<Record<string, never>>;
 } {
   const logger = options.logger ?? defaultLogger;
+  const messageTasks = new Map<string, Promise<void>>();
+  const cardActionTasks = new Map<string, Promise<void>>();
+
+  const enqueueMessageTask = async (
+    queueKey: string,
+    task: () => Promise<void>,
+  ): Promise<void> => {
+    const previousTask = messageTasks.get(queueKey) ?? Promise.resolve();
+    const nextTask = previousTask
+      .catch(() => undefined)
+      .then(task)
+      .finally(() => {
+        if (messageTasks.get(queueKey) === nextTask) {
+          messageTasks.delete(queueKey);
+        }
+      });
+
+    messageTasks.set(queueKey, nextTask);
+    await nextTask;
+  };
+
+  const enqueueCardActionTask = async (
+    queueKey: string,
+    task: () => Promise<void>,
+  ): Promise<void> => {
+    const previousTask = cardActionTasks.get(queueKey) ?? Promise.resolve();
+    const nextTask = previousTask
+      .catch(() => undefined)
+      .then(task)
+      .finally(() => {
+        if (cardActionTasks.get(queueKey) === nextTask) {
+          cardActionTasks.delete(queueKey);
+        }
+      });
+
+    cardActionTasks.set(queueKey, nextTask);
+    await nextTask;
+  };
+
+  const processMessageReceived = async (
+    event: FeishuMessageReceiveEvent,
+  ): Promise<void> => {
+    const rawMessage = getRawMessage(event);
+    const chatId =
+      typeof rawMessage?.chat_id === "string" ? rawMessage.chat_id : null;
+    const messageId =
+      typeof rawMessage?.message_id === "string" ? rawMessage.message_id : null;
+
+    if (options.fileHandler.isInboundFileMessage(event)) {
+      if (!chatId || !messageId) {
+        return;
+      }
+
+      const storedFile = await options.fileHandler.handleInboundFile(
+        event,
+        chatId,
+      );
+      if (!storedFile) {
+        return;
+      }
+
+      const text = `Please review the attached file ${storedFile.fileName}.`;
+      const parts: PromptPartInput[] = [
+        { type: "text", text },
+        {
+          type: "file",
+          mime: inferMimeType(storedFile.fileName),
+          filename: storedFile.fileName,
+          url: pathToFileURL(storedFile.localPath).href,
+        },
+      ];
+
+      const result = await options.promptIngressHandler.handlePromptInput({
+        messageId,
+        chatId,
+        text,
+        parts,
+      });
+      await handlePromptResult(result, storedFile);
+      return;
+    }
+
+    const parsed = parseFeishuPromptEvent(event, {
+      botOpenId: options.botOpenId ?? null,
+    });
+    if (parsed) {
+      if (options.controlRouter.parseCommand(parsed.text)) {
+        await options.controlRouter.handleCommand(parsed.chatId, parsed.text);
+        return;
+      }
+
+      if (options.questionCardHandler.canHandleTextReply(parsed.text)) {
+        const handled = await options.questionCardHandler.handleTextReply(
+          parsed.text,
+        );
+        if (handled) {
+          return;
+        }
+      }
+    }
+
+    const result = await options.promptIngressHandler.handleMessageEvent(event);
+    await handlePromptResult(result);
+  };
 
   const handlePromptResult = async (
     result: PromptIngressResult,
@@ -134,71 +250,26 @@ export function createRuntimeEventHandlers(
         typeof rawMessage?.message_id === "string"
           ? rawMessage.message_id
           : null;
+      const queueKey = chatId
+        ? `chat:${chatId}`
+        : messageId
+          ? `message:${messageId}`
+          : "chat:__default__";
 
-      if (options.fileHandler.isInboundFileMessage(event)) {
-        if (!chatId || !messageId) {
-          return;
-        }
-
-        const storedFile = await options.fileHandler.handleInboundFile(
-          event,
-          chatId,
-        );
-        if (!storedFile) {
-          return;
-        }
-
-        const text = `Please review the attached file ${storedFile.fileName}.`;
-        const parts: PromptPartInput[] = [
-          { type: "text", text },
-          {
-            type: "file",
-            mime: inferMimeType(storedFile.fileName),
-            filename: storedFile.fileName,
-            url: pathToFileURL(storedFile.localPath).href,
-          },
-        ];
-
-        const result = await options.promptIngressHandler.handlePromptInput({
-          messageId,
-          chatId,
-          text,
-          parts,
-        });
-        await handlePromptResult(result, storedFile);
-        return;
-      }
-
-      const parsed = parseFeishuPromptEvent(event, {
-        botOpenId: options.botOpenId ?? null,
-      });
-      if (parsed) {
-        if (options.controlRouter.parseCommand(parsed.text)) {
-          await options.controlRouter.handleCommand(parsed.chatId, parsed.text);
-          return;
-        }
-
-        if (options.questionCardHandler.canHandleTextReply(parsed.text)) {
-          const handled = await options.questionCardHandler.handleTextReply(
-            parsed.text,
-          );
-          if (handled) {
-            return;
-          }
-        }
-      }
-
-      const result =
-        await options.promptIngressHandler.handleMessageEvent(event);
-      await handlePromptResult(result);
+      await enqueueMessageTask(queueKey, async () =>
+        processMessageReceived(event),
+      );
     },
 
     async handleCardAction(
       event: Record<string, unknown>,
     ): Promise<Record<string, never>> {
-      await options.questionCardHandler.handleCardAction(event);
-      await options.permissionCardHandler.handleCardAction(event);
-      await options.controlRouter.handleCardAction(event);
+      const queueKey = getCardActionQueueKey(event);
+      await enqueueCardActionTask(queueKey, async () => {
+        await options.questionCardHandler.handleCardAction(event);
+        await options.permissionCardHandler.handleCardAction(event);
+        await options.controlRouter.handleCardAction(event);
+      });
       return {};
     },
   };

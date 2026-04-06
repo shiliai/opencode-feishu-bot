@@ -1,3 +1,4 @@
+import { readFile } from "node:fs/promises";
 import type { Logger } from "../utils/logger.js";
 import type {
   SettingsManager,
@@ -36,6 +37,8 @@ export interface ControlCatalogAdapterOptions {
   >;
   openCodeClient: OpenCodeControlCatalogClient;
   cacheTtlMs: number;
+  modelStatePath?: string;
+  readFileFn?: (path: string, encoding: BufferEncoding) => Promise<string>;
   now?: () => number;
   logger?: Logger;
 }
@@ -68,6 +71,78 @@ function deduplicate(values: string[]): string[] {
   return output;
 }
 
+function normalizeModelIdentifier(candidate: unknown): string | null {
+  if (typeof candidate === "string") {
+    const normalized = candidate.trim();
+    return normalized.length > 0 ? normalized : null;
+  }
+
+  if (!isRecord(candidate)) {
+    return null;
+  }
+
+  const providerId =
+    typeof candidate.providerID === "string"
+      ? candidate.providerID.trim()
+      : typeof candidate.provider === "string"
+        ? candidate.provider.trim()
+        : "";
+  const modelId =
+    typeof candidate.modelID === "string"
+      ? candidate.modelID.trim()
+      : typeof candidate.model === "string"
+        ? candidate.model.trim()
+        : "";
+
+  if (providerId && modelId) {
+    return `${providerId}/${modelId}`;
+  }
+
+  const id =
+    typeof candidate.id === "string"
+      ? candidate.id.trim()
+      : typeof candidate.name === "string"
+        ? candidate.name.trim()
+        : "";
+  return id || null;
+}
+
+function extractPreferredModels(data: unknown): string[] {
+  const candidates: unknown[] = [];
+
+  if (Array.isArray(data)) {
+    candidates.push(...data);
+  }
+
+  if (isRecord(data)) {
+    for (const key of [
+      "favorite",
+      "favorites",
+      "recent",
+      "models",
+      "history",
+    ]) {
+      const value = data[key];
+      if (Array.isArray(value)) {
+        candidates.push(...value);
+      }
+    }
+
+    for (const key of ["lastUsed", "current"]) {
+      const value = data[key];
+      if (value !== undefined) {
+        candidates.push(value);
+      }
+    }
+  }
+
+  return deduplicate(
+    candidates
+      .map((candidate) => normalizeModelIdentifier(candidate))
+      .filter((candidate): candidate is string => candidate !== null),
+  );
+}
+
 function resolveDirectoryScope(
   currentProject: ProjectInfo | undefined,
   currentSession: SessionInfo | undefined,
@@ -90,6 +165,11 @@ export class ControlCatalogAdapter implements ControlCatalogProvider {
   >;
   private readonly openCodeClient: OpenCodeControlCatalogClient;
   private readonly cacheTtlMs: number;
+  private readonly modelStatePath: string | null;
+  private readonly readFileFn: (
+    path: string,
+    encoding: BufferEncoding,
+  ) => Promise<string>;
   private readonly now: () => number;
   private readonly logger: Logger;
 
@@ -100,6 +180,12 @@ export class ControlCatalogAdapter implements ControlCatalogProvider {
     this.settingsManager = options.settingsManager;
     this.openCodeClient = options.openCodeClient;
     this.cacheTtlMs = Math.max(1, Math.floor(options.cacheTtlMs));
+    this.modelStatePath =
+      typeof options.modelStatePath === "string" &&
+      options.modelStatePath.trim().length > 0
+        ? options.modelStatePath
+        : null;
+    this.readFileFn = options.readFileFn ?? readFile;
     this.now = options.now ?? Date.now;
     this.logger = options.logger ?? createNoopLogger();
   }
@@ -193,7 +279,49 @@ export class ControlCatalogAdapter implements ControlCatalogProvider {
       }
     }
 
-    return deduplicate(models);
+    const catalogModels = deduplicate(models);
+    if (!this.modelStatePath) {
+      return catalogModels;
+    }
+
+    const preferredModels = await this.loadPreferredModels();
+    if (preferredModels.length === 0) {
+      return catalogModels;
+    }
+
+    const catalogSet = new Set(catalogModels);
+    const preferredAvailable = preferredModels.filter((model) =>
+      catalogSet.has(model),
+    );
+    if (preferredAvailable.length === 0) {
+      return catalogModels;
+    }
+
+    const preferredSet = new Set(preferredAvailable);
+    const remainder = catalogModels.filter((model) => !preferredSet.has(model));
+    return [...preferredAvailable, ...remainder];
+  }
+
+  private async loadPreferredModels(): Promise<string[]> {
+    if (!this.modelStatePath) {
+      return [];
+    }
+
+    try {
+      const content = await this.readFileFn(this.modelStatePath, "utf-8");
+      const parsed = JSON.parse(content) as unknown;
+      return extractPreferredModels(parsed);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+        return [];
+      }
+
+      this.logger.warn(
+        `[ControlCatalogAdapter] Failed to load model state from ${this.modelStatePath}`,
+        error,
+      );
+      return [];
+    }
   }
 
   private extractProviders(data: unknown): unknown[] {

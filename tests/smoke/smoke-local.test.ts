@@ -16,6 +16,9 @@ const CONFIG_KEYS = [
   "THROTTLE_STATUS_CARD_PATCH_RETRY_DELAY_MS",
   "THROTTLE_STATUS_CARD_PATCH_MAX_ATTEMPTS",
   "FEISHU_EVENT_DEDUP_TTL_MS",
+  "FEISHU_EVENT_DEDUP_PERSIST_PATH",
+  "CONTROL_CATALOG_CACHE_TTL_MS",
+  "CONTROL_CATALOG_MODEL_STATE_PATH",
 ];
 
 function clearAllConfigKeys(): void {
@@ -24,19 +27,40 @@ function clearAllConfigKeys(): void {
   }
 }
 
-function fetchHealthz(port: number): Promise<{ statusCode: number; body: string }> {
+function fetchHealthz(
+  port: number,
+): Promise<{ statusCode: number; body: string }> {
   return new Promise((resolve, reject) => {
     const http = require("node:http");
     const req = http.request(
-      { hostname: "127.0.0.1", port, path: "/healthz", method: "GET", timeout: 2000 },
-      (res: { statusCode: number; on: (ev: string, cb: (chunk?: Buffer) => void) => void }) => {
+      {
+        hostname: "127.0.0.1",
+        port,
+        path: "/healthz",
+        method: "GET",
+        timeout: 2000,
+      },
+      (res: {
+        statusCode: number;
+        on: (ev: string, cb: (chunk?: Buffer) => void) => void;
+      }) => {
         let body = "";
-        res.on("data", (chunk: Buffer) => { body += chunk.toString(); });
-        res.on("end", () => { resolve({ statusCode: res.statusCode, body }); });
+        res.on("data", (chunk?: Buffer) => {
+          if (!chunk) {
+            return;
+          }
+          body += chunk.toString();
+        });
+        res.on("end", () => {
+          resolve({ statusCode: res.statusCode, body });
+        });
       },
     );
     req.on("error", reject);
-    req.on("timeout", () => { req.destroy(); reject(new Error("timeout")); });
+    req.on("timeout", () => {
+      req.destroy();
+      reject(new Error("timeout"));
+    });
     req.end();
   });
 }
@@ -44,7 +68,9 @@ function fetchHealthz(port: number): Promise<{ statusCode: number; body: string 
 vi.mock("@larksuiteoapi/node-sdk", () => ({
   Client: vi.fn().mockReturnValue({
     im: {
-      message: { create: vi.fn().mockResolvedValue({ data: { message_id: "mock" } }) },
+      message: {
+        create: vi.fn().mockResolvedValue({ data: { message_id: "mock" } }),
+      },
       resource: { get: vi.fn() },
       file: { create: vi.fn() },
     },
@@ -79,8 +105,6 @@ vi.mock("@opencode-ai/sdk/v2", () => ({
 }));
 
 describe("smoke:local — healthz and graceful shutdown", () => {
-  let exitSpy: ReturnType<typeof vi.spyOn>;
-
   beforeEach(() => {
     clearAllConfigKeys();
 
@@ -92,16 +116,17 @@ describe("smoke:local — healthz and graceful shutdown", () => {
     process.env.OPENCODE_API_BASE_URL = "http://localhost:19999";
     process.env.LOG_LEVEL = "error";
 
-    exitSpy = vi.spyOn(process, "exit").mockImplementation(() => {});
+    vi.spyOn(process, "exit").mockImplementation((() => undefined) as never);
   });
 
   afterEach(() => {
-    exitSpy.mockRestore();
+    vi.restoreAllMocks();
     clearAllConfigKeys();
   });
 
   it("starts HTTP server, responds to /healthz with 200, and shuts down on SIGTERM", async () => {
-    const { startFeishuApp, getActualServicePort } = await import("../../src/app/start-feishu-app.js");
+    const { startFeishuApp, getActualServicePort } =
+      await import("../../src/app/start-feishu-app.js");
 
     await startFeishuApp();
 
@@ -119,6 +144,6 @@ describe("smoke:local — healthz and graceful shutdown", () => {
 
     await new Promise((resolve) => setTimeout(resolve, 300));
 
-    expect(exitSpy).toHaveBeenCalledWith(0);
+    expect(vi.mocked(process.exit)).toHaveBeenCalledWith(0);
   }, 10000);
 });

@@ -160,6 +160,7 @@ export async function startFeishuApp(): Promise<void> {
     renderer,
     openCodeClient,
     catalogCacheTtlMs: config.controlCatalog.cacheTtlMs,
+    catalogModelStatePath: config.controlCatalog.modelStatePath,
     interactionManager: managers.interaction,
   });
 
@@ -205,6 +206,7 @@ export async function startFeishuApp(): Promise<void> {
 
   // Step 8: Create event router with message and card action handlers
   const deduplicator = createEventDeduplicator(config);
+  await deduplicator.hydrate();
 
   const runtimeEventHandlers = createRuntimeEventHandlers({
     promptIngressHandler,
@@ -252,6 +254,11 @@ export async function startFeishuApp(): Promise<void> {
   if (config.cardCallback && feishuClients.cardActionHandler) {
     const cardCallbackHandler = createCardCallbackRequestHandler(
       feishuClients.cardActionHandler,
+      undefined,
+      {
+        verificationToken: config.cardCallback.verificationToken,
+        encryptKey: config.cardCallback.encryptKey,
+      },
     );
     httpServer = createServer((req: IncomingMessage, res: ServerResponse) => {
       const requestUrl = new URL(

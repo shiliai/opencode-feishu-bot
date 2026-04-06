@@ -92,6 +92,7 @@ export interface ControlRouterOptions {
   openCodeClient: OpenCodeControlClient;
   catalogAdapter?: ControlCatalogProvider;
   catalogCacheTtlMs?: number;
+  catalogModelStatePath?: string;
   interactionManager: ControlRouterInteractionStore;
   logger?: Logger;
 }
@@ -127,6 +128,7 @@ export class ControlRouter {
         openCodeClient: options.openCodeClient,
         cacheTtlMs:
           options.catalogCacheTtlMs ?? DEFAULT_CONTROL_CATALOG_CACHE_TTL_MS,
+        modelStatePath: options.catalogModelStatePath,
         logger: this.logger,
       });
   }

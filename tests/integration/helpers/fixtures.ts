@@ -146,7 +146,7 @@ export function createPermissionAskedEvent(options: {
 }): Event {
   return toEvent({
     type: "permission.asked",
-    properties: options.request,
+    properties: options.request as unknown as Record<string, unknown>,
   });
 }
 
@@ -186,7 +186,9 @@ export function createQuestionCardAction(options: {
   eventId?: string;
 }): Record<string, unknown> {
   return {
-    event_id: options.eventId ?? `card-question-${options.messageId}-${options.optionIndex}`,
+    event_id:
+      options.eventId ??
+      `card-question-${options.messageId}-${options.optionIndex}`,
     open_message_id: options.messageId,
     action: {
       value: {
@@ -205,13 +207,53 @@ export function createPermissionCardAction(options: {
   eventId?: string;
 }): Record<string, unknown> {
   return {
-    event_id: options.eventId ?? `card-permission-${options.messageId}-${options.reply}`,
+    event_id:
+      options.eventId ??
+      `card-permission-${options.messageId}-${options.reply}`,
     open_message_id: options.messageId,
     action: {
       value: {
         action: "permission_reply",
         requestId: options.requestId,
         reply: options.reply,
+      },
+    },
+  };
+}
+
+export function createModelCardAction(options: {
+  modelName: string;
+  eventId?: string;
+  messageId?: string;
+}): Record<string, unknown> {
+  return {
+    event_id:
+      options.eventId ??
+      `card-model-${options.modelName.replace(/[^a-zA-Z0-9_-]/g, "-")}`,
+    open_message_id: options.messageId ?? "card-message-model",
+    action: {
+      value: {
+        action: "select_model",
+        modelName: options.modelName,
+      },
+    },
+  };
+}
+
+export function createAgentCardAction(options: {
+  agentName: string;
+  eventId?: string;
+  messageId?: string;
+}): Record<string, unknown> {
+  return {
+    event_id:
+      options.eventId ??
+      `card-agent-${options.agentName.replace(/[^a-zA-Z0-9_-]/g, "-")}`,
+    open_message_id: options.messageId ?? "card-message-agent",
+    action: {
+      value: {
+        action: "select_agent",
+        agentName: options.agentName,
       },
     },
   };

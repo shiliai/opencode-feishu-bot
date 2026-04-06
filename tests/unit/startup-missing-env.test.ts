@@ -18,6 +18,9 @@ const CONFIG_KEYS = [
   "THROTTLE_STATUS_CARD_PATCH_RETRY_DELAY_MS",
   "THROTTLE_STATUS_CARD_PATCH_MAX_ATTEMPTS",
   "FEISHU_EVENT_DEDUP_TTL_MS",
+  "FEISHU_EVENT_DEDUP_PERSIST_PATH",
+  "CONTROL_CATALOG_CACHE_TTL_MS",
+  "CONTROL_CATALOG_MODEL_STATE_PATH",
 ];
 
 function clearAllConfigKeys(): void {
@@ -31,12 +34,13 @@ const mockConfigError = new ConfigValidationError(
   "Missing required environment variable: FEISHU_APP_ID. Set it in your .env file or environment.",
 );
 
-const mockLogger: Logger = {
+const mockLogger = {
   debug: vi.fn(),
   info: vi.fn(),
   warn: vi.fn(),
   error: vi.fn(),
 };
+const loggerForMocks: Logger = mockLogger;
 
 vi.mock("@larksuiteoapi/node-sdk", () => ({
   Client: vi.fn(),
@@ -48,11 +52,17 @@ vi.mock("@larksuiteoapi/node-sdk", () => ({
 }));
 
 vi.mock("../../src/config.js", async () => {
-  const actual = await vi.importActual<typeof import("../../src/config.js")>("../../src/config.js");
+  const actual = await vi.importActual<typeof import("../../src/config.js")>(
+    "../../src/config.js",
+  );
   return {
     ...actual,
-    getConfig: () => { throw mockConfigError; },
-    loadConfig: () => { throw mockConfigError; },
+    getConfig: () => {
+      throw mockConfigError;
+    },
+    loadConfig: () => {
+      throw mockConfigError;
+    },
   };
 });
 
@@ -62,40 +72,40 @@ vi.mock("../../src/opencode/client.js", () => ({
 }));
 
 vi.mock("../../src/utils/logger.js", () => ({
-  logger: mockLogger,
-  createLogger: vi.fn().mockReturnValue(mockLogger),
+  logger: loggerForMocks,
+  createLogger: vi.fn().mockReturnValue(loggerForMocks),
 }));
 
 describe("startup missing env vars", () => {
-  let exitSpy: ReturnType<typeof vi.spyOn>;
-
   beforeEach(() => {
     clearAllConfigKeys();
     vi.clearAllMocks();
-    exitSpy = vi.spyOn(process, "exit").mockImplementation(() => {
+    vi.spyOn(process, "exit").mockImplementation(() => {
       throw new Error("process.exit called");
     });
   });
 
   afterEach(() => {
-    exitSpy.mockRestore();
+    vi.restoreAllMocks();
     clearAllConfigKeys();
   });
 
   it("calls process.exit(1) when a required env var is missing", async () => {
-    const { startFeishuApp } = await import("../../src/app/start-feishu-app.js");
+    const { startFeishuApp } =
+      await import("../../src/app/start-feishu-app.js");
 
     try {
       await startFeishuApp();
       expect.unreachable("Should have thrown");
     } catch (error) {
       expect((error as Error).message).toBe("process.exit called");
-      expect(exitSpy).toHaveBeenCalledWith(1);
+      expect(vi.mocked(process.exit)).toHaveBeenCalledWith(1);
     }
   });
 
   it("logs the missing var name when config validation fails", async () => {
-    const { startFeishuApp } = await import("../../src/app/start-feishu-app.js");
+    const { startFeishuApp } =
+      await import("../../src/app/start-feishu-app.js");
 
     try {
       await startFeishuApp();
@@ -103,8 +113,12 @@ describe("startup missing env vars", () => {
       // process.exit mock throws — expected
     }
 
-    const errorCalls = mockLogger.error.mock.calls.map((args) => String(args[0]));
-    const hasConfigError = errorCalls.some((msg) => msg.includes("FEISHU_APP_ID"));
+    const errorCalls = mockLogger.error.mock.calls.map((args) =>
+      String(args[0]),
+    );
+    const hasConfigError = errorCalls.some((msg) =>
+      msg.includes("FEISHU_APP_ID"),
+    );
     expect(hasConfigError).toBe(true);
   });
 });

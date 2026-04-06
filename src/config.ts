@@ -1,4 +1,6 @@
 import "dotenv/config";
+import { homedir } from "node:os";
+import { join } from "node:path";
 
 export type ConnectionType = "ws" | "webhook";
 
@@ -12,6 +14,7 @@ export interface FeishuConfig {
   appSecret: string;
   botOpenId: string;
   eventDedupTtlMs: number;
+  eventDedupPersistPath: string;
 }
 
 export interface CardCallbackConfig {
@@ -28,6 +31,7 @@ export interface ThrottleConfig {
 
 export interface ControlCatalogConfig {
   cacheTtlMs: number;
+  modelStatePath: string;
 }
 
 export interface ServiceConfig {
@@ -47,6 +51,18 @@ export interface AppConfig {
 }
 
 export const DEFAULT_CONTROL_CATALOG_CACHE_TTL_MS = 600_000;
+export const DEFAULT_CONTROL_CATALOG_MODEL_STATE_PATH = join(
+  homedir(),
+  ".local",
+  "state",
+  "opencode",
+  "model.json",
+);
+export const DEFAULT_FEISHU_EVENT_DEDUP_PERSIST_PATH = join(
+  process.cwd(),
+  ".data",
+  "event-dedup.json",
+);
 
 export class ConfigValidationError extends Error {
   constructor(
@@ -138,6 +154,9 @@ export function loadConfig(): AppConfig {
         "FEISHU_EVENT_DEDUP_TTL_MS",
         300_000,
       ),
+      eventDedupPersistPath:
+        getEnvVar("FEISHU_EVENT_DEDUP_PERSIST_PATH", false) ||
+        DEFAULT_FEISHU_EVENT_DEDUP_PERSIST_PATH,
     },
     connectionType,
     cardCallback,
@@ -160,6 +179,9 @@ export function loadConfig(): AppConfig {
         "CONTROL_CATALOG_CACHE_TTL_MS",
         DEFAULT_CONTROL_CATALOG_CACHE_TTL_MS,
       ),
+      modelStatePath:
+        getEnvVar("CONTROL_CATALOG_MODEL_STATE_PATH", false) ||
+        DEFAULT_CONTROL_CATALOG_MODEL_STATE_PATH,
     },
     service: {
       port: getOptionalPositiveIntEnvVar("SERVICE_PORT", 3000),

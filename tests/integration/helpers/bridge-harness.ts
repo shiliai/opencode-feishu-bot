@@ -39,6 +39,7 @@ import { createRuntimeEventHandlers } from "../../../src/app/runtime-event-handl
 import { ControlRouter } from "../../../src/feishu/control-router.js";
 
 interface MockRenderer {
+  sendCard: ReturnType<typeof vi.fn>;
   renderStatusCard: ReturnType<typeof vi.fn>;
   updateStatusCard: ReturnType<typeof vi.fn>;
   replyPost: ReturnType<typeof vi.fn>;
@@ -95,6 +96,7 @@ function createLogger(): Logger {
 
 function createRenderer(): MockRenderer {
   return {
+    sendCard: vi.fn().mockResolvedValue("control-card-1"),
     renderStatusCard: vi.fn().mockResolvedValue("status-card-1"),
     updateStatusCard: vi.fn().mockResolvedValue(undefined),
     replyPost: vi.fn().mockResolvedValue("reply-message-1"),

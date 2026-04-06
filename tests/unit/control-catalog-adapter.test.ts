@@ -163,4 +163,41 @@ describe("ControlCatalogAdapter", () => {
     expect(second).toEqual(["openai/gpt-4o"]);
     expect(openCodeClient.config.providers).toHaveBeenCalledTimes(2);
   });
+
+  it("prioritizes favorites/recent models from OpenCode local state when available", async () => {
+    const settingsManager = createMockSettingsManager();
+    const openCodeClient = createMockOpenCodeClient();
+    const readFileFn = vi.fn().mockResolvedValue(
+      JSON.stringify({
+        favorite: [
+          { providerID: "anthropic", modelID: "claude-3-7-sonnet" },
+          { providerID: "openai", modelID: "gpt-4.1" },
+        ],
+        recent: [
+          { providerID: "openai", modelID: "gpt-4o" },
+          { providerID: "unknown", modelID: "ghost" },
+        ],
+      }),
+    );
+
+    const adapter = new ControlCatalogAdapter({
+      settingsManager: settingsManager as never,
+      openCodeClient: openCodeClient as never,
+      cacheTtlMs: 60_000,
+      modelStatePath: "/tmp/opencode/model.json",
+      readFileFn,
+    });
+
+    const models = await adapter.getAvailableModels();
+
+    expect(readFileFn).toHaveBeenCalledWith(
+      "/tmp/opencode/model.json",
+      "utf-8",
+    );
+    expect(models).toEqual([
+      "anthropic/claude-3-7-sonnet",
+      "openai/gpt-4.1",
+      "openai/gpt-4o",
+    ]);
+  });
 });
