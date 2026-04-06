@@ -159,6 +159,7 @@ export async function startFeishuApp(): Promise<void> {
     sessionManager: managers.session,
     renderer,
     openCodeClient,
+    catalogCacheTtlMs: config.controlCatalog.cacheTtlMs,
     interactionManager: managers.interaction,
   });
 
