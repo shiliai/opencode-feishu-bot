@@ -60,6 +60,14 @@ function createMockOpenCodeClient() {
       status: vi.fn().mockResolvedValue({ data: {} }),
       abort: vi.fn().mockResolvedValue({ data: true }),
     },
+    app: {
+      agents: vi.fn().mockResolvedValue({ data: [] }),
+    },
+    config: {
+      providers: vi
+        .fn()
+        .mockResolvedValue({ data: { providers: [], default: {} } }),
+    },
   };
 }
 
@@ -80,7 +88,9 @@ function createMockInteractionManager() {
   };
 }
 
-function createRouter(overrides?: Partial<ControlRouterOptions>): ControlRouter {
+function createRouter(
+  overrides?: Partial<ControlRouterOptions>,
+): ControlRouter {
   const settings = createMockSettings();
   const sessionManager = createMockSessionManager();
   const renderer = createMockRenderer();
@@ -121,7 +131,11 @@ describe("ControlRouter — unsupported commands", () => {
     const settings = createMockSettings();
     const sessionManager = createMockSessionManager();
     const openCodeClient = createMockOpenCodeClient();
-    const router = createRouter({ settingsManager: settings, sessionManager, openCodeClient });
+    const router = createRouter({
+      settingsManager: settings,
+      sessionManager,
+      openCodeClient,
+    });
 
     await router.handleCommand("chat-1", "/foo");
     await router.handleCommand("chat-1", "/baz");
@@ -175,7 +189,14 @@ describe("ControlRouter — unsupported commands", () => {
 
   it("parseCommand returns null for commands outside bounded set", () => {
     const router = createRouter();
-    const extraCommands = ["/login", "/logout", "/config", "/debug", "/restart", "/version"];
+    const extraCommands = [
+      "/login",
+      "/logout",
+      "/config",
+      "/debug",
+      "/restart",
+      "/version",
+    ];
 
     for (const cmd of extraCommands) {
       expect(router.parseCommand(cmd)).toBeNull();

@@ -51,8 +51,16 @@ interface MockRenderer {
 interface MockOpenCodeClients {
   session: {
     create: ReturnType<typeof vi.fn>;
+    list: ReturnType<typeof vi.fn>;
     status: ReturnType<typeof vi.fn>;
+    abort: ReturnType<typeof vi.fn>;
     promptAsync: ReturnType<typeof vi.fn>;
+  };
+  app: {
+    agents: ReturnType<typeof vi.fn>;
+  };
+  config: {
+    providers: ReturnType<typeof vi.fn>;
   };
   question: {
     reply: ReturnType<typeof vi.fn>;
@@ -108,8 +116,42 @@ function createOpenCodeClients(): MockOpenCodeClients {
         },
         error: undefined,
       }),
+      list: vi.fn().mockResolvedValue({
+        data: [
+          {
+            id: "session-1",
+            title: "Integration Session",
+            directory: "/workspace/project",
+          },
+        ],
+        error: undefined,
+      }),
       status: vi.fn().mockResolvedValue({ data: {}, error: undefined }),
+      abort: vi.fn().mockResolvedValue({ data: true, error: undefined }),
       promptAsync: vi.fn().mockResolvedValue(undefined),
+    },
+    app: {
+      agents: vi.fn().mockResolvedValue({
+        data: [
+          { name: "build", mode: "primary" },
+          { name: "oracle", mode: "all" },
+        ],
+      }),
+    },
+    config: {
+      providers: vi.fn().mockResolvedValue({
+        data: {
+          providers: [
+            {
+              id: "openai",
+              models: {
+                "gpt-4": {},
+              },
+            },
+          ],
+          default: {},
+        },
+      }),
     },
     question: {
       reply: vi.fn().mockResolvedValue(undefined),
@@ -242,7 +284,7 @@ export async function createBridgeHarness(): Promise<BridgeHarness> {
     settingsManager,
     sessionManager,
     renderer: renderer as never,
-    openCodeClient: { session: openCodeClients.session },
+    openCodeClient: openCodeClients as never,
     interactionManager,
     logger,
   });

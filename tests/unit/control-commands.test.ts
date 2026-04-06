@@ -56,9 +56,26 @@ function createMockOpenCodeClient() {
   return {
     session: {
       create: vi.fn().mockResolvedValue({ data: { id: "new-session-1" } }),
-      list: vi.fn().mockResolvedValue({ data: [{ id: "sess-1", title: "Test Session" }] }),
-      status: vi.fn().mockResolvedValue({ data: { "sess-1": { type: "idle" } } }),
+      list: vi
+        .fn()
+        .mockResolvedValue({ data: [{ id: "sess-1", title: "Test Session" }] }),
+      status: vi
+        .fn()
+        .mockResolvedValue({ data: { "sess-1": { type: "idle" } } }),
       abort: vi.fn().mockResolvedValue({ data: true }),
+    },
+    app: {
+      agents: vi.fn().mockResolvedValue({
+        data: [{ name: "build", mode: "primary" }],
+      }),
+    },
+    config: {
+      providers: vi.fn().mockResolvedValue({
+        data: {
+          providers: [{ id: "openai", models: { "gpt-4": {} } }],
+          default: {},
+        },
+      }),
     },
   };
 }
@@ -80,7 +97,9 @@ function createMockInteractionManager() {
   };
 }
 
-function createRouter(overrides?: Partial<ControlRouterOptions>): ControlRouter {
+function createRouter(
+  overrides?: Partial<ControlRouterOptions>,
+): ControlRouter {
   const settings = createMockSettings();
   const sessionManager = createMockSessionManager();
   const renderer = createMockRenderer();
@@ -179,6 +198,22 @@ describe("ControlRouter — command dispatch", () => {
     });
   });
 
+  it("/model <provider/model> stores provider and model separately", async () => {
+    const settings = createMockSettings();
+    const router = createRouter({ settingsManager: settings });
+
+    const result = await router.handleCommand(
+      "chat-1",
+      "/model openai/gpt-4.1",
+    );
+
+    expect(result.success).toBe(true);
+    expect(settings.setCurrentModel).toHaveBeenCalledWith({
+      providerID: "openai",
+      modelID: "gpt-4.1",
+    });
+  });
+
   it("/agent <name> updates agent in settings", async () => {
     const settings = createMockSettings();
     const router = createRouter({ settingsManager: settings });
@@ -192,7 +227,10 @@ describe("ControlRouter — command dispatch", () => {
   it("/status renders current status card", async () => {
     const renderer = createMockRenderer();
     const settings = createMockSettings();
-    settings.getCurrentModel.mockReturnValue({ providerID: "openai", modelID: "gpt-4" });
+    settings.getCurrentModel.mockReturnValue({
+      providerID: "openai",
+      modelID: "gpt-4",
+    });
     settings.getCurrentAgent.mockReturnValue("build");
     const sessionManager = createMockSessionManager();
     sessionManager.getCurrentSession.mockReturnValue({
@@ -200,7 +238,11 @@ describe("ControlRouter — command dispatch", () => {
       title: "Test",
       directory: "/workspace",
     });
-    const router = createRouter({ renderer, settingsManager: settings, sessionManager });
+    const router = createRouter({
+      renderer,
+      settingsManager: settings,
+      sessionManager,
+    });
 
     const result = await router.handleCommand("chat-1", "/status");
 
@@ -219,12 +261,18 @@ describe("ControlRouter — command dispatch", () => {
       directory: "/workspace",
     });
     const interactionManager = createMockInteractionManager();
-    const router = createRouter({ openCodeClient, sessionManager, interactionManager });
+    const router = createRouter({
+      openCodeClient,
+      sessionManager,
+      interactionManager,
+    });
 
     const result = await router.handleCommand("chat-1", "/abort");
 
     expect(result.success).toBe(true);
-    expect(openCodeClient.session.abort).toHaveBeenCalledWith({ sessionID: "sess-1" });
+    expect(openCodeClient.session.abort).toHaveBeenCalledWith({
+      sessionID: "sess-1",
+    });
     expect(interactionManager.clearBusy).toHaveBeenCalledTimes(1);
   });
 

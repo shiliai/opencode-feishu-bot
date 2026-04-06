@@ -17,7 +17,9 @@ function createMockSettings() {
     getCurrentAgent: vi.fn().mockReturnValue("build"),
     setCurrentAgent: vi.fn(),
     clearCurrentAgent: vi.fn(),
-    getCurrentModel: vi.fn().mockReturnValue({ providerID: "openai", modelID: "gpt-4" }),
+    getCurrentModel: vi
+      .fn()
+      .mockReturnValue({ providerID: "openai", modelID: "gpt-4" }),
     setCurrentModel: vi.fn(),
     clearCurrentModel: vi.fn(),
     getStatusMessageId: vi.fn().mockReturnValue(undefined),
@@ -61,9 +63,35 @@ function createMockOpenCodeClient() {
   return {
     session: {
       create: vi.fn().mockResolvedValue({ data: { id: "new-session-1" } }),
-      list: vi.fn().mockResolvedValue({ data: [{ id: "sess-1", title: "Test" }] }),
+      list: vi
+        .fn()
+        .mockResolvedValue({ data: [{ id: "sess-1", title: "Test" }] }),
       status: vi.fn().mockResolvedValue({ data: {} }),
       abort: vi.fn().mockResolvedValue({ data: true }),
+    },
+    app: {
+      agents: vi.fn().mockResolvedValue({
+        data: [
+          { name: "build", mode: "primary" },
+          { name: "oracle", mode: "all" },
+        ],
+      }),
+    },
+    config: {
+      providers: vi.fn().mockResolvedValue({
+        data: {
+          providers: [
+            {
+              id: "openai",
+              models: {
+                "gpt-4": {},
+                "gpt-4.1": {},
+              },
+            },
+          ],
+          default: {},
+        },
+      }),
     },
   };
 }
@@ -85,7 +113,9 @@ function createMockInteractionManager() {
   };
 }
 
-function createRouter(overrides?: Partial<ControlRouterOptions>): ControlRouter {
+function createRouter(
+  overrides?: Partial<ControlRouterOptions>,
+): ControlRouter {
   const settings = createMockSettings();
   const sessionManager = createMockSessionManager();
   const renderer = createMockRenderer();
@@ -120,39 +150,61 @@ describe("ControlRouter — selection cards (no args)", () => {
 
   it("/model without args renders model picker card", async () => {
     const renderer = createMockRenderer();
-    const settings = createMockSettings();
-    settings.getCurrentModel.mockReturnValue({ providerID: "openai", modelID: "gpt-4" });
-    const router = createRouter({ renderer, settingsManager: settings });
+    const openCodeClient = createMockOpenCodeClient();
+    const router = createRouter({ renderer, openCodeClient });
 
     const result = await router.handleCommand("chat-1", "/model");
 
     expect(result.success).toBe(true);
+    expect(openCodeClient.config.providers).toHaveBeenCalledTimes(1);
     expect(renderer.sendCard).toHaveBeenCalledTimes(1);
 
     const sentCard = renderer.sendCard.mock.calls[0][1];
     expect(sentCard.header.title.content).toBe("Model Picker");
+    const actionEl = sentCard.elements.find(
+      (el: { tag: string }) => el.tag === "action",
+    );
+    const actions = (
+      actionEl as { actions: Array<{ value: Record<string, unknown> }> }
+    ).actions;
+    expect(actions[0].value).toEqual({
+      action: "select_model",
+      modelName: "openai/gpt-4",
+    });
   });
 
   it("/agent without args renders agent picker card", async () => {
     const renderer = createMockRenderer();
-    const settings = createMockSettings();
-    settings.getCurrentAgent.mockReturnValue("build");
-    const router = createRouter({ renderer, settingsManager: settings });
+    const openCodeClient = createMockOpenCodeClient();
+    const router = createRouter({ renderer, openCodeClient });
 
     const result = await router.handleCommand("chat-1", "/agent");
 
     expect(result.success).toBe(true);
+    expect(openCodeClient.app.agents).toHaveBeenCalledTimes(1);
     expect(renderer.sendCard).toHaveBeenCalledTimes(1);
 
     const sentCard = renderer.sendCard.mock.calls[0][1];
     expect(sentCard.header.title.content).toBe("Agent Picker");
+    const actionEl = sentCard.elements.find(
+      (el: { tag: string }) => el.tag === "action",
+    );
+    const actions = (
+      actionEl as { actions: Array<{ value: Record<string, unknown> }> }
+    ).actions;
+    expect(actions[0].value).toEqual({
+      action: "select_agent",
+      agentName: "build",
+    });
   });
 
-  it("/model without args shows empty picker when no model configured", async () => {
+  it("/model without args shows empty picker when catalog is empty", async () => {
     const renderer = createMockRenderer();
-    const settings = createMockSettings();
-    settings.getCurrentModel.mockReturnValue(undefined);
-    const router = createRouter({ renderer, settingsManager: settings });
+    const openCodeClient = createMockOpenCodeClient();
+    openCodeClient.config.providers.mockResolvedValue({
+      data: { providers: [], default: {} },
+    });
+    const router = createRouter({ renderer, openCodeClient });
 
     await router.handleCommand("chat-1", "/model");
 
@@ -163,11 +215,11 @@ describe("ControlRouter — selection cards (no args)", () => {
     expect(markdownEl.content).toContain("No models available");
   });
 
-  it("/agent without args shows empty picker when no agent configured", async () => {
+  it("/agent without args shows empty picker when catalog is empty", async () => {
     const renderer = createMockRenderer();
-    const settings = createMockSettings();
-    settings.getCurrentAgent.mockReturnValue(undefined);
-    const router = createRouter({ renderer, settingsManager: settings });
+    const openCodeClient = createMockOpenCodeClient();
+    openCodeClient.app.agents.mockResolvedValue({ data: [] });
+    const router = createRouter({ renderer, openCodeClient });
 
     await router.handleCommand("chat-1", "/agent");
 
@@ -191,10 +243,18 @@ describe("Selection card builders", () => {
       (el: { tag: string }) => el.tag === "action",
     );
     expect(actionEl).toBeDefined();
-    const actions = (actionEl as { actions: Array<{ value: Record<string, unknown> }> }).actions;
+    const actions = (
+      actionEl as { actions: Array<{ value: Record<string, unknown> }> }
+    ).actions;
     expect(actions).toHaveLength(2);
-    expect(actions[0].value).toEqual({ action: "select_session", sessionId: "sess-1" });
-    expect(actions[1].value).toEqual({ action: "select_session", sessionId: "sess-2" });
+    expect(actions[0].value).toEqual({
+      action: "select_session",
+      sessionId: "sess-1",
+    });
+    expect(actions[1].value).toEqual({
+      action: "select_session",
+      sessionId: "sess-2",
+    });
   });
 
   it("buildSessionListCard handles empty sessions", () => {
@@ -212,9 +272,14 @@ describe("Selection card builders", () => {
     const actionEl = card.elements.find(
       (el: { tag: string }) => el.tag === "action",
     );
-    const actions = (actionEl as { actions: Array<{ value: Record<string, unknown> }> }).actions;
+    const actions = (
+      actionEl as { actions: Array<{ value: Record<string, unknown> }> }
+    ).actions;
     expect(actions).toHaveLength(2);
-    expect(actions[0].value).toEqual({ action: "select_model", modelName: "openai/gpt-4" });
+    expect(actions[0].value).toEqual({
+      action: "select_model",
+      modelName: "openai/gpt-4",
+    });
   });
 
   it("buildAgentPickerCard renders agents as buttons", () => {
@@ -224,9 +289,14 @@ describe("Selection card builders", () => {
     const actionEl = card.elements.find(
       (el: { tag: string }) => el.tag === "action",
     );
-    const actions = (actionEl as { actions: Array<{ value: Record<string, unknown> }> }).actions;
+    const actions = (
+      actionEl as { actions: Array<{ value: Record<string, unknown> }> }
+    ).actions;
     expect(actions).toHaveLength(2);
-    expect(actions[0].value).toEqual({ action: "select_agent", agentName: "build" });
+    expect(actions[0].value).toEqual({
+      action: "select_agent",
+      agentName: "build",
+    });
   });
 
   it("handleCardAction switches session from a selection card", async () => {
@@ -268,8 +338,8 @@ describe("Selection card builders", () => {
     });
 
     expect(settings.setCurrentModel).toHaveBeenCalledWith({
-      providerID: "openai/gpt-4.1",
-      modelID: "openai/gpt-4.1",
+      providerID: "openai",
+      modelID: "gpt-4.1",
     });
     expect(settings.setCurrentAgent).toHaveBeenCalledWith("oracle");
   });
