@@ -3,6 +3,7 @@ import { join, extname } from "node:path";
 import type { Logger } from "../utils/logger.js";
 import type { FileStore, StoredFile } from "./file-store.js";
 import type { FeishuMessageReceiveEvent } from "./event-router.js";
+import { normalizeFeishuEvent } from "./message-events.js";
 
 export interface FilePolicy {
   maxFileSizeBytes: number;
@@ -12,13 +13,42 @@ export interface FilePolicy {
 export const DEFAULT_FILE_POLICY: FilePolicy = {
   maxFileSizeBytes: 20 * 1024 * 1024,
   allowedExtensions: new Set([
-    ".txt", ".md", ".json", ".ts", ".tsx", ".js", ".jsx",
-    ".py", ".go", ".rs", ".java", ".c", ".cpp", ".h",
-    ".yaml", ".yml", ".toml", ".xml", ".csv",
-    ".html", ".css", ".scss", ".sh", ".bash", ".zsh",
-    ".sql", ".graphql", ".proto",
-    ".gitignore", ".env", ".ini", ".cfg", ".conf",
-    ".pdf", ".doc", ".docx",
+    ".txt",
+    ".md",
+    ".json",
+    ".ts",
+    ".tsx",
+    ".js",
+    ".jsx",
+    ".py",
+    ".go",
+    ".rs",
+    ".java",
+    ".c",
+    ".cpp",
+    ".h",
+    ".yaml",
+    ".yml",
+    ".toml",
+    ".xml",
+    ".csv",
+    ".html",
+    ".css",
+    ".scss",
+    ".sh",
+    ".bash",
+    ".zsh",
+    ".sql",
+    ".graphql",
+    ".proto",
+    ".gitignore",
+    ".env",
+    ".ini",
+    ".cfg",
+    ".conf",
+    ".pdf",
+    ".doc",
+    ".docx",
   ]),
 };
 
@@ -27,7 +57,9 @@ export interface FeishuResourceDownloadResult {
 }
 
 export interface FeishuResourceAPI {
-  get(params: { path: { file_key: string } }): Promise<FeishuResourceDownloadResult>;
+  get(params: {
+    path: { file_key: string };
+  }): Promise<FeishuResourceDownloadResult>;
 }
 
 export interface FeishuFileUploadResult {
@@ -127,8 +159,8 @@ export class FileHandler {
   }
 
   isInboundFileMessage(event: FeishuMessageReceiveEvent): boolean {
-    const rawEvent = isRecord(event.event) ? event.event : null;
-    const rawMessage = rawEvent && isRecord(rawEvent.message) ? rawEvent.message : null;
+    const normalized = normalizeFeishuEvent(event);
+    const rawMessage = normalized.message;
     if (!rawMessage) return false;
 
     const messageType = getString(rawMessage.message_type);
@@ -136,8 +168,8 @@ export class FileHandler {
   }
 
   parseFileMessage(event: FeishuMessageReceiveEvent): ParsedFileMessage | null {
-    const rawEvent = isRecord(event.event) ? event.event : null;
-    const rawMessage = rawEvent && isRecord(rawEvent.message) ? rawEvent.message : null;
+    const normalized = normalizeFeishuEvent(event);
+    const rawMessage = normalized.message;
     if (!rawMessage) return null;
 
     const messageType = getString(rawMessage.message_type);
@@ -182,7 +214,9 @@ export class FileHandler {
     }
 
     if (fileSize > this.filePolicy.maxFileSizeBytes) {
-      const maxMB = (this.filePolicy.maxFileSizeBytes / (1024 * 1024)).toFixed(1);
+      const maxMB = (this.filePolicy.maxFileSizeBytes / (1024 * 1024)).toFixed(
+        1,
+      );
       const fileMB = (fileSize / (1024 * 1024)).toFixed(1);
       return {
         valid: false,
@@ -194,16 +228,24 @@ export class FileHandler {
   }
 
   async downloadFile(fileKey: string, fileName: string): Promise<StoredFile> {
-    this.logger.debug(`[FileHandler] Downloading file: ${fileName} (key=${fileKey})`);
+    this.logger.debug(
+      `[FileHandler] Downloading file: ${fileName} (key=${fileKey})`,
+    );
 
     const response = await this.client.im.resource.get({
       path: { file_key: fileKey },
     });
 
     const tempDir = await this.fileStore.createTempDir();
-    const stored = await this.fileStore.storeFile(tempDir, fileName, response.data);
+    const stored = await this.fileStore.storeFile(
+      tempDir,
+      fileName,
+      response.data,
+    );
 
-    this.logger.info(`[FileHandler] Downloaded file: ${fileName} -> ${stored.localPath} (${stored.fileSize} bytes)`);
+    this.logger.info(
+      `[FileHandler] Downloaded file: ${fileName} -> ${stored.localPath} (${stored.fileSize} bytes)`,
+    );
     return stored;
   }
 
@@ -224,7 +266,10 @@ export class FileHandler {
     const validation = this.validateFile(parsed.fileName, parsed.fileSize);
     if (!validation.valid) {
       this.logger.info(`[FileHandler] File rejected: ${validation.reason}`);
-      await this.replySender.sendText(receiveId, `⚠️ File upload rejected: ${validation.reason}`);
+      await this.replySender.sendText(
+        receiveId,
+        `⚠️ File upload rejected: ${validation.reason}`,
+      );
       return null;
     }
 
@@ -233,7 +278,10 @@ export class FileHandler {
       return stored;
     } catch (error: unknown) {
       this.logger.error("[FileHandler] Failed to download file", error);
-      await this.replySender.sendText(receiveId, "⚠️ Failed to download the file. Please try again.");
+      await this.replySender.sendText(
+        receiveId,
+        "⚠️ Failed to download the file. Please try again.",
+      );
       return null;
     }
   }
@@ -243,7 +291,9 @@ export class FileHandler {
     fileName: string,
     receiveId: string,
   ): Promise<string | undefined> {
-    this.logger.debug(`[FileHandler] Uploading file: ${fileName} from ${localPath}`);
+    this.logger.debug(
+      `[FileHandler] Uploading file: ${fileName} from ${localPath}`,
+    );
 
     try {
       const uploadResult = await this.client.im.file.create({
@@ -266,7 +316,9 @@ export class FileHandler {
         },
       });
 
-      this.logger.info(`[FileHandler] File sent as message: ${sendResult.data.message_id}`);
+      this.logger.info(
+        `[FileHandler] File sent as message: ${sendResult.data.message_id}`,
+      );
       return sendResult.data.message_id;
     } catch (error: unknown) {
       this.logger.error("[FileHandler] Failed to upload/send file", error);

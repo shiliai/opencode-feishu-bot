@@ -2,7 +2,10 @@ import { extname } from "node:path";
 import { pathToFileURL } from "node:url";
 import type { FeishuMessageReceiveEvent } from "../feishu/event-router.js";
 import { parseFeishuPromptEvent } from "../feishu/message-events.js";
-import type { PromptIngressHandler, PromptIngressResult } from "../feishu/handlers/prompt.js";
+import type {
+  PromptIngressHandler,
+  PromptIngressResult,
+} from "../feishu/handlers/prompt.js";
 import type { PromptPartInput } from "../feishu/handlers/prompt.js";
 import type { FileHandler } from "../feishu/file-handler.js";
 import type { StoredFile } from "../feishu/file-store.js";
@@ -10,14 +13,19 @@ import type { ResponsePipelineController } from "../feishu/response-pipeline.js"
 import type { QuestionCardHandler } from "../feishu/handlers/question.js";
 import type { PermissionCardHandler } from "../feishu/handlers/permission.js";
 import type { ControlRouter } from "../feishu/control-router.js";
+import type { Logger } from "../utils/logger.js";
+import { logger as defaultLogger } from "../utils/logger.js";
+import { normalizeFeishuEvent } from "../feishu/message-events.js";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function getRawMessage(event: FeishuMessageReceiveEvent): Record<string, unknown> | null {
-  const rawEvent = isRecord(event.event) ? event.event : null;
-  return rawEvent && isRecord(rawEvent.message) ? rawEvent.message : null;
+function getRawMessage(
+  event: FeishuMessageReceiveEvent,
+): Record<string, unknown> | null {
+  const normalized = normalizeFeishuEvent(event);
+  return normalized.message as Record<string, unknown> | null;
 }
 
 function inferMimeType(fileName: string): string {
@@ -51,26 +59,52 @@ function inferMimeType(fileName: string): string {
 export interface RuntimeEventHandlersOptions {
   promptIngressHandler: PromptIngressHandler;
   pipelineController: Pick<ResponsePipelineController, "startTurn">;
-  questionCardHandler: Pick<QuestionCardHandler, "handleCardAction" | "canHandleTextReply" | "handleTextReply">;
+  questionCardHandler: Pick<
+    QuestionCardHandler,
+    "handleCardAction" | "canHandleTextReply" | "handleTextReply"
+  >;
   permissionCardHandler: Pick<PermissionCardHandler, "handleCardAction">;
-  controlRouter: Pick<ControlRouter, "parseCommand" | "handleCommand" | "handleCardAction">;
-  fileHandler: Pick<FileHandler, "isInboundFileMessage" | "handleInboundFile" | "cleanup">;
+  controlRouter: Pick<
+    ControlRouter,
+    "parseCommand" | "handleCommand" | "handleCardAction"
+  >;
+  fileHandler: Pick<
+    FileHandler,
+    "isInboundFileMessage" | "handleInboundFile" | "cleanup"
+  >;
   botOpenId?: string | null;
+  logger?: Logger;
   onPromptDispatched?: (
     result: Extract<PromptIngressResult, { kind: "dispatched" }>,
     storedFile?: StoredFile,
   ) => Promise<void> | void;
 }
 
-export function createRuntimeEventHandlers(options: RuntimeEventHandlersOptions): {
+export function createRuntimeEventHandlers(
+  options: RuntimeEventHandlersOptions,
+): {
   handleMessageReceived(event: FeishuMessageReceiveEvent): Promise<void>;
-  handleCardAction(event: Record<string, unknown>): Promise<Record<string, never>>;
+  handleCardAction(
+    event: Record<string, unknown>,
+  ): Promise<Record<string, never>>;
 } {
+  const logger = options.logger ?? defaultLogger;
+
   const handlePromptResult = async (
     result: PromptIngressResult,
     storedFile?: StoredFile,
   ): Promise<void> => {
     if (result.kind !== "dispatched") {
+      const identifiers = {
+        kind: result.kind,
+        ...(result.kind === "blocked" ? { reason: result.reason } : {}),
+        ...(result.kind === "unsupported"
+          ? { messageType: result.messageType }
+          : {}),
+      };
+      logger.debug(
+        `[RuntimeEventHandlers] Prompt result not dispatched: ${JSON.stringify(identifiers)}`,
+      );
       if (storedFile) {
         await options.fileHandler.cleanup(storedFile);
       }
@@ -90,17 +124,26 @@ export function createRuntimeEventHandlers(options: RuntimeEventHandlersOptions)
   };
 
   return {
-    async handleMessageReceived(event: FeishuMessageReceiveEvent): Promise<void> {
+    async handleMessageReceived(
+      event: FeishuMessageReceiveEvent,
+    ): Promise<void> {
       const rawMessage = getRawMessage(event);
-      const chatId = typeof rawMessage?.chat_id === "string" ? rawMessage.chat_id : null;
-      const messageId = typeof rawMessage?.message_id === "string" ? rawMessage.message_id : null;
+      const chatId =
+        typeof rawMessage?.chat_id === "string" ? rawMessage.chat_id : null;
+      const messageId =
+        typeof rawMessage?.message_id === "string"
+          ? rawMessage.message_id
+          : null;
 
       if (options.fileHandler.isInboundFileMessage(event)) {
         if (!chatId || !messageId) {
           return;
         }
 
-        const storedFile = await options.fileHandler.handleInboundFile(event, chatId);
+        const storedFile = await options.fileHandler.handleInboundFile(
+          event,
+          chatId,
+        );
         if (!storedFile) {
           return;
         }
@@ -126,7 +169,9 @@ export function createRuntimeEventHandlers(options: RuntimeEventHandlersOptions)
         return;
       }
 
-      const parsed = parseFeishuPromptEvent(event, { botOpenId: options.botOpenId ?? null });
+      const parsed = parseFeishuPromptEvent(event, {
+        botOpenId: options.botOpenId ?? null,
+      });
       if (parsed) {
         if (options.controlRouter.parseCommand(parsed.text)) {
           await options.controlRouter.handleCommand(parsed.chatId, parsed.text);
@@ -134,18 +179,23 @@ export function createRuntimeEventHandlers(options: RuntimeEventHandlersOptions)
         }
 
         if (options.questionCardHandler.canHandleTextReply(parsed.text)) {
-          const handled = await options.questionCardHandler.handleTextReply(parsed.text);
+          const handled = await options.questionCardHandler.handleTextReply(
+            parsed.text,
+          );
           if (handled) {
             return;
           }
         }
       }
 
-      const result = await options.promptIngressHandler.handleMessageEvent(event);
+      const result =
+        await options.promptIngressHandler.handleMessageEvent(event);
       await handlePromptResult(result);
     },
 
-    async handleCardAction(event: Record<string, unknown>): Promise<Record<string, never>> {
+    async handleCardAction(
+      event: Record<string, unknown>,
+    ): Promise<Record<string, never>> {
       await options.questionCardHandler.handleCardAction(event);
       await options.permissionCardHandler.handleCardAction(event);
       await options.controlRouter.handleCardAction(event);

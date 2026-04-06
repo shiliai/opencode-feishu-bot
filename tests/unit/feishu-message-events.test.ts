@@ -8,7 +8,9 @@ import {
   stripMentionPlaceholders,
 } from "../../src/feishu/message-events.js";
 
-function createEvent(overrides: Partial<FeishuMessageReceiveEvent> = {}): FeishuMessageReceiveEvent {
+function createEvent(
+  overrides: Partial<FeishuMessageReceiveEvent> = {},
+): FeishuMessageReceiveEvent {
   return {
     header: {
       event_id: "evt-1",
@@ -35,7 +37,9 @@ function createEvent(overrides: Partial<FeishuMessageReceiveEvent> = {}): Feishu
 
 describe("feishu message event helpers", () => {
   it("strips mention placeholders from text payloads", () => {
-    expect(stripMentionPlaceholders("@_user_1 hello @_user_2 world")).toBe("hello world");
+    expect(stripMentionPlaceholders("@_user_1 hello @_user_2 world")).toBe(
+      "hello world",
+    );
   });
 
   it("recognizes supported prompt message types", () => {
@@ -57,7 +61,9 @@ describe("feishu message event helpers", () => {
       },
     });
 
-    expect(extractPromptTextFromMessageContent("post", content)).toBe("Build status\nLine one + line two");
+    expect(extractPromptTextFromMessageContent("post", content)).toBe(
+      "Build status\nLine one + line two",
+    );
   });
 
   it("parses direct-message text events into prompt payloads", () => {
@@ -111,10 +117,14 @@ describe("feishu message event helpers", () => {
       },
     });
 
-    expect(extractMentionedOpenIds(parseFeishuPromptEvent(event, { botOpenId: "ou_bot" })?.mentions ?? [])).toEqual([
-      "ou_bot",
-    ]);
-    expect(parseFeishuPromptEvent(event, { botOpenId: "ou_bot" })).toMatchObject({
+    expect(
+      extractMentionedOpenIds(
+        parseFeishuPromptEvent(event, { botOpenId: "ou_bot" })?.mentions ?? [],
+      ),
+    ).toEqual(["ou_bot"]);
+    expect(
+      parseFeishuPromptEvent(event, { botOpenId: "ou_bot" }),
+    ).toMatchObject({
       chatType: "group",
       botMentioned: true,
       text: "summarize this",
@@ -158,5 +168,89 @@ describe("feishu message event helpers", () => {
         }),
       ),
     ).toBeNull();
+  });
+
+  it("parses WebSocket top-level payload structure", () => {
+    const wsEvent: FeishuMessageReceiveEvent = {
+      header: {
+        event_id: "ws_evt_1",
+        event_type: "im.message.receive_v1",
+      },
+      message: {
+        message_id: "om_ws_1",
+        chat_id: "oc_ws_1",
+        chat_type: "p2p",
+        message_type: "text",
+        content: JSON.stringify({ text: "ws direct message" }),
+        mentions: [],
+      },
+      sender: {
+        sender_id: {
+          open_id: "ou_ws_sender",
+        },
+      },
+    };
+
+    const parsed = parseFeishuPromptEvent(wsEvent);
+
+    expect(parsed).toMatchObject({
+      eventId: "ws_evt_1",
+      messageId: "om_ws_1",
+      chatId: "oc_ws_1",
+      chatType: "p2p",
+      messageType: "text",
+      text: "ws direct message",
+      senderOpenId: "ou_ws_sender",
+      isDirectMessage: true,
+      botMentioned: false,
+    });
+  });
+
+  it("prioritizes nested event structure over top-level when both present", () => {
+    const hybridEvent: FeishuMessageReceiveEvent = {
+      header: {
+        event_id: "hybrid_evt_1",
+        event_type: "im.message.receive_v1",
+      },
+      event: {
+        sender: {
+          sender_id: {
+            open_id: "ou_nested_sender",
+          },
+        },
+        message: {
+          message_id: "om_nested_1",
+          chat_id: "oc_nested_1",
+          chat_type: "p2p",
+          message_type: "text",
+          content: JSON.stringify({ text: "nested message" }),
+          mentions: [],
+        },
+      },
+      message: {
+        message_id: "om_top_1",
+        chat_id: "oc_top_1",
+        chat_type: "group",
+        message_type: "text",
+        content: JSON.stringify({ text: "top level message" }),
+        mentions: [],
+      },
+      sender: {
+        sender_id: {
+          open_id: "ou_top_sender",
+        },
+      },
+    };
+
+    const parsed = parseFeishuPromptEvent(hybridEvent);
+
+    expect(parsed).toMatchObject({
+      eventId: "hybrid_evt_1",
+      messageId: "om_nested_1",
+      chatId: "oc_nested_1",
+      chatType: "p2p",
+      text: "nested message",
+      senderOpenId: "ou_nested_sender",
+    });
   });
 });

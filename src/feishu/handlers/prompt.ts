@@ -1,5 +1,8 @@
 import type { FeishuMessageReceiveEvent } from "../event-router.js";
-import { parseFeishuPromptEvent } from "../message-events.js";
+import {
+  parseFeishuPromptEvent,
+  normalizeFeishuEvent,
+} from "../message-events.js";
 import type { ResponsePipelineTurnContext } from "../status-store.js";
 import type { GuardDecision } from "../../interaction/types.js";
 import { InteractionManager } from "../../interaction/manager.js";
@@ -18,7 +21,11 @@ export type PromptIngressResult =
   | { kind: "blocked"; reason: string; guardDecision?: GuardDecision }
   | { kind: "unsupported"; messageType: string }
   | { kind: "no-project" }
-  | { kind: "session-reset"; previousDirectory: string; currentDirectory: string }
+  | {
+      kind: "session-reset";
+      previousDirectory: string;
+      currentDirectory: string;
+    }
   | { kind: "ignored-no-mention" };
 
 export type PromptTextPart = {
@@ -43,9 +50,10 @@ export interface PromptIngressInput {
 }
 
 export interface OpenCodeSessionStatusClient {
-  status(parameters?: {
-    directory?: string;
-  }): Promise<{ data: Record<string, { type: string }> | undefined; error: unknown }>;
+  status(parameters?: { directory?: string }): Promise<{
+    data: Record<string, { type: string }> | undefined;
+    error: unknown;
+  }>;
 }
 
 export interface OpenCodePromptAsyncClient {
@@ -119,7 +127,8 @@ export class PromptIngressHandler {
     this.openCodePromptAsync = dependencies.openCodePromptAsync;
     this.botOpenId = dependencies.botOpenId ?? null;
     this.logger = dependencies.logger ?? defaultLogger;
-    this.scheduleAsync = dependencies.scheduleAsync ?? ((task) => setImmediate(task));
+    this.scheduleAsync =
+      dependencies.scheduleAsync ?? ((task) => setImmediate(task));
   }
 
   async handleMessageEvent(
@@ -128,7 +137,14 @@ export class PromptIngressHandler {
     const parsed = parseFeishuPromptEvent(event, { botOpenId: this.botOpenId });
 
     if (!parsed) {
-      return this.classifyUnparsedEvent(event);
+      const classification = this.classifyUnparsedEvent(event);
+      this.logger.debug(
+        `[PromptIngress] Unparsed event classified: kind=${classification.kind}` +
+          (classification.kind === "unsupported"
+            ? `, messageType=${(classification as { kind: "unsupported"; messageType: string }).messageType}`
+            : ""),
+      );
+      return classification;
     }
 
     return this.handlePromptInput({
@@ -139,21 +155,24 @@ export class PromptIngressHandler {
     });
   }
 
-  async handlePromptInput(input: PromptIngressInput): Promise<PromptIngressResult> {
+  async handlePromptInput(
+    input: PromptIngressInput,
+  ): Promise<PromptIngressResult> {
     return this.handlePromptDispatch(input);
   }
 
-  private classifyUnparsedEvent(event: FeishuMessageReceiveEvent): PromptIngressResult {
-    const rawEvent =
-      typeof event.event === "object" && event.event !== null && !Array.isArray(event.event)
-        ? (event.event as Record<string, unknown>)
+  private classifyUnparsedEvent(
+    event: FeishuMessageReceiveEvent,
+  ): PromptIngressResult {
+    const normalized = normalizeFeishuEvent(event);
+    const rawMessage = normalized.message;
+
+    const messageType =
+      typeof rawMessage?.message_type === "string"
+        ? rawMessage.message_type
         : null;
-    const rawMessage =
-      rawEvent && typeof rawEvent.message === "object" && rawEvent.message !== null
-        ? (rawEvent.message as Record<string, unknown>)
-        : null;
-    const messageType = typeof rawMessage?.message_type === "string" ? rawMessage.message_type : null;
-    const chatType = typeof rawMessage?.chat_type === "string" ? rawMessage.chat_type : null;
+    const chatType =
+      typeof rawMessage?.chat_type === "string" ? rawMessage.chat_type : null;
 
     if (chatType === "group" && messageType === "text") {
       return { kind: "ignored-no-mention" };
@@ -259,7 +278,10 @@ export class PromptIngressHandler {
         };
 
         if (model) {
-          promptParams.model = { providerID: model.providerID, modelID: model.modelID };
+          promptParams.model = {
+            providerID: model.providerID,
+            modelID: model.modelID,
+          };
         }
         if (agent) {
           promptParams.agent = agent;

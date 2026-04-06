@@ -2,6 +2,43 @@ import type { FeishuMessageReceiveEvent } from "./event-router.js";
 
 export type SupportedPromptMessageType = "text" | "post";
 
+/**
+ * Normalizes Feishu event payloads to handle both webhook-style nested
+ * and WebSocket top-level structures.
+ *
+ * Webhook shape: { header, event: { message, sender } }
+ * WebSocket shape: { message, sender, ... } (top-level)
+ */
+export interface NormalizedFeishuEvent {
+  header: { event_id?: string; event_type?: string } | null;
+  message: RawFeishuMessage | null;
+  sender: { sender_id?: { open_id?: string } } | null;
+}
+
+export function normalizeFeishuEvent(
+  event: FeishuMessageReceiveEvent,
+): NormalizedFeishuEvent {
+  const header = isRecord(event.header) ? event.header : null;
+
+  const rawEvent = isRecord(event.event) ? event.event : null;
+  const nestedMessage =
+    rawEvent && isRecord(rawEvent.message)
+      ? (rawEvent.message as RawFeishuMessage)
+      : null;
+  const nestedSender =
+    rawEvent && isRecord(rawEvent.sender) ? rawEvent.sender : null;
+
+  const topLevelMessage = isRecord(event.message)
+    ? (event.message as RawFeishuMessage)
+    : null;
+  const topLevelSender = isRecord(event.sender) ? event.sender : null;
+
+  const message = nestedMessage ?? topLevelMessage ?? null;
+  const sender = nestedSender ?? topLevelSender ?? null;
+
+  return { header, message, sender };
+}
+
 export interface FeishuMentionId {
   open_id?: string;
   union_id?: string;
@@ -64,7 +101,9 @@ export function stripMentionPlaceholders(text: string): string {
   return normalizeWhitespace(text.replace(/@_user_\d+\s*/g, ""));
 }
 
-export function isSupportedPromptMessageType(value: unknown): value is SupportedPromptMessageType {
+export function isSupportedPromptMessageType(
+  value: unknown,
+): value is SupportedPromptMessageType {
   return value === "text" || value === "post";
 }
 
@@ -73,9 +112,8 @@ export function extractMentions(value: unknown): FeishuMention[] {
     return [];
   }
 
-  return value
-    .filter(isRecord)
-    .map((mention): FeishuMention => ({
+  return value.filter(isRecord).map(
+    (mention): FeishuMention => ({
       key: getString(mention.key) ?? undefined,
       id: isRecord(mention.id)
         ? {
@@ -86,13 +124,19 @@ export function extractMentions(value: unknown): FeishuMention[] {
         : {},
       name: getString(mention.name) ?? undefined,
       tenant_key: getString(mention.tenant_key) ?? undefined,
-    }));
+    }),
+  );
 }
 
-export function extractMentionedOpenIds(mentions: readonly FeishuMention[]): string[] {
+export function extractMentionedOpenIds(
+  mentions: readonly FeishuMention[],
+): string[] {
   return mentions
     .map((mention) => mention.id.open_id)
-    .filter((openId): openId is string => typeof openId === "string" && openId.length > 0);
+    .filter(
+      (openId): openId is string =>
+        typeof openId === "string" && openId.length > 0,
+    );
 }
 
 function extractTextFromPostSegment(segment: unknown): string | null {
@@ -115,7 +159,9 @@ function extractTextFromPostSegment(segment: unknown): string | null {
   return null;
 }
 
-function collectPostBodies(content: unknown): Array<{ title: string | null; rows: unknown[] }> {
+function collectPostBodies(
+  content: unknown,
+): Array<{ title: string | null; rows: unknown[] }> {
   if (!isRecord(content)) {
     return [];
   }
@@ -131,7 +177,9 @@ function collectPostBodies(content: unknown): Array<{ title: string | null; rows
       continue;
     }
 
-    const rows = Array.isArray(nestedValue.content) ? nestedValue.content : null;
+    const rows = Array.isArray(nestedValue.content)
+      ? nestedValue.content
+      : null;
     if (!rows) {
       continue;
     }
@@ -180,7 +228,10 @@ export function extractPromptTextFromMessageContent(
 
       const rowText = row
         .map((segment) => extractTextFromPostSegment(segment))
-        .filter((segment): segment is string => typeof segment === "string" && segment.length > 0)
+        .filter(
+          (segment): segment is string =>
+            typeof segment === "string" && segment.length > 0,
+        )
         .join("");
 
       if (rowText) {
@@ -197,8 +248,8 @@ export function parseFeishuPromptEvent(
   event: FeishuMessageReceiveEvent,
   options: ParseFeishuPromptEventOptions = {},
 ): ParsedFeishuPromptEvent | null {
-  const rawEvent = isRecord(event.event) ? event.event : null;
-  const rawMessage = rawEvent && isRecord(rawEvent.message) ? (rawEvent.message as RawFeishuMessage) : null;
+  const normalized = normalizeFeishuEvent(event);
+  const { header, message: rawMessage, sender: rawSender } = normalized;
 
   if (!rawMessage) {
     return null;
@@ -234,11 +285,11 @@ export function parseFeishuPromptEvent(
     return null;
   }
 
-  const rawSender = rawEvent && isRecord(rawEvent.sender) ? rawEvent.sender : null;
-  const rawSenderId = rawSender && isRecord(rawSender.sender_id) ? rawSender.sender_id : null;
+  const rawSenderId =
+    rawSender && isRecord(rawSender.sender_id) ? rawSender.sender_id : null;
 
   return {
-    eventId: event.header?.event_id ?? null,
+    eventId: header?.event_id ?? null,
     messageId,
     chatId,
     chatType,

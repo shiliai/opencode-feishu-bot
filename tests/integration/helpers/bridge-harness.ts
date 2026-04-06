@@ -124,13 +124,19 @@ function createFeishuFileClient(): MockFeishuFileClient {
   return {
     im: {
       resource: {
-        get: vi.fn().mockResolvedValue({ data: Buffer.from("downloaded fixture") }),
+        get: vi
+          .fn()
+          .mockResolvedValue({ data: Buffer.from("downloaded fixture") }),
       },
       file: {
-        create: vi.fn().mockResolvedValue({ data: { file_key: "uploaded-file-key-1" } }),
+        create: vi
+          .fn()
+          .mockResolvedValue({ data: { file_key: "uploaded-file-key-1" } }),
       },
       message: {
-        create: vi.fn().mockResolvedValue({ data: { message_id: "file-message-1" } }),
+        create: vi
+          .fn()
+          .mockResolvedValue({ data: { message_id: "file-message-1" } }),
       },
     },
   };
@@ -166,7 +172,10 @@ export async function createBridgeHarness(): Promise<BridgeHarness> {
   const renderer = createRenderer();
   const openCodeClients = createOpenCodeClients();
   const feishuFileClient = createFeishuFileClient();
-  const fileStore = new FileStore({ tempDirPrefix: "feishu-bridge-integration-file-", logger });
+  const fileStore = new FileStore({
+    tempDirPrefix: "feishu-bridge-integration-file-",
+    logger,
+  });
   const settingsManager = new SettingsManager({ settingsFilePath, logger });
   const sessionManager = new SessionManager(settingsManager);
   const questionManager = new QuestionManager();
@@ -252,7 +261,9 @@ export async function createBridgeHarness(): Promise<BridgeHarness> {
     onSessionSettled: async (sessionId) => {
       const storedFiles = inboundFilesBySession.get(sessionId) ?? [];
       inboundFilesBySession.delete(sessionId);
-      await Promise.all(storedFiles.map((storedFile) => fileHandler.cleanup(storedFile)));
+      await Promise.all(
+        storedFiles.map((storedFile) => fileHandler.cleanup(storedFile)),
+      );
     },
   });
 
@@ -273,7 +284,9 @@ export async function createBridgeHarness(): Promise<BridgeHarness> {
             return;
           }
 
-          options?.signal?.addEventListener("abort", () => resolve(), { once: true });
+          options?.signal?.addEventListener("abort", () => resolve(), {
+            once: true,
+          });
         });
       },
     ),
@@ -324,6 +337,7 @@ export async function createBridgeHarness(): Promise<BridgeHarness> {
     controlRouter,
     fileHandler,
     botOpenId: "bot-open-id-1",
+    logger,
     onPromptDispatched: async (result, storedFile) => {
       if (storedFile) {
         downloadedFiles.push(storedFile);
@@ -371,7 +385,9 @@ export async function createBridgeHarness(): Promise<BridgeHarness> {
     getDownloadedFiles(): StoredFile[] {
       return [...downloadedFiles];
     },
-    async handleMessageReceived(event: FeishuMessageReceiveEvent): Promise<void> {
+    async handleMessageReceived(
+      event: FeishuMessageReceiveEvent,
+    ): Promise<void> {
       eventRouter.handleMessageReceived(event);
       await new Promise((resolve) => setTimeout(resolve, 0));
     },
@@ -380,7 +396,10 @@ export async function createBridgeHarness(): Promise<BridgeHarness> {
     },
     async flushSession(sessionId: string = "session-1"): Promise<void> {
       await new Promise((resolve) => setTimeout(resolve, 0));
-      await responsePipeline.enqueueSessionTask(sessionId, async () => undefined);
+      await responsePipeline.enqueueSessionTask(
+        sessionId,
+        async () => undefined,
+      );
       await flushPendingTasks();
       await new Promise((resolve) => setTimeout(resolve, 5));
       await flushPendingTasks();

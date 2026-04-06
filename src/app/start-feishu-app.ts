@@ -1,6 +1,11 @@
 import "dotenv/config";
 
-import { createServer, type Server, type IncomingMessage, type ServerResponse } from "node:http";
+import {
+  createServer,
+  type Server,
+  type IncomingMessage,
+  type ServerResponse,
+} from "node:http";
 
 import { getConfig, type AppConfig, ConfigValidationError } from "../config.js";
 import { createFeishuClients } from "../feishu/sdk.js";
@@ -11,9 +16,18 @@ import { createCardCallbackRequestHandler } from "../feishu/card-callback-server
 import { createEventDeduplicator } from "../feishu/event-deduplicator.js";
 import { statusStore } from "../feishu/status-store.js";
 import { ResponsePipelineController } from "../feishu/response-pipeline.js";
-import { PromptIngressHandler, type PromptIngressResult } from "../feishu/handlers/prompt.js";
-import { QuestionCardHandler, type OpenCodeQuestionClient } from "../feishu/handlers/question.js";
-import { PermissionCardHandler, type OpenCodePermissionClient } from "../feishu/handlers/permission.js";
+import {
+  PromptIngressHandler,
+  type PromptIngressResult,
+} from "../feishu/handlers/prompt.js";
+import {
+  QuestionCardHandler,
+  type OpenCodeQuestionClient,
+} from "../feishu/handlers/question.js";
+import {
+  PermissionCardHandler,
+  type OpenCodePermissionClient,
+} from "../feishu/handlers/permission.js";
 import { FileHandler, type FeishuFileClient } from "../feishu/file-handler.js";
 import { ControlRouter } from "../feishu/control-router.js";
 import { createOpenCodeClient } from "../opencode/client.js";
@@ -104,6 +118,20 @@ export async function startFeishuApp(): Promise<void> {
     interaction: interactionManager,
   };
 
+  await managers.settings.loadSettings();
+  if (!managers.settings.getCurrentProject()) {
+    const defaultWorktree =
+      managers.settings.getCurrentSession()?.directory ?? process.cwd();
+    managers.settings.setCurrentProject({
+      id: defaultWorktree,
+      worktree: defaultWorktree,
+      name: "Default workspace",
+    });
+    logger.info(
+      `[Startup] No current project configured; defaulting to worktree=${defaultWorktree}`,
+    );
+  }
+
   // Step 6: Create handlers
   const questionCardHandler = new QuestionCardHandler({
     questionManager: managers.question,
@@ -158,7 +186,9 @@ export async function startFeishuApp(): Promise<void> {
     onSessionSettled: async (sessionId) => {
       const storedFiles = inboundFilesBySession.get(sessionId) ?? [];
       inboundFilesBySession.delete(sessionId);
-      await Promise.all(storedFiles.map((storedFile) => fileHandler.cleanup(storedFile)));
+      await Promise.all(
+        storedFiles.map((storedFile) => fileHandler.cleanup(storedFile)),
+      );
     },
   });
 
@@ -183,6 +213,7 @@ export async function startFeishuApp(): Promise<void> {
     controlRouter,
     fileHandler,
     botOpenId: config.feishu.botOpenId || null,
+    logger,
     onPromptDispatched: async (
       result: Extract<PromptIngressResult, { kind: "dispatched" }>,
       storedFile,
@@ -222,7 +253,10 @@ export async function startFeishuApp(): Promise<void> {
       feishuClients.cardActionHandler,
     );
     httpServer = createServer((req: IncomingMessage, res: ServerResponse) => {
-      const requestUrl = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
+      const requestUrl = new URL(
+        req.url ?? "/",
+        `http://${req.headers.host ?? "localhost"}`,
+      );
       if (requestUrl.pathname === "/healthz") {
         sendHealthz(res);
         return;
@@ -231,7 +265,10 @@ export async function startFeishuApp(): Promise<void> {
     });
   } else {
     httpServer = createServer((req: IncomingMessage, res: ServerResponse) => {
-      const requestUrl = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
+      const requestUrl = new URL(
+        req.url ?? "/",
+        `http://${req.headers.host ?? "localhost"}`,
+      );
       if (requestUrl.pathname === "/healthz") {
         sendHealthz(res);
         return;
