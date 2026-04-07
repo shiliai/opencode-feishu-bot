@@ -13,7 +13,9 @@ vi.mock("../../src/opencode/events.js", () => ({
   },
 }));
 
-type ControllerOptions = ConstructorParameters<typeof ResponsePipelineController>[0];
+type ControllerOptions = ConstructorParameters<
+  typeof ResponsePipelineController
+>[0];
 type EventSubscriber = NonNullable<ControllerOptions["eventSubscriber"]>;
 type SummaryAggregator = NonNullable<ControllerOptions["summaryAggregator"]>;
 type Renderer = ControllerOptions["renderer"];
@@ -21,7 +23,9 @@ type SettingsManager = ControllerOptions["settingsManager"];
 type InteractionManager = ControllerOptions["interactionManager"];
 type Logger = NonNullable<ControllerOptions["logger"]>;
 
-function makeTurnContext(sessionId: string = "session-1"): ResponsePipelineTurnContext {
+function makeTurnContext(
+  sessionId: string = "session-1",
+): ResponsePipelineTurnContext {
   return {
     sessionId,
     directory: `/workspace/${sessionId}`,
@@ -34,12 +38,18 @@ function createHarness() {
   const statusStore = new StatusStore();
   let callbacks: SummaryCallbacks | undefined;
 
-  const renderStatusCard = vi.fn<Renderer["renderStatusCard"]>().mockResolvedValue("status-card-1");
+  const renderStatusCard = vi
+    .fn<Renderer["renderStatusCard"]>()
+    .mockResolvedValue("status-card-1");
   const updateStatusCard = vi
     .fn<Renderer["updateStatusCard"]>()
     .mockResolvedValue(undefined);
-  const replyPost = vi.fn<Renderer["replyPost"]>().mockResolvedValue("reply-msg-1");
-  const sendPost = vi.fn<Renderer["sendPost"]>().mockResolvedValue("send-msg-1");
+  const replyPost = vi
+    .fn<Renderer["replyPost"]>()
+    .mockResolvedValue("reply-msg-1");
+  const sendPost = vi
+    .fn<Renderer["sendPost"]>()
+    .mockResolvedValue("send-msg-1");
 
   const renderer = {
     renderStatusCard,
@@ -75,31 +85,32 @@ function createHarness() {
     clearBusy: vi.fn((): void => undefined),
   } satisfies InteractionManager;
 
+  const info = vi.fn();
+  const warn = vi.fn();
+  const error = vi.fn();
+  const debug = vi.fn();
   const logger = {
-    info: vi.fn((message: string, ...args: unknown[]): void => {
-      void message;
-      void args;
-    }),
-    warn: vi.fn((message: string, ...args: unknown[]): void => {
-      void message;
-      void args;
-    }),
-    error: vi.fn((message: string, ...args: unknown[]): void => {
-      void message;
-      void args;
-    }),
-    debug: vi.fn((message: string, ...args: unknown[]): void => {
-      void message;
-      void args;
-    }),
+    info: (...args: unknown[]): void => void info(...args),
+    warn: (...args: unknown[]): void => void warn(...args),
+    error: (...args: unknown[]): void => void error(...args),
+    debug: (...args: unknown[]): void => void debug(...args),
   } satisfies Logger;
 
-  const setTimeoutFn = vi.fn(
-    (...args: Parameters<typeof setTimeout>): ReturnType<typeof setTimeout> => setTimeout(...args),
+  const setTimeoutSpy = vi.fn(
+    (...args: Parameters<typeof setTimeout>): ReturnType<typeof setTimeout> =>
+      setTimeout(...args),
+  );
+  const setTimeoutFn = Object.assign(
+    ((...args: Parameters<typeof setTimeout>): ReturnType<typeof setTimeout> =>
+      setTimeoutSpy(...args)) as typeof setTimeout,
+    {
+      __promisify__: setTimeout.__promisify__,
+    },
   );
   const clearTimeoutFn = vi.fn(
-    (...args: Parameters<typeof clearTimeout>): ReturnType<typeof clearTimeout> =>
-      clearTimeout(...args),
+    (
+      ...args: Parameters<typeof clearTimeout>
+    ): ReturnType<typeof clearTimeout> => clearTimeout(...args),
   );
 
   const controller = new ResponsePipelineController({
@@ -133,7 +144,7 @@ function createHarness() {
     renderer,
     settingsManager,
     interactionManager,
-    setTimeoutFn,
+    setTimeoutFn: setTimeoutSpy,
     clearTimeoutFn,
   };
 }
@@ -170,8 +181,16 @@ describe("ResponsePipelineController status card throttling", () => {
     await createLiveStatusCard(harness, context);
 
     harness.callbacks.onPartial?.(context.sessionId, "assistant-msg-1", "Hel");
-    harness.callbacks.onPartial?.(context.sessionId, "assistant-msg-1", "Hello");
-    harness.callbacks.onPartial?.(context.sessionId, "assistant-msg-1", "Hello world");
+    harness.callbacks.onPartial?.(
+      context.sessionId,
+      "assistant-msg-1",
+      "Hello",
+    );
+    harness.callbacks.onPartial?.(
+      context.sessionId,
+      "assistant-msg-1",
+      "Hello world",
+    );
 
     expect(harness.renderer.updateStatusCard).not.toHaveBeenCalled();
     expect(harness.setTimeoutFn).toHaveBeenCalledTimes(1);
@@ -220,7 +239,11 @@ describe("ResponsePipelineController status card throttling", () => {
 
     await createLiveStatusCard(harness, context);
 
-    harness.callbacks.onPartial?.(context.sessionId, "assistant-msg-1", "Latest partial");
+    harness.callbacks.onPartial?.(
+      context.sessionId,
+      "assistant-msg-1",
+      "Latest partial",
+    );
     await vi.advanceTimersByTimeAsync(1_000);
     await drainSession(harness.controller, context.sessionId);
 
@@ -229,7 +252,12 @@ describe("ResponsePipelineController status card throttling", () => {
 
     harness.renderer.updateStatusCard.mockClear();
 
-    harness.callbacks.onComplete?.(context.sessionId, "assistant-msg-1", "Final reply");
+    harness.callbacks.onComplete?.(
+      context.sessionId,
+      "assistant-msg-1",
+      "Latest partial",
+    );
+    harness.callbacks.onSessionIdle?.(context.sessionId);
     await drainSession(harness.controller, context.sessionId);
 
     expect(harness.renderer.updateStatusCard).not.toHaveBeenCalled();
@@ -242,15 +270,24 @@ describe("ResponsePipelineController status card throttling", () => {
 
     await createLiveStatusCard(harness, context);
 
-    harness.callbacks.onPartial?.(context.sessionId, "assistant-msg-1", "Queued partial");
-    harness.callbacks.onComplete?.(context.sessionId, "assistant-msg-1", "Final reply");
+    harness.callbacks.onPartial?.(
+      context.sessionId,
+      "assistant-msg-1",
+      "Queued partial",
+    );
+    harness.callbacks.onComplete?.(
+      context.sessionId,
+      "assistant-msg-1",
+      "Final reply",
+    );
+    harness.callbacks.onSessionIdle?.(context.sessionId);
     await drainSession(harness.controller, context.sessionId);
 
     expect(harness.clearTimeoutFn).toHaveBeenCalledTimes(1);
     expect(harness.renderer.updateStatusCard).toHaveBeenCalledTimes(1);
-    expect(harness.renderer.updateStatusCard.mock.invocationCallOrder[0]).toBeLessThan(
-      harness.renderer.replyPost.mock.invocationCallOrder[0],
-    );
+    expect(
+      harness.renderer.updateStatusCard.mock.invocationCallOrder[0],
+    ).toBeLessThan(harness.renderer.replyPost.mock.invocationCallOrder[0]);
     expect(harness.renderer.replyPost).toHaveBeenCalledTimes(1);
 
     await vi.advanceTimersByTimeAsync(1_000);

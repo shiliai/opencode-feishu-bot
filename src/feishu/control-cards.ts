@@ -368,15 +368,35 @@ export function buildHistoryCard(
 }
 
 export function buildStatusCard(status: {
+  health?: string | null;
+  version?: string | null;
+  project?: string | null;
+  directory?: string | null;
   session: string | null;
+  sessionTitle?: string | null;
   model: string | null;
   agent: string | null;
   state: string;
 }): InteractiveCard {
   const lines: string[] = [];
+  if (status.health) {
+    lines.push(`**Server**: ${status.health}`);
+  }
+  if (status.version) {
+    lines.push(`**Version**: ${status.version}`);
+  }
+  if (status.project) {
+    lines.push(`**Project**: ${status.project}`);
+  }
+  if (status.directory) {
+    lines.push(`**Scope**: ${status.directory}`);
+  }
   lines.push(`**Session**: ${status.session ?? "none"}`);
-  lines.push(`**Model**: ${status.model ?? "none"}`);
-  lines.push(`**Agent**: ${status.agent ?? "none"}`);
+  if (status.sessionTitle) {
+    lines.push(`**Session Title**: ${status.sessionTitle}`);
+  }
+  lines.push(`**Model**: ${status.model ?? "OpenCode default"}`);
+  lines.push(`**Agent**: ${status.agent ?? "OpenCode default"}`);
   lines.push(`**State**: ${status.state}`);
 
   return {

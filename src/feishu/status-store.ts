@@ -19,6 +19,7 @@ export interface StatusTurnState extends ResponsePipelineTurnContext {
   lastPatchedText?: string;
   accumulatedReasoning?: string;
   reasoningStartTime?: number;
+  latestCompletedText?: string;
   turnStartTime: number;
   pendingCompletion: boolean;
   cardUpdatesBroken: boolean;

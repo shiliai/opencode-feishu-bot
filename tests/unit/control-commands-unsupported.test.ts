@@ -59,6 +59,7 @@ function createMockOpenCodeClient() {
       list: vi.fn().mockResolvedValue({ data: [] }),
       status: vi.fn().mockResolvedValue({ data: {} }),
       abort: vi.fn().mockResolvedValue({ data: true }),
+      messages: vi.fn().mockResolvedValue({ data: [] }),
     },
     app: {
       agents: vi.fn().mockResolvedValue({ data: [] }),
@@ -70,6 +71,11 @@ function createMockOpenCodeClient() {
     },
     project: {
       list: vi.fn().mockResolvedValue({ data: [] }),
+    },
+    global: {
+      health: vi.fn().mockResolvedValue({
+        data: { healthy: true, version: "1.3.17" },
+      }),
     },
   };
 }
@@ -204,6 +210,16 @@ describe("ControlRouter — unsupported commands", () => {
     for (const cmd of extraCommands) {
       expect(router.parseCommand(cmd)).toBeNull();
     }
+  });
+
+  it("parseCommand normalizes /models to /model", () => {
+    const router = createRouter();
+
+    expect(router.parseCommand("/models")).toEqual({ command: "/model" });
+    expect(router.parseCommand("/models gpt-5.4")).toEqual({
+      command: "/model",
+      args: "gpt-5.4",
+    });
   });
 
   it("parseCommand accepts slash commands with leading mention wrappers", () => {

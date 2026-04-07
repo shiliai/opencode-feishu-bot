@@ -69,6 +69,7 @@ function createMockOpenCodeClient() {
         .mockResolvedValue({ data: [{ id: "sess-1", title: "Test" }] }),
       status: vi.fn().mockResolvedValue({ data: {} }),
       abort: vi.fn().mockResolvedValue({ data: true }),
+      messages: vi.fn().mockResolvedValue({ data: [] }),
     },
     app: {
       agents: vi.fn().mockResolvedValue({
@@ -103,6 +104,11 @@ function createMockOpenCodeClient() {
             name: "Project One",
           },
         ],
+      }),
+    },
+    global: {
+      health: vi.fn().mockResolvedValue({
+        data: { healthy: true, version: "1.3.17" },
       }),
     },
   };

@@ -54,6 +54,7 @@ const SUPPORTED_COMMANDS = new Set<string>([
   "/session",
   "/history",
   "/model",
+  "/models",
   "/agent",
   "/status",
   "/abort",
@@ -124,6 +125,15 @@ export interface OpenCodeSessionClient {
   }): Promise<{ data?: unknown; error?: unknown }>;
   status(parameters?: Record<string, unknown>): Promise<{ data?: unknown }>;
   abort(parameters?: Record<string, unknown>): Promise<{ data?: unknown }>;
+  messages(parameters: {
+    sessionID: string;
+    directory?: string;
+    limit?: number;
+  }): Promise<{ data?: unknown; error?: unknown }>;
+}
+
+export interface OpenCodeGlobalClient {
+  health(): Promise<{ data?: unknown; error?: unknown }>;
 }
 
 export interface OpenCodeProjectClient {
@@ -136,6 +146,7 @@ export interface OpenCodeProjectClient {
 export interface OpenCodeControlClient extends OpenCodeControlCatalogClient {
   session: OpenCodeSessionClient;
   project: OpenCodeProjectClient;
+  global: OpenCodeGlobalClient;
 }
 
 export type ControlRouterSettingsStore = Pick<
@@ -188,12 +199,19 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+function getTrimmedString(value: unknown): string | null {
+  return typeof value === "string" && value.trim().length > 0
+    ? value.trim()
+    : null;
+}
+
 export class ControlRouter {
   private readonly settings: ControlRouterSettingsStore;
   private readonly sessionManager: ControlRouterSessionStore;
   private readonly renderer: ControlRouterRenderer;
   private readonly openCodeSession: OpenCodeSessionClient;
   private readonly openCodeProject: OpenCodeProjectClient;
+  private readonly openCodeGlobal: OpenCodeGlobalClient;
   private readonly interactionManager: ControlRouterInteractionStore;
   private readonly cardActionsEnabled: boolean;
   private readonly logger: Logger;
@@ -206,6 +224,7 @@ export class ControlRouter {
     this.renderer = options.renderer;
     this.openCodeSession = options.openCodeClient.session;
     this.openCodeProject = options.openCodeClient.project;
+    this.openCodeGlobal = options.openCodeClient.global;
     this.interactionManager = options.interactionManager;
     this.cardActionsEnabled = options.cardActionsEnabled ?? true;
     this.logger = options.logger ?? createNoopLogger();
@@ -243,6 +262,8 @@ export class ControlRouter {
         ? normalizedInput
         : normalizedInput.slice(0, whitespaceIndex);
     const commandPart = commandRaw.toLowerCase();
+    const normalizedCommandPart =
+      commandPart === "/models" ? "/model" : commandPart;
     const args =
       whitespaceIndex === -1
         ? undefined
@@ -252,7 +273,10 @@ export class ControlRouter {
       return null;
     }
 
-    return { command: commandPart as ControlCommand, args: args || undefined };
+    return {
+      command: normalizedCommandPart as ControlCommand,
+      args: args || undefined,
+    };
   }
 
   async handleCommand(
@@ -781,20 +805,110 @@ export class ControlRouter {
   }
 
   private async handleStatus(receiveId: string): Promise<ControlCommandResult> {
-    const currentSession = this.sessionManager.getCurrentSession();
-    const currentModel = this.settings.getCurrentModel();
-    const currentAgent = this.settings.getCurrentAgent();
+    const currentProject = this.settings.getCurrentProject();
+    const currentSession = this.sessionManager.getCurrentSession() ?? undefined;
+    const fallbackModel = this.settings.getCurrentModel();
+    const fallbackAgent = this.settings.getCurrentAgent();
+    const directory = resolveDirectoryScope(currentProject, currentSession);
 
-    const modelDisplay = currentModel
-      ? `${currentModel.providerID}/${currentModel.modelID}`
+    let healthDisplay: string | null = null;
+    let versionDisplay: string | null = null;
+    try {
+      const healthResponse = await this.openCodeGlobal.health();
+      if (healthResponse.error) {
+        throw healthResponse.error;
+      }
+
+      const data = isRecord(healthResponse.data) ? healthResponse.data : null;
+      if (data) {
+        if (typeof data.healthy === "boolean") {
+          healthDisplay = data.healthy ? "healthy" : "unhealthy";
+        }
+        versionDisplay = getTrimmedString(data.version);
+      }
+    } catch (error) {
+      this.logger.warn(
+        "[ControlRouter] Failed to fetch OpenCode health for /status",
+        error,
+      );
+    }
+
+    let modelDisplay = fallbackModel
+      ? `${fallbackModel.providerID}/${fallbackModel.modelID}`
       : null;
+    let agentDisplay = fallbackAgent ?? null;
 
-    const state = this.interactionManager.isBusy() ? "busy" : "idle";
+    if (currentSession) {
+      try {
+        const messagesResponse = await this.openCodeSession.messages({
+          sessionID: currentSession.id,
+          directory,
+          limit: 1,
+        });
+        if (messagesResponse.error) {
+          throw messagesResponse.error;
+        }
+
+        const messages = Array.isArray(messagesResponse.data)
+          ? messagesResponse.data
+          : [];
+        const latestMessage = messages[0];
+        const info =
+          isRecord(latestMessage) && isRecord(latestMessage.info)
+            ? latestMessage.info
+            : null;
+        const providerID = info ? getTrimmedString(info.providerID) : null;
+        const modelID = info ? getTrimmedString(info.modelID) : null;
+        const agentName = info ? getTrimmedString(info.agent) : null;
+
+        if (providerID && modelID) {
+          modelDisplay = `${providerID}/${modelID}`;
+        }
+        if (agentName) {
+          agentDisplay = agentName;
+        }
+      } catch (error) {
+        this.logger.warn(
+          `[ControlRouter] Failed to fetch latest OpenCode session message for /status: session=${currentSession.id}`,
+          error,
+        );
+      }
+    }
+
+    let state = this.interactionManager.isBusy() ? "busy" : "idle";
+    try {
+      const statusResponse = await this.openCodeSession.status({ directory });
+      const statusMap = isRecord(statusResponse.data)
+        ? statusResponse.data
+        : null;
+      const sessionStatus =
+        currentSession && statusMap ? statusMap[currentSession.id] : undefined;
+      const statusRecord = isRecord(sessionStatus) ? sessionStatus : null;
+      const serverState = statusRecord
+        ? getTrimmedString(statusRecord.type)
+        : null;
+      if (serverState) {
+        state = serverState;
+      }
+    } catch (error) {
+      this.logger.warn(
+        `[ControlRouter] Failed to fetch OpenCode session status for /status: directory=${directory}`,
+        error,
+      );
+    }
+
+    const projectDisplay =
+      currentProject?.name ?? currentProject?.worktree ?? null;
 
     const card = buildStatusCard({
+      health: healthDisplay,
+      version: versionDisplay,
+      project: projectDisplay,
+      directory,
       session: currentSession?.id ?? null,
       model: modelDisplay,
-      agent: currentAgent ?? null,
+      sessionTitle: currentSession?.title ?? null,
+      agent: agentDisplay,
       state,
     });
     const messageId = await this.renderer.sendCard(receiveId, card);

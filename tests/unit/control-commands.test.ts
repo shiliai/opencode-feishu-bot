@@ -63,6 +63,7 @@ function createMockOpenCodeClient() {
         .fn()
         .mockResolvedValue({ data: { "sess-1": { type: "idle" } } }),
       abort: vi.fn().mockResolvedValue({ data: true }),
+      messages: vi.fn().mockResolvedValue({ data: [] }),
     },
     app: {
       agents: vi.fn().mockResolvedValue({
@@ -91,6 +92,11 @@ function createMockOpenCodeClient() {
             name: "Project Two",
           },
         ],
+      }),
+    },
+    global: {
+      health: vi.fn().mockResolvedValue({
+        data: { healthy: true, version: "1.3.17" },
       }),
     },
   };
@@ -336,6 +342,20 @@ describe("ControlRouter — command dispatch", () => {
     });
   });
 
+  it("/models alias renders the same picker as /model", async () => {
+    const renderer = createMockRenderer();
+    const openCodeClient = createMockOpenCodeClient();
+    const router = createRouter({ renderer, openCodeClient });
+
+    const result = await router.handleCommand("chat-1", "/models");
+
+    expect(result.success).toBe(true);
+    expect(openCodeClient.config.providers).toHaveBeenCalledTimes(1);
+    expect(renderer.sendCard).toHaveBeenCalledTimes(1);
+    const sentCard = renderer.sendCard.mock.calls[0][1];
+    expect(sentCard.header.title.content).toBe("Model Picker");
+  });
+
   it("/model <provider/model> stores provider and model separately", async () => {
     const settings = createMockSettings();
     const router = createRouter({ settingsManager: settings });
@@ -420,6 +440,63 @@ describe("ControlRouter — command dispatch", () => {
     expect(renderer.sendCard).toHaveBeenCalledTimes(1);
     const sentCard = renderer.sendCard.mock.calls[0][1];
     expect(sentCard.header.title.content).toBe("OpenCode Status");
+  });
+
+  it("/status prefers current model and agent from the OpenCode session API", async () => {
+    const renderer = createMockRenderer();
+    const settings = createMockSettings();
+    settings.getCurrentModel.mockReturnValue(undefined);
+    settings.getCurrentAgent.mockReturnValue(undefined);
+    settings.getCurrentProject.mockReturnValue({
+      id: "project-1",
+      worktree: "/workspace/project-1",
+      name: "Project One",
+    });
+    const sessionManager = createMockSessionManager();
+    sessionManager.getCurrentSession.mockReturnValue({
+      id: "sess-1",
+      title: "Test",
+      directory: "/workspace/project-1",
+    });
+    const openCodeClient = createMockOpenCodeClient();
+    openCodeClient.session.messages.mockResolvedValue({
+      data: [
+        {
+          info: {
+            providerID: "relay-gpt-sub",
+            modelID: "gpt-5.4",
+            agent: "oracle",
+          },
+        },
+      ],
+    });
+
+    const router = createRouter({
+      renderer,
+      settingsManager: settings,
+      sessionManager,
+      openCodeClient,
+    });
+
+    const result = await router.handleCommand("chat-1", "/status");
+
+    expect(result.success).toBe(true);
+    expect(openCodeClient.global.health).toHaveBeenCalledTimes(1);
+    expect(openCodeClient.session.messages).toHaveBeenCalledWith({
+      sessionID: "sess-1",
+      directory: "/workspace/project-1",
+      limit: 1,
+    });
+    const sentCard = renderer.sendCard.mock.calls[0][1];
+    const markdownEl = sentCard.elements.find(
+      (el: { tag: string }) => el.tag === "markdown",
+    );
+    expect(markdownEl.content).toContain("**Server**: healthy");
+    expect(markdownEl.content).toContain("**Version**: 1.3.17");
+    expect(markdownEl.content).toContain("**Project**: Project One");
+    expect(markdownEl.content).toContain("**Scope**: /workspace/project-1");
+    expect(markdownEl.content).toContain("**Model**: relay-gpt-sub/gpt-5.4");
+    expect(markdownEl.content).toContain("**Agent**: oracle");
   });
 
   it("/abort aborts current session", async () => {

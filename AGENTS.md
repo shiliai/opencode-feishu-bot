@@ -83,6 +83,8 @@ Checked paths:
 
 ## 7) Reference-first research policy (local before web)
 
+This app is borrowing the channel design from openclaw-lark, aka. all the interaction with feishu/lark ws server; the backend aka. the coding agent is completely relying on opencode server, the best practice is opencode-telegram-bot which is buit on top of opencode server api.
+
 Always search local codebases before doing web search/fetch for integration behavior.
 Use these local references first:
 

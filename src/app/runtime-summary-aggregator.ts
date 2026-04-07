@@ -74,6 +74,9 @@ export class RuntimeSummaryAggregator {
       },
       onComplete: (sessionId, messageId, messageText) => {
         callbacks.onComplete?.(sessionId, messageId, messageText);
+      },
+      onSessionIdle: (sessionId) => {
+        callbacks.onSessionIdle?.(sessionId);
         this.handleSessionSettled(sessionId);
       },
       onSessionError: (sessionId, message) => {
@@ -100,7 +103,10 @@ export class RuntimeSummaryAggregator {
   }
 
   private handleQuestion(event: SummaryQuestionEvent): void {
-    this.options.questionManager.startQuestions(event.questions, event.requestId);
+    this.options.questionManager.startQuestions(
+      event.questions,
+      event.requestId,
+    );
 
     const firstQuestion = event.questions[0];
     if (!firstQuestion) {
@@ -132,7 +138,10 @@ export class RuntimeSummaryAggregator {
     }
 
     runAsync(
-      this.options.questionCardHandler.handleQuestionEvent(turn.receiveId, turn.sourceMessageId),
+      this.options.questionCardHandler.handleQuestionEvent(
+        turn.receiveId,
+        turn.sourceMessageId,
+      ),
       this.logger,
       "Failed to render question interaction",
       this.options.trackTask,
