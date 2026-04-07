@@ -2,45 +2,46 @@ import "dotenv/config";
 
 import {
   createServer,
-  type Server,
   type IncomingMessage,
+  type Server,
   type ServerResponse,
 } from "node:http";
-
-import { getConfig, type AppConfig, ConfigValidationError } from "../config.js";
-import { createFeishuClients } from "../feishu/sdk.js";
-import { FeishuRenderer } from "../feishu/renderer.js";
-import { FeishuEventRouter } from "../feishu/event-router.js";
-import { startFeishuWsClient } from "../feishu/ws-client.js";
+import { type AppConfig, ConfigValidationError, getConfig } from "../config.js";
 import { createCardCallbackRequestHandler } from "../feishu/card-callback-server.js";
+import { ControlRouter } from "../feishu/control-router.js";
 import { createEventDeduplicator } from "../feishu/event-deduplicator.js";
-import { statusStore } from "../feishu/status-store.js";
-import { ResponsePipelineController } from "../feishu/response-pipeline.js";
+import { FeishuEventRouter } from "../feishu/event-router.js";
+import { type FeishuFileClient, FileHandler } from "../feishu/file-handler.js";
+import { FileStore, type StoredFile } from "../feishu/file-store.js";
 import {
+  type OpenCodePermissionClient,
+  PermissionCardHandler,
+} from "../feishu/handlers/permission.js";
+import {
+  type OpenCodePromptAsyncClient,
   PromptIngressHandler,
   type PromptIngressResult,
 } from "../feishu/handlers/prompt.js";
 import {
-  QuestionCardHandler,
   type OpenCodeQuestionClient,
+  QuestionCardHandler,
 } from "../feishu/handlers/question.js";
-import {
-  PermissionCardHandler,
-  type OpenCodePermissionClient,
-} from "../feishu/handlers/permission.js";
-import { FileHandler, type FeishuFileClient } from "../feishu/file-handler.js";
-import { ControlRouter } from "../feishu/control-router.js";
-import { createOpenCodeClient } from "../opencode/client.js";
-import { settingsManager } from "../settings/manager.js";
-import { sessionManager } from "../session/manager.js";
-import { questionManager } from "../question/manager.js";
-import { permissionManager } from "../permission/manager.js";
+import { ImageResolver } from "../feishu/image-resolver.js";
+import { MessageReader } from "../feishu/message-reader.js";
+import { FeishuRenderer } from "../feishu/renderer.js";
+import { ResponsePipelineController } from "../feishu/response-pipeline.js";
+import { createFeishuClients } from "../feishu/sdk.js";
+import { statusStore } from "../feishu/status-store.js";
+import { startFeishuWsClient } from "../feishu/ws-client.js";
 import { interactionManager } from "../interaction/manager.js";
+import { createOpenCodeClient } from "../opencode/client.js";
+import { permissionManager } from "../permission/manager.js";
+import { questionManager } from "../question/manager.js";
+import { sessionManager } from "../session/manager.js";
+import { settingsManager } from "../settings/manager.js";
 import { logger } from "../utils/logger.js";
-import { FileStore, type StoredFile } from "../feishu/file-store.js";
-import type { OpenCodePromptAsyncClient } from "../feishu/handlers/prompt.js";
-import { RuntimeSummaryAggregator } from "./runtime-summary-aggregator.js";
 import { createRuntimeEventHandlers } from "./runtime-event-handlers.js";
+import { RuntimeSummaryAggregator } from "./runtime-summary-aggregator.js";
 
 let _actualPort: number | null = null;
 
@@ -77,6 +78,9 @@ export async function startFeishuApp(): Promise<void> {
 
   // Step 3: Create FeishuRenderer
   const renderer = new FeishuRenderer({
+    client: feishuClients.client,
+  });
+  const imageResolver = new ImageResolver({
     client: feishuClients.client,
   });
 
@@ -154,14 +158,22 @@ export async function startFeishuApp(): Promise<void> {
     replySender: renderer,
   });
 
+  const messageReader = new MessageReader({
+    client: feishuClients.client,
+    logger,
+  });
+
   const controlRouter = new ControlRouter({
     settingsManager: managers.settings,
     sessionManager: managers.session,
     renderer,
     openCodeClient,
+    feishuClient: feishuClients.client,
     catalogCacheTtlMs: config.controlCatalog.cacheTtlMs,
     catalogModelStatePath: config.controlCatalog.modelStatePath,
+    messageReader,
     interactionManager: managers.interaction,
+    logger,
   });
 
   const promptIngressHandler = new PromptIngressHandler({
@@ -198,6 +210,7 @@ export async function startFeishuApp(): Promise<void> {
   const pipelineController = new ResponsePipelineController({
     summaryAggregator,
     renderer,
+    imageResolver,
     settingsManager: managers.settings,
     interactionManager: managers.interaction,
     statusStore,
@@ -286,10 +299,15 @@ export async function startFeishuApp(): Promise<void> {
     });
   }
 
+  const server = httpServer;
+  if (!server) {
+    throw new Error("HTTP server was not initialized");
+  }
+
   await new Promise<void>((resolve, reject) => {
-    httpServer!.on("error", reject);
-    httpServer!.listen(config.service.port, config.service.host, () => {
-      const addr = httpServer!.address();
+    server.on("error", reject);
+    server.listen(config.service.port, config.service.host, () => {
+      const addr = server.address();
       if (addr && typeof addr === "object") {
         _actualPort = addr.port;
       } else {

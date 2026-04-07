@@ -1,596 +1,815 @@
 import { randomUUID } from "node:crypto";
 import type { Event } from "@opencode-ai/sdk/v2";
-import { getConfig, type AppConfig, type ThrottleConfig } from "../config.js";
-import type { FeishuRenderer } from "./renderer.js";
+import { type AppConfig, getConfig, type ThrottleConfig } from "../config.js";
 import {
-  statusStore as defaultStatusStore,
-  type ResponsePipelineTurnContext,
-  type StatusStore,
-  type StatusTurnState,
-} from "./status-store.js";
-import {
-  openCodeEventSubscriber,
-  type SubscribeToEventsOptions,
+	openCodeEventSubscriber,
+	type SubscribeToEventsOptions,
 } from "../opencode/events.js";
 import { summaryAggregator as defaultSummaryAggregator } from "../summary/aggregator.js";
 import type {
-  SummaryCallbacks,
-  SummarySessionDiffEvent,
-  SummaryTokenEvent,
-  SummaryToolEvent,
+	SummaryCallbacks,
+	SummarySessionDiffEvent,
+	SummaryTokenEvent,
+	SummaryToolEvent,
 } from "../summary/types.js";
-import type { Logger } from "../utils/logger.js";
-import { logger as defaultLogger } from "../utils/logger.js";
+import { logger as defaultLogger, type Logger } from "../utils/logger.js";
+import { buildStreamingStatusContent } from "./cards.js";
+import type { ImageResolver } from "./image-resolver.js";
+import { optimizeMarkdownStyle } from "./markdown-style.js";
+import { splitReasoningText, stripReasoningTags } from "./reasoning-utils.js";
+import type { FeishuRenderer } from "./renderer.js";
+import {
+	statusStore as defaultStatusStore,
+	type ResponsePipelineTurnContext,
+	type StatusStore,
+	type StatusTurnState,
+} from "./status-store.js";
 
 interface ResponsePipelineRenderer {
-  renderStatusCard: FeishuRenderer["renderStatusCard"];
-  updateStatusCard: FeishuRenderer["updateStatusCard"];
-  replyPost: FeishuRenderer["replyPost"];
-  sendPost: FeishuRenderer["sendPost"];
+	renderStatusCard: FeishuRenderer["renderStatusCard"];
+	updateStatusCard: FeishuRenderer["updateStatusCard"];
+	replyPost: FeishuRenderer["replyPost"];
+	sendPost: FeishuRenderer["sendPost"];
 }
 
 interface ResponsePipelineSummaryAggregator {
-  setCallbacks(callbacks: SummaryCallbacks): void;
-  setSession(sessionId: string): void;
-  processEvent(event: Event): void;
+	setCallbacks(callbacks: SummaryCallbacks): void;
+	setSession(sessionId: string): void;
+	processEvent(event: Event): void;
 }
 
 interface ResponsePipelineEventSubscriber {
-  subscribeToEvents(
-    directory: string,
-    callback: (event: Event) => void,
-    options?: SubscribeToEventsOptions,
-  ): Promise<void>;
+	subscribeToEvents(
+		directory: string,
+		callback: (event: Event) => void,
+		options?: SubscribeToEventsOptions,
+	): Promise<void>;
 }
 
 interface ResponsePipelineSettingsManager {
-  setStatusMessageId(messageId: string): void;
-  clearStatusMessageId(): void;
+	setStatusMessageId(messageId: string): void;
+	clearStatusMessageId(): void;
 }
 
 interface ResponsePipelineInteractionManager {
-  clearBusy(): void;
+	clearBusy(): void;
 }
 
 export interface ResponsePipelineControllerOptions {
-  eventSubscriber?: ResponsePipelineEventSubscriber;
-  summaryAggregator?: ResponsePipelineSummaryAggregator;
-  renderer: ResponsePipelineRenderer;
-  settingsManager: ResponsePipelineSettingsManager;
-  interactionManager: ResponsePipelineInteractionManager;
-  statusStore?: StatusStore;
-  config?: Pick<AppConfig, "throttle">;
-  logger?: Logger;
-  scheduleAsync?: (task: () => void) => void;
-  setTimeoutFn?: typeof setTimeout;
-  clearTimeoutFn?: typeof clearTimeout;
+	eventSubscriber?: ResponsePipelineEventSubscriber;
+	summaryAggregator?: ResponsePipelineSummaryAggregator;
+	renderer: ResponsePipelineRenderer;
+	imageResolver?: ImageResolver;
+	settingsManager: ResponsePipelineSettingsManager;
+	interactionManager: ResponsePipelineInteractionManager;
+	statusStore?: StatusStore;
+	config?: Pick<AppConfig, "throttle">;
+	logger?: Logger;
+	scheduleAsync?: (task: () => void) => void;
+	setTimeoutFn?: typeof setTimeout;
+	clearTimeoutFn?: typeof clearTimeout;
 }
 
 export interface ResponsePipelineControllerSnapshot {
-  activeSessions: string[];
+	activeSessions: string[];
 }
 
 const ACTIVE_STATUS_CARD_TITLE = "OpenCode is working";
 const ACTIVE_STATUS_CARD_TEMPLATE = "blue" as const;
 const ACTIVE_STATUS_CARD_FALLBACK_TEXT = "Thinking…";
+const FINAL_REPLY_FALLBACK_TEXT = "Done.";
 const FINAL_REPLY_TITLE = "OpenCode reply";
 const ERROR_REPLY_TITLE = "OpenCode error";
-const STREAM_ENDED_MESSAGE = "OpenCode stream ended before a final reply was delivered.";
+const STREAM_ENDED_MESSAGE =
+	"OpenCode stream ended before a final reply was delivered.";
 const RETRYABLE_UPDATE_KEYWORDS = [
-  "rate limit",
-  "too many requests",
-  "retry later",
-  "try again",
-  "concurrent",
-  "in flight",
-  "updating",
+	"rate limit",
+	"too many requests",
+	"retry later",
+	"try again",
+	"concurrent",
+	"in flight",
+	"updating",
 ] as const;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
+	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function getNumber(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+	return typeof value === "number" && Number.isFinite(value)
+		? value
+		: undefined;
 }
 
 function getString(value: unknown): string | undefined {
-  return typeof value === "string" ? value : undefined;
+	return typeof value === "string" ? value : undefined;
 }
 
 function hashString(value: string): string {
-  let hash = 0;
-  for (let index = 0; index < value.length; index += 1) {
-    hash = (hash << 5) - hash + value.charCodeAt(index);
-    hash &= hash;
-  }
+	let hash = 0;
+	for (let index = 0; index < value.length; index += 1) {
+		hash = (hash << 5) - hash + value.charCodeAt(index);
+		hash &= hash;
+	}
 
-  return hash.toString(36);
+	return hash.toString(36);
 }
 
 function normalizeText(text: string): string {
-  return text.replace(/\r\n/g, "\n").trim();
+	return text.replace(/\r\n/g, "\n").trim();
 }
 
 function toPostParagraphs(text: string): string[][] {
-  const normalized = normalizeText(text);
-  if (!normalized) {
-    return [[ACTIVE_STATUS_CARD_FALLBACK_TEXT]];
-  }
+	const normalized = normalizeText(text);
+	if (!normalized) {
+		return [[ACTIVE_STATUS_CARD_FALLBACK_TEXT]];
+	}
 
-  return normalized.split("\n").map((line) => [line.length > 0 ? line : " "]);
+	return normalized.split("\n").map((line) => [line.length > 0 ? line : " "]);
+}
+
+function formatElapsed(ms: number): string {
+	const seconds = ms / 1_000;
+	if (seconds < 60) {
+		return `${seconds.toFixed(1)}s`;
+	}
+
+	return `${Math.floor(seconds / 60)}m ${Math.round(seconds % 60)}s`;
+}
+
+function compactNumber(value: number): string {
+	const abs = Math.abs(value);
+	if (abs >= 1_000_000) {
+		const millions = value / 1_000_000;
+		return Math.abs(millions) >= 100
+			? `${Math.round(millions)}m`
+			: `${millions.toFixed(1)}m`;
+	}
+
+	if (abs >= 1_000) {
+		const thousands = value / 1_000;
+		return Math.abs(thousands) >= 100
+			? `${Math.round(thousands)}k`
+			: `${thousands.toFixed(1)}k`;
+	}
+
+	return `${Math.round(value)}`;
+}
+
+function formatToolSummary(toolEvents: SummaryToolEvent[]): string | undefined {
+	if (toolEvents.length === 0) {
+		return undefined;
+	}
+
+	const toolNames = Array.from(
+		new Set(
+			toolEvents
+				.map((toolEvent) => toolEvent.tool.trim())
+				.filter((toolName) => toolName.length > 0),
+		),
+	);
+
+	if (toolNames.length === 0) {
+		return undefined;
+	}
+
+	return `🔧 Using: ${toolNames.join(", ")}`;
+}
+
+function buildFooterMetricsText(state: StatusTurnState): string | undefined {
+	const elapsedMs = Math.max(0, Date.now() - state.turnStartTime);
+	const parts: string[] = [`⏱️ ${formatElapsed(elapsedMs)}`];
+
+	if (state.latestTokens) {
+		parts.push(
+			`↑ ${compactNumber(state.latestTokens.input)} ↓ ${compactNumber(state.latestTokens.output)}`,
+		);
+
+		if (state.latestTokens.reasoning > 0) {
+			parts.push(`💭 ${compactNumber(state.latestTokens.reasoning)}`);
+		}
+
+		if (state.latestTokens.cacheRead > 0 || state.latestTokens.cacheWrite > 0) {
+			parts.push(
+				`cache ${compactNumber(state.latestTokens.cacheRead)}/${compactNumber(
+					state.latestTokens.cacheWrite,
+				)}`,
+			);
+		}
+	}
+
+	return parts.join(" · ");
+}
+
+function buildFinalReplyText(
+	state: StatusTurnState,
+	messageText: string,
+): string {
+	const normalizedText = normalizeText(messageText);
+	const { reasoningText, answerText } = splitReasoningText(normalizedText);
+	const finalReasoning =
+		state.accumulatedReasoning?.trim() || reasoningText?.trim();
+	const strippedAnswer = answerText ?? stripReasoningTags(normalizedText);
+	const answerSource =
+		strippedAnswer ||
+		normalizedText ||
+		state.lastPartialText ||
+		FINAL_REPLY_FALLBACK_TEXT;
+	const finalAnswer = answerSource.trim() || FINAL_REPLY_FALLBACK_TEXT;
+	const toolSummary = formatToolSummary(state.toolEvents);
+	const hasEnhancedSections = Boolean(
+		finalReasoning || toolSummary || state.latestTokens,
+	);
+
+	if (!hasEnhancedSections) {
+		return finalAnswer;
+	}
+
+	const sections: string[] = [];
+
+	if (finalReasoning) {
+		const reasoningElapsed = state.reasoningStartTime
+			? Math.max(0, Date.now() - state.reasoningStartTime)
+			: undefined;
+		const reasoningLabel = reasoningElapsed
+			? `💭 Reasoning (${formatElapsed(reasoningElapsed)})`
+			: "💭 Reasoning";
+		sections.push(`${reasoningLabel}\n${finalReasoning}`);
+	}
+
+	if (toolSummary) {
+		sections.push(toolSummary);
+	}
+
+	sections.push(finalAnswer);
+
+	const footer = buildFooterMetricsText(state);
+	if (footer) {
+		sections.push(footer);
+	}
+
+	return sections.join("\n\n");
 }
 
 function getErrorStatusCode(error: unknown): number | undefined {
-  if (!isRecord(error)) {
-    return undefined;
-  }
+	if (!isRecord(error)) {
+		return undefined;
+	}
 
-  const directStatus = getNumber(error.status);
-  if (directStatus !== undefined) {
-    return directStatus;
-  }
+	const directStatus = getNumber(error.status);
+	if (directStatus !== undefined) {
+		return directStatus;
+	}
 
-  const response = isRecord(error.response) ? error.response : undefined;
-  return getNumber(response?.status);
+	const response = isRecord(error.response) ? error.response : undefined;
+	return getNumber(response?.status);
 }
 
 function getErrorMessage(error: unknown): string {
-  if (error instanceof Error) {
-    return error.message;
-  }
+	if (error instanceof Error) {
+		return error.message;
+	}
 
-  if (!isRecord(error)) {
-    return "Unknown error";
-  }
+	if (!isRecord(error)) {
+		return "Unknown error";
+	}
 
-  const response = isRecord(error.response) ? error.response : undefined;
-  const responseData = isRecord(response?.data) ? response.data : undefined;
+	const response = isRecord(error.response) ? error.response : undefined;
+	const responseData = isRecord(response?.data) ? response.data : undefined;
 
-  return (
-    getString(responseData?.msg) ??
-    getString(responseData?.message) ??
-    getString(error.msg) ??
-    getString(error.message) ??
-    "Unknown error"
-  );
+	return (
+		getString(responseData?.msg) ??
+		getString(responseData?.message) ??
+		getString(error.msg) ??
+		getString(error.message) ??
+		"Unknown error"
+	);
 }
 
 export function isRetryableStatusCardUpdateError(error: unknown): boolean {
-  const statusCode = getErrorStatusCode(error);
-  if (statusCode === 408 || statusCode === 409 || statusCode === 423 || statusCode === 425) {
-    return true;
-  }
+	const statusCode = getErrorStatusCode(error);
+	if (
+		statusCode === 408 ||
+		statusCode === 409 ||
+		statusCode === 423 ||
+		statusCode === 425
+	) {
+		return true;
+	}
 
-  if (statusCode === 429 || (statusCode !== undefined && statusCode >= 500)) {
-    return true;
-  }
+	if (statusCode === 429 || (statusCode !== undefined && statusCode >= 500)) {
+		return true;
+	}
 
-  const normalizedMessage = getErrorMessage(error).toLowerCase();
-  return RETRYABLE_UPDATE_KEYWORDS.some((keyword) => normalizedMessage.includes(keyword));
+	const normalizedMessage = getErrorMessage(error).toLowerCase();
+	return RETRYABLE_UPDATE_KEYWORDS.some((keyword) =>
+		normalizedMessage.includes(keyword),
+	);
 }
 
 export class ResponsePipelineController {
-  private readonly eventSubscriber: ResponsePipelineEventSubscriber;
-  private readonly summaryAggregator: ResponsePipelineSummaryAggregator;
-  private readonly renderer: ResponsePipelineRenderer;
-  private readonly settingsManager: ResponsePipelineSettingsManager;
-  private readonly interactionManager: ResponsePipelineInteractionManager;
-  private readonly statusStore: StatusStore;
-  private readonly throttleConfig: ThrottleConfig;
-  private readonly logger: Logger;
-  private readonly scheduleAsync: (task: () => void) => void;
-  private readonly setTimeoutFn: typeof setTimeout;
-  private readonly clearTimeoutFn: typeof clearTimeout;
-  private readonly sessionTasks = new Map<string, Promise<void>>();
+	private readonly eventSubscriber: ResponsePipelineEventSubscriber;
+	private readonly summaryAggregator: ResponsePipelineSummaryAggregator;
+	private readonly renderer: ResponsePipelineRenderer;
+	private readonly imageResolver?: ImageResolver;
+	private readonly settingsManager: ResponsePipelineSettingsManager;
+	private readonly interactionManager: ResponsePipelineInteractionManager;
+	private readonly statusStore: StatusStore;
+	private readonly throttleConfig: ThrottleConfig;
+	private readonly logger: Logger;
+	private readonly scheduleAsync: (task: () => void) => void;
+	private readonly setTimeoutFn: typeof setTimeout;
+	private readonly clearTimeoutFn: typeof clearTimeout;
+	private readonly sessionTasks = new Map<string, Promise<void>>();
 
-  constructor(options: ResponsePipelineControllerOptions) {
-    this.eventSubscriber = options.eventSubscriber ?? openCodeEventSubscriber;
-    this.summaryAggregator = options.summaryAggregator ?? defaultSummaryAggregator;
-    this.renderer = options.renderer;
-    this.settingsManager = options.settingsManager;
-    this.interactionManager = options.interactionManager;
-    this.statusStore = options.statusStore ?? defaultStatusStore;
-    this.throttleConfig = options.config?.throttle ?? getConfig().throttle;
-    this.logger = options.logger ?? defaultLogger;
-    this.scheduleAsync = options.scheduleAsync ?? ((task) => setImmediate(task));
-    this.setTimeoutFn = options.setTimeoutFn ?? setTimeout;
-    this.clearTimeoutFn = options.clearTimeoutFn ?? clearTimeout;
+	constructor(options: ResponsePipelineControllerOptions) {
+		this.eventSubscriber = options.eventSubscriber ?? openCodeEventSubscriber;
+		this.summaryAggregator =
+			options.summaryAggregator ?? defaultSummaryAggregator;
+		this.renderer = options.renderer;
+		this.imageResolver = options.imageResolver;
+		this.settingsManager = options.settingsManager;
+		this.interactionManager = options.interactionManager;
+		this.statusStore = options.statusStore ?? defaultStatusStore;
+		this.throttleConfig = options.config?.throttle ?? getConfig().throttle;
+		this.logger = options.logger ?? defaultLogger;
+		this.scheduleAsync =
+			options.scheduleAsync ?? ((task) => setImmediate(task));
+		this.setTimeoutFn = options.setTimeoutFn ?? setTimeout;
+		this.clearTimeoutFn = options.clearTimeoutFn ?? clearTimeout;
 
-    this.summaryAggregator.setCallbacks({
-      onTypingStart: (sessionId) => {
-        void this.enqueueSessionTask(sessionId, () => this.handleTypingStart(sessionId));
-      },
-      onTypingStop: () => undefined,
-      onPartial: (sessionId, _messageId, messageText) => {
-        this.handlePartial(sessionId, messageText);
-      },
-      onComplete: (sessionId, _messageId, messageText) => {
-        void this.enqueueSessionTask(sessionId, () => this.handleComplete(sessionId, messageText));
-      },
-      onTool: (toolEvent) => {
-        this.handleTool(toolEvent);
-      },
-      onQuestion: () => undefined,
-      onQuestionError: () => undefined,
-      onPermission: () => undefined,
-      onSessionDiff: (diffEvent) => {
-        this.handleSessionDiff(diffEvent);
-      },
-      onTokenUpdate: (tokenEvent) => {
-        this.handleTokenUpdate(tokenEvent);
-      },
-      onSessionRetry: () => undefined,
-      onSessionCompacted: () => undefined,
-      onSessionError: (sessionId, message) => {
-        void this.enqueueSessionTask(sessionId, () => this.handleSessionError(sessionId, message));
-      },
-      onCleared: () => {
-        this.handleAggregatorCleared();
-      },
-    });
-  }
+		this.summaryAggregator.setCallbacks({
+			onTypingStart: (sessionId) => {
+				void this.enqueueSessionTask(sessionId, () =>
+					this.handleTypingStart(sessionId),
+				);
+			},
+			onTypingStop: () => undefined,
+			onPartial: (sessionId, _messageId, messageText) => {
+				this.handlePartial(sessionId, messageText);
+			},
+			onComplete: (sessionId, _messageId, messageText) => {
+				void this.enqueueSessionTask(sessionId, () =>
+					this.handleComplete(sessionId, messageText),
+				);
+			},
+			onTool: (toolEvent) => {
+				this.handleTool(toolEvent);
+			},
+			onQuestion: () => undefined,
+			onQuestionError: () => undefined,
+			onPermission: () => undefined,
+			onSessionDiff: (diffEvent) => {
+				this.handleSessionDiff(diffEvent);
+			},
+			onTokenUpdate: (tokenEvent) => {
+				this.handleTokenUpdate(tokenEvent);
+			},
+			onSessionRetry: () => undefined,
+			onSessionCompacted: () => undefined,
+			onSessionError: (sessionId, message) => {
+				void this.enqueueSessionTask(sessionId, () =>
+					this.handleSessionError(sessionId, message),
+				);
+			},
+			onCleared: () => {
+				this.handleAggregatorCleared();
+			},
+		});
+	}
 
-  getSnapshot(): ResponsePipelineControllerSnapshot {
-    return {
-      activeSessions: this.statusStore.getSessionIds(),
-    };
-  }
+	getSnapshot(): ResponsePipelineControllerSnapshot {
+		return {
+			activeSessions: this.statusStore.getSessionIds(),
+		};
+	}
 
-  startTurn(context: ResponsePipelineTurnContext): void {
-    this.summaryAggregator.setSession(context.sessionId);
+	startTurn(context: ResponsePipelineTurnContext): void {
+		this.summaryAggregator.setSession(context.sessionId);
 
-    const abortController = new AbortController();
-    const state = this.statusStore.startTurn(context);
-    state.subscriptionAbortController = abortController;
+		const abortController = new AbortController();
+		const state = this.statusStore.startTurn(context);
+		state.subscriptionAbortController = abortController;
 
-    this.scheduleAsync(() => {
-      void this.runEventSubscription(context, abortController);
-    });
-  }
+		this.scheduleAsync(() => {
+			void this.runEventSubscription(context, abortController);
+		});
+	}
 
-  handlePartial(sessionId: string, messageText: string): void {
-    const normalizedText = normalizeText(messageText);
-    if (!normalizedText) {
-      return;
-    }
+	handlePartial(sessionId: string, messageText: string): void {
+		const normalizedText = normalizeText(messageText);
+		if (!normalizedText) {
+			return;
+		}
 
-    const state = this.statusStore.get(sessionId);
-    if (!state || state.finalReplySent || state.pendingCompletion) {
-      return;
-    }
+		const state = this.statusStore.get(sessionId);
+		if (!state || state.finalReplySent || state.pendingCompletion) {
+			return;
+		}
 
-    const signature = hashString(normalizedText);
-    if (state.lastPartialSignature === signature) {
-      return;
-    }
+		const signature = hashString(normalizedText);
+		if (state.lastPartialSignature === signature) {
+			return;
+		}
 
-    state.lastPartialText = normalizedText;
-    state.lastPartialSignature = signature;
+		const { reasoningText, answerText } = splitReasoningText(normalizedText);
+		if (reasoningText && !state.accumulatedReasoning) {
+			state.reasoningStartTime = Date.now();
+		}
+		if (reasoningText) {
+			state.accumulatedReasoning = reasoningText;
+		}
 
-    if (state.statusCardMessageId && !state.cardUpdatesBroken) {
-      this.scheduleStatusCardUpdate(sessionId);
-    }
-  }
+		const strippedText = answerText ?? stripReasoningTags(normalizedText);
+		state.lastPartialText =
+			reasoningText && !answerText ? undefined : strippedText || undefined;
+		state.lastPartialSignature = signature;
 
-  handleTool(toolEvent: SummaryToolEvent): void {
-    const state = this.statusStore.get(toolEvent.sessionId);
-    if (!state) {
-      return;
-    }
+		if (state.statusCardMessageId && !state.cardUpdatesBroken) {
+			this.scheduleStatusCardUpdate(sessionId);
+		}
+	}
 
-    state.toolEvents.push(toolEvent);
-  }
+	handleTool(toolEvent: SummaryToolEvent): void {
+		const state = this.statusStore.get(toolEvent.sessionId);
+		if (!state) {
+			return;
+		}
 
-  handleSessionDiff(diffEvent: SummarySessionDiffEvent): void {
-    const state = this.statusStore.get(diffEvent.sessionId);
-    if (!state) {
-      return;
-    }
+		state.toolEvents.push(toolEvent);
 
-    state.diffs = [...diffEvent.diffs];
-  }
+		if (
+			state.statusCardMessageId &&
+			!state.cardUpdatesBroken &&
+			!state.finalReplySent &&
+			!state.pendingCompletion
+		) {
+			this.scheduleStatusCardUpdate(toolEvent.sessionId);
+		}
+	}
 
-  handleTokenUpdate(tokenEvent: SummaryTokenEvent): void {
-    const state = this.statusStore.get(tokenEvent.sessionId);
-    if (!state) {
-      return;
-    }
+	handleSessionDiff(diffEvent: SummarySessionDiffEvent): void {
+		const state = this.statusStore.get(diffEvent.sessionId);
+		if (!state) {
+			return;
+		}
 
-    state.latestTokens = tokenEvent.tokens;
-  }
+		state.diffs = [...diffEvent.diffs];
+	}
 
-  handleAggregatorCleared(): void {
-    const states = this.statusStore.clearAll();
-    for (const state of states) {
-      this.disposeTurnResources(state);
-    }
-  }
+	handleTokenUpdate(tokenEvent: SummaryTokenEvent): void {
+		const state = this.statusStore.get(tokenEvent.sessionId);
+		if (!state) {
+			return;
+		}
 
-  async handleTypingStart(sessionId: string): Promise<void> {
-    const state = this.statusStore.get(sessionId);
-    if (!state || state.finalReplySent || state.cardUpdatesBroken) {
-      return;
-    }
+		state.latestTokens = tokenEvent.tokens;
 
-    if (state.statusCardMessageId) {
-      if (
-        state.lastPartialSignature &&
-        state.lastPartialSignature !== state.lastPatchedSignature
-      ) {
-        this.scheduleStatusCardUpdate(sessionId);
-      }
-      return;
-    }
+		if (
+			state.statusCardMessageId &&
+			!state.cardUpdatesBroken &&
+			!state.finalReplySent &&
+			!state.pendingCompletion
+		) {
+			this.scheduleStatusCardUpdate(tokenEvent.sessionId);
+		}
+	}
 
-    const initialContent = this.getStatusCardContent(state);
-    const initialSignature = hashString(initialContent);
+	handleAggregatorCleared(): void {
+		const states = this.statusStore.clearAll();
+		for (const state of states) {
+			this.disposeTurnResources(state);
+		}
+	}
 
-    try {
-      const messageId = await this.renderer.renderStatusCard(
-        state.receiveId,
-        ACTIVE_STATUS_CARD_TITLE,
-        initialContent,
-        false,
-        ACTIVE_STATUS_CARD_TEMPLATE,
-      );
+	async handleTypingStart(sessionId: string): Promise<void> {
+		const state = this.statusStore.get(sessionId);
+		if (!state || state.finalReplySent || state.cardUpdatesBroken) {
+			return;
+		}
 
-      const latestState = this.statusStore.get(sessionId);
-      if (!latestState || latestState.finalReplySent) {
-        return;
-      }
+		if (!state.turnStartTime) {
+			state.turnStartTime = Date.now();
+		}
 
-      if (!messageId) {
-        this.markCardUpdatesBroken(latestState, new Error("Status card create returned no message ID"));
-        return;
-      }
+		if (state.statusCardMessageId) {
+			if (
+				state.lastPartialSignature &&
+				state.lastPartialSignature !== state.lastPatchedSignature
+			) {
+				this.scheduleStatusCardUpdate(sessionId);
+			}
+			return;
+		}
 
-      latestState.statusCardMessageId = messageId;
-      latestState.lastPatchedText = initialContent;
-      latestState.lastPatchedSignature = initialSignature;
-      this.settingsManager.setStatusMessageId(messageId);
+		const initialContent = this.getStatusCardContent(state);
+		const initialSignature = hashString(initialContent);
 
-      if (
-        latestState.lastPartialSignature &&
-        latestState.lastPartialSignature !== latestState.lastPatchedSignature
-      ) {
-        this.scheduleStatusCardUpdate(sessionId);
-      }
-    } catch (error) {
-      this.markCardUpdatesBroken(state, error);
-    }
-  }
+		try {
+			const messageId = await this.renderer.renderStatusCard(
+				state.receiveId,
+				ACTIVE_STATUS_CARD_TITLE,
+				initialContent,
+				false,
+				ACTIVE_STATUS_CARD_TEMPLATE,
+			);
 
-  async handleComplete(sessionId: string, messageText: string): Promise<void> {
-    const state = this.statusStore.get(sessionId);
-    if (!state || state.finalReplySent) {
-      return;
-    }
+			const latestState = this.statusStore.get(sessionId);
+			if (!latestState || latestState.finalReplySent) {
+				return;
+			}
 
-    state.pendingCompletion = true;
+			if (!messageId) {
+				this.markCardUpdatesBroken(
+					latestState,
+					new Error("Status card create returned no message ID"),
+				);
+				return;
+			}
 
-    try {
-      await this.flushPendingPartialUpdate(sessionId);
-      await this.sendFinalReply(state, messageText, FINAL_REPLY_TITLE);
-    } finally {
-      this.finishTurn(sessionId);
-    }
-  }
+			latestState.statusCardMessageId = messageId;
+			latestState.lastPatchedText = initialContent;
+			latestState.lastPatchedSignature = initialSignature;
+			this.settingsManager.setStatusMessageId(messageId);
 
-  async handleSessionError(sessionId: string, message: string): Promise<void> {
-    const state = this.statusStore.get(sessionId);
-    if (!state || state.finalReplySent) {
-      return;
-    }
+			if (
+				latestState.lastPartialSignature &&
+				latestState.lastPartialSignature !== latestState.lastPatchedSignature
+			) {
+				this.scheduleStatusCardUpdate(sessionId);
+			}
+		} catch (error) {
+			this.markCardUpdatesBroken(state, error);
+		}
+	}
 
-    state.pendingCompletion = true;
-    state.cardUpdatesBroken = true;
-    this.clearScheduledStatusUpdate(state);
+	async handleComplete(sessionId: string, messageText: string): Promise<void> {
+		const state = this.statusStore.get(sessionId);
+		if (!state || state.finalReplySent) {
+			return;
+		}
 
-    try {
-      await this.sendFinalReply(state, message, ERROR_REPLY_TITLE);
-    } finally {
-      this.finishTurn(sessionId);
-    }
-  }
+		state.pendingCompletion = true;
 
-  private async runEventSubscription(
-    context: ResponsePipelineTurnContext,
-    abortController: AbortController,
-  ): Promise<void> {
-    try {
-      await this.eventSubscriber.subscribeToEvents(
-        context.directory,
-        (event) => {
-          this.summaryAggregator.processEvent(event);
-        },
-        { signal: abortController.signal },
-      );
-    } catch (error) {
-      if (!abortController.signal.aborted) {
-        this.logger.error(
-          `[ResponsePipeline] Event subscription failed for session=${context.sessionId}`,
-          error,
-        );
-        await this.enqueueSessionTask(context.sessionId, () =>
-          this.handleSessionError(context.sessionId, STREAM_ENDED_MESSAGE),
-        );
-      }
-      return;
-    }
+		const normalizedText = normalizeText(messageText);
+		const { reasoningText, answerText } = splitReasoningText(normalizedText);
+		if (reasoningText && !state.accumulatedReasoning) {
+			state.reasoningStartTime = Date.now();
+		}
+		if (reasoningText) {
+			state.accumulatedReasoning = reasoningText;
+		}
 
-    if (!abortController.signal.aborted) {
-      await this.enqueueSessionTask(context.sessionId, () =>
-        this.handleSessionError(context.sessionId, STREAM_ENDED_MESSAGE),
-      );
-    }
-  }
+		const strippedText = answerText ?? stripReasoningTags(normalizedText);
+		if (strippedText && !state.lastPartialText) {
+			state.lastPartialText = strippedText;
+			state.lastPartialSignature = hashString(normalizedText);
+		}
 
-  private scheduleStatusCardUpdate(sessionId: string): void {
-    const state = this.statusStore.get(sessionId);
-    if (
-      !state ||
-      state.statusUpdateTimer ||
-      !state.statusCardMessageId ||
-      state.cardUpdatesBroken ||
-      state.finalReplySent
-    ) {
-      return;
-    }
+		try {
+			await this.flushPendingPartialUpdate(sessionId);
+			await this.sendFinalReply(state, normalizedText, FINAL_REPLY_TITLE);
+		} finally {
+			this.finishTurn(sessionId);
+		}
+	}
 
-    state.statusUpdateTimer = this.setTimeoutFn(() => {
-      const latestState = this.statusStore.get(sessionId);
-      if (latestState) {
-        latestState.statusUpdateTimer = undefined;
-      }
+	async handleSessionError(sessionId: string, message: string): Promise<void> {
+		const state = this.statusStore.get(sessionId);
+		if (!state || state.finalReplySent) {
+			return;
+		}
 
-      void this.enqueueSessionTask(sessionId, () => this.flushStatusCardUpdate(sessionId));
-    }, this.throttleConfig.statusCardUpdateIntervalMs);
-  }
+		state.pendingCompletion = true;
+		state.cardUpdatesBroken = true;
+		this.clearScheduledStatusUpdate(state);
 
-  private clearScheduledStatusUpdate(state: StatusTurnState): void {
-    if (!state.statusUpdateTimer) {
-      return;
-    }
+		try {
+			await this.sendFinalReply(state, message, ERROR_REPLY_TITLE);
+		} finally {
+			this.finishTurn(sessionId);
+		}
+	}
 
-    this.clearTimeoutFn(state.statusUpdateTimer);
-    state.statusUpdateTimer = undefined;
-  }
+	private async runEventSubscription(
+		context: ResponsePipelineTurnContext,
+		abortController: AbortController,
+	): Promise<void> {
+		try {
+			await this.eventSubscriber.subscribeToEvents(
+				context.directory,
+				(event) => {
+					this.summaryAggregator.processEvent(event);
+				},
+				{ signal: abortController.signal },
+			);
+		} catch (error) {
+			if (!abortController.signal.aborted) {
+				this.logger.error(
+					`[ResponsePipeline] Event subscription failed for session=${context.sessionId}`,
+					error,
+				);
+				await this.enqueueSessionTask(context.sessionId, () =>
+					this.handleSessionError(context.sessionId, STREAM_ENDED_MESSAGE),
+				);
+			}
+			return;
+		}
 
-  private async flushPendingPartialUpdate(sessionId: string): Promise<void> {
-    const state = this.statusStore.get(sessionId);
-    if (!state) {
-      return;
-    }
+		if (!abortController.signal.aborted) {
+			await this.enqueueSessionTask(context.sessionId, () =>
+				this.handleSessionError(context.sessionId, STREAM_ENDED_MESSAGE),
+			);
+		}
+	}
 
-    this.clearScheduledStatusUpdate(state);
-    await this.flushStatusCardUpdate(sessionId);
-  }
+	private scheduleStatusCardUpdate(sessionId: string): void {
+		const state = this.statusStore.get(sessionId);
+		if (
+			!state ||
+			state.statusUpdateTimer ||
+			!state.statusCardMessageId ||
+			state.cardUpdatesBroken ||
+			state.finalReplySent
+		) {
+			return;
+		}
 
-  private async flushStatusCardUpdate(sessionId: string): Promise<void> {
-    const state = this.statusStore.get(sessionId);
-    if (
-      !state ||
-      !state.statusCardMessageId ||
-      state.cardUpdatesBroken ||
-      state.finalReplySent
-    ) {
-      return;
-    }
+		state.statusUpdateTimer = this.setTimeoutFn(() => {
+			const latestState = this.statusStore.get(sessionId);
+			if (latestState) {
+				latestState.statusUpdateTimer = undefined;
+			}
 
-    const content = this.getStatusCardContent(state);
-    const signature = hashString(content);
-    if (signature === state.lastPatchedSignature) {
-      return;
-    }
+			void this.enqueueSessionTask(sessionId, () =>
+				this.flushStatusCardUpdate(sessionId),
+			);
+		}, this.throttleConfig.statusCardUpdateIntervalMs);
+	}
 
-    const maxAttempts = Math.max(1, this.throttleConfig.statusCardPatchMaxAttempts);
+	private clearScheduledStatusUpdate(state: StatusTurnState): void {
+		if (!state.statusUpdateTimer) {
+			return;
+		}
 
-    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
-      try {
-        await this.renderer.updateStatusCard(
-          state.statusCardMessageId,
-          ACTIVE_STATUS_CARD_TITLE,
-          content,
-          false,
-          ACTIVE_STATUS_CARD_TEMPLATE,
-        );
-        state.lastPatchedText = content;
-        state.lastPatchedSignature = signature;
-        return;
-      } catch (error) {
-        if (attempt < maxAttempts && isRetryableStatusCardUpdateError(error)) {
-          await this.waitFor(this.throttleConfig.statusCardPatchRetryDelayMs * attempt);
-          continue;
-        }
+		this.clearTimeoutFn(state.statusUpdateTimer);
+		state.statusUpdateTimer = undefined;
+	}
 
-        this.markCardUpdatesBroken(state, error);
-        return;
-      }
-    }
-  }
+	private async flushPendingPartialUpdate(sessionId: string): Promise<void> {
+		const state = this.statusStore.get(sessionId);
+		if (!state) {
+			return;
+		}
 
-  private async sendFinalReply(
-    state: StatusTurnState,
-    messageText: string,
-    title: string,
-  ): Promise<void> {
-    if (state.finalReplySent) {
-      return;
-    }
+		this.clearScheduledStatusUpdate(state);
+		await this.flushStatusCardUpdate(sessionId);
+	}
 
-    const uuid = state.finalReplyUuid ?? randomUUID();
-    state.finalReplyUuid = uuid;
-    const paragraphs = toPostParagraphs(messageText);
+	private async flushStatusCardUpdate(sessionId: string): Promise<void> {
+		const state = this.statusStore.get(sessionId);
+		if (
+			!state?.statusCardMessageId ||
+			state.cardUpdatesBroken ||
+			state.finalReplySent
+		) {
+			return;
+		}
 
-    try {
-      await this.renderer.replyPost(state.sourceMessageId, title, paragraphs, { uuid });
-      state.finalReplySent = true;
-      return;
-    } catch (error) {
-      this.logger.warn(
-        `[ResponsePipeline] Reply send failed, falling back to non-threaded post for session=${state.sessionId}`,
-        error,
-      );
-    }
+		const statusCardMessageId = state.statusCardMessageId;
 
-    await this.renderer.sendPost(state.receiveId, title, paragraphs);
-    state.finalReplySent = true;
-  }
+		const content = this.getStatusCardContent(state);
+		const signature = hashString(content);
+		if (signature === state.lastPatchedSignature) {
+			return;
+		}
 
-  private finishTurn(sessionId: string): void {
-    const state = this.statusStore.clear(sessionId);
-    if (!state) {
-      return;
-    }
+		const maxAttempts = Math.max(
+			1,
+			this.throttleConfig.statusCardPatchMaxAttempts,
+		);
 
-    this.disposeTurnResources(state);
-    this.settingsManager.clearStatusMessageId();
-    this.interactionManager.clearBusy();
-  }
+		for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+			try {
+				await this.renderer.updateStatusCard(
+					statusCardMessageId,
+					ACTIVE_STATUS_CARD_TITLE,
+					content,
+					false,
+					ACTIVE_STATUS_CARD_TEMPLATE,
+				);
+				state.lastPatchedText = content;
+				state.lastPatchedSignature = signature;
+				return;
+			} catch (error) {
+				if (attempt < maxAttempts && isRetryableStatusCardUpdateError(error)) {
+					await this.waitFor(
+						this.throttleConfig.statusCardPatchRetryDelayMs * attempt,
+					);
+					continue;
+				}
 
-  private disposeTurnResources(state: StatusTurnState): void {
-    this.clearScheduledStatusUpdate(state);
-    state.subscriptionAbortController?.abort();
-  }
+				this.markCardUpdatesBroken(state, error);
+				return;
+			}
+		}
+	}
 
-  private getStatusCardContent(state: StatusTurnState): string {
-    return state.lastPartialText ?? ACTIVE_STATUS_CARD_FALLBACK_TEXT;
-  }
+	private async sendFinalReply(
+		state: StatusTurnState,
+		messageText: string,
+		title: string,
+	): Promise<void> {
+		if (state.finalReplySent) {
+			return;
+		}
 
-  private markCardUpdatesBroken(state: StatusTurnState, error: unknown): void {
-    state.cardUpdatesBroken = true;
-    this.clearScheduledStatusUpdate(state);
-    this.logger.warn(
-      `[ResponsePipeline] Status card updates disabled for session=${state.sessionId}: ${getErrorMessage(error)}`,
-      error,
-    );
-  }
+		const uuid = state.finalReplyUuid ?? randomUUID();
+		state.finalReplyUuid = uuid;
+		const replyText = optimizeMarkdownStyle(
+			buildFinalReplyText(state, messageText),
+		);
+		const resolvedText = this.imageResolver
+			? await this.imageResolver.resolveImagesAwait(replyText, 15_000)
+			: replyText;
+		const paragraphs = toPostParagraphs(resolvedText);
 
-  private waitFor(ms: number): Promise<void> {
-    return new Promise((resolve) => {
-      this.setTimeoutFn(() => resolve(), ms);
-    });
-  }
+		try {
+			await this.renderer.replyPost(state.sourceMessageId, title, paragraphs, {
+				uuid,
+			});
+			state.finalReplySent = true;
+			return;
+		} catch (error) {
+			this.logger.warn(
+				`[ResponsePipeline] Reply send failed, falling back to non-threaded post for session=${state.sessionId}`,
+				error,
+			);
+		}
 
-  async enqueueSessionTask(
-    sessionId: string,
-    task: () => Promise<void>,
-  ): Promise<void> {
-    const previousTask = this.sessionTasks.get(sessionId) ?? Promise.resolve();
-    const nextTask = previousTask
-      .catch(() => undefined)
-      .then(task)
-      .catch((error) => {
-        this.logger.error(`[ResponsePipeline] Session task failed: session=${sessionId}`, error);
-      })
-      .finally(() => {
-        if (this.sessionTasks.get(sessionId) === nextTask) {
-          this.sessionTasks.delete(sessionId);
-        }
-      });
+		await this.renderer.sendPost(state.receiveId, title, paragraphs);
+		state.finalReplySent = true;
+	}
 
-    this.sessionTasks.set(sessionId, nextTask);
-    await nextTask;
-  }
+	private finishTurn(sessionId: string): void {
+		const state = this.statusStore.clear(sessionId);
+		if (!state) {
+			return;
+		}
+
+		this.disposeTurnResources(state);
+		this.settingsManager.clearStatusMessageId();
+		this.interactionManager.clearBusy();
+	}
+
+	private disposeTurnResources(state: StatusTurnState): void {
+		this.clearScheduledStatusUpdate(state);
+		state.subscriptionAbortController?.abort();
+	}
+
+	private getStatusCardContent(state: StatusTurnState): string {
+		return (
+			buildStreamingStatusContent(state) || ACTIVE_STATUS_CARD_FALLBACK_TEXT
+		);
+	}
+
+	private markCardUpdatesBroken(state: StatusTurnState, error: unknown): void {
+		state.cardUpdatesBroken = true;
+		this.clearScheduledStatusUpdate(state);
+		this.logger.warn(
+			`[ResponsePipeline] Status card updates disabled for session=${state.sessionId}: ${getErrorMessage(error)}`,
+			error,
+		);
+	}
+
+	private waitFor(ms: number): Promise<void> {
+		return new Promise((resolve) => {
+			this.setTimeoutFn(() => resolve(), ms);
+		});
+	}
+
+	async enqueueSessionTask(
+		sessionId: string,
+		task: () => Promise<void>,
+	): Promise<void> {
+		const previousTask = this.sessionTasks.get(sessionId) ?? Promise.resolve();
+		const nextTask = previousTask
+			.catch(() => undefined)
+			.then(task)
+			.catch((error) => {
+				this.logger.error(
+					`[ResponsePipeline] Session task failed: session=${sessionId}`,
+					error,
+				);
+			})
+			.finally(() => {
+				if (this.sessionTasks.get(sessionId) === nextTask) {
+					this.sessionTasks.delete(sessionId);
+				}
+			});
+
+		this.sessionTasks.set(sessionId, nextTask);
+		await nextTask;
+	}
 }

@@ -129,28 +129,47 @@ describe("ControlRouter — command dispatch", () => {
     expect(sentCard.header.title.content).toBe("OpenCode Commands");
   });
 
-  it("/new creates session and updates settings", async () => {
-    const settings = createMockSettings();
+  it("/new sends confirmation card instead of creating session immediately", async () => {
+    const renderer = createMockRenderer();
     const openCodeClient = createMockOpenCodeClient();
-    const router = createRouter({ settingsManager: settings, openCodeClient });
+    const router = createRouter({ renderer, openCodeClient });
 
     const result = await router.handleCommand("chat-1", "/new");
 
     expect(result.success).toBe(true);
-    expect(openCodeClient.session.create).toHaveBeenCalledWith({});
-    expect(settings.setCurrentSession).toHaveBeenCalledWith(
-      expect.objectContaining({ id: "new-session-1" }),
-    );
+    expect(result.cardMessageId).toBe("msg-123");
+    expect(result.message).toBe("Confirmation required");
+    expect(openCodeClient.session.create).not.toHaveBeenCalled();
+    expect(renderer.sendCard).toHaveBeenCalledTimes(1);
+    const sentCard = renderer.sendCard.mock.calls[0][1];
+    expect(sentCard.header.title.content).toBe("⚠️ Confirmation Required");
   });
 
-  it("/new returns failure when session creation returns no data", async () => {
-    const openCodeClient = createMockOpenCodeClient();
-    openCodeClient.session.create.mockResolvedValue({ data: undefined });
-    const router = createRouter({ openCodeClient });
+  it("/new confirmation card has confirm and cancel buttons", async () => {
+    const renderer = createMockRenderer();
+    const router = createRouter({ renderer });
 
-    const result = await router.handleCommand("chat-1", "/new");
+    await router.handleCommand("chat-1", "/new");
 
-    expect(result.success).toBe(false);
+    const sentCard = renderer.sendCard.mock.calls[0][1];
+    const actionEl = sentCard.elements.find(
+      (el: { tag: string }) => el.tag === "action",
+    );
+    expect(actionEl).toBeDefined();
+    const actions = actionEl.actions;
+    expect(actions).toHaveLength(2);
+    expect(actions[0].text.content).toBe("✅ Confirm");
+    expect(actions[0].type).toBe("primary");
+    expect(actions[0].value).toEqual({
+      action: "confirm_write",
+      operationId: "create_new_session",
+    });
+    expect(actions[1].text.content).toBe("❌ Cancel");
+    expect(actions[1].type).toBe("danger");
+    expect(actions[1].value).toEqual({
+      action: "reject_write",
+      operationId: "create_new_session",
+    });
   });
 
   it("/sessions lists sessions as a card", async () => {

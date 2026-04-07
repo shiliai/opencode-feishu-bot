@@ -1,445 +1,549 @@
-import type { Logger } from "../utils/logger.js";
-import type {
-  SettingsManager,
-  SessionInfo,
-  ModelInfo,
-} from "../settings/manager.js";
-import type { SessionManager } from "../session/manager.js";
+import { DEFAULT_CONTROL_CATALOG_CACHE_TTL_MS } from "../config.js";
 import type { FeishuRenderer } from "../feishu/renderer.js";
 import type { InteractionManager } from "../interaction/manager.js";
-import { DEFAULT_CONTROL_CATALOG_CACHE_TTL_MS } from "../config.js";
-import {
-  buildHelpCard,
-  buildSessionListCard,
-  buildModelPickerCard,
-  buildAgentPickerCard,
-  buildStatusCard,
-} from "./control-cards.js";
+import type { SessionManager } from "../session/manager.js";
+import type {
+	ModelInfo,
+	SessionInfo,
+	SettingsManager,
+} from "../settings/manager.js";
+import type { Logger } from "../utils/logger.js";
+import { buildConfirmCard } from "./cards.js";
+import type { FeishuClients } from "./client.js";
 import type { SessionSummary } from "./control-cards.js";
 import {
-  ControlCatalogAdapter,
-  type ControlCatalogProvider,
-  type OpenCodeControlCatalogClient,
+	buildAgentPickerCard,
+	buildHelpCard,
+	buildHistoryCard,
+	buildModelPickerCard,
+	buildSessionListCard,
+	buildStatusCard,
+} from "./control-cards.js";
+import {
+	ControlCatalogAdapter,
+	type ControlCatalogProvider,
+	type OpenCodeControlCatalogClient,
 } from "./control-catalog.js";
+import { MessageReader } from "./message-reader.js";
 
 export type ControlCommand =
-  | "/help"
-  | "/new"
-  | "/sessions"
-  | "/session"
-  | "/model"
-  | "/agent"
-  | "/status"
-  | "/abort";
+	| "/help"
+	| "/new"
+	| "/sessions"
+	| "/session"
+	| "/history"
+	| "/model"
+	| "/agent"
+	| "/status"
+	| "/abort";
 
 export interface ControlCommandResult {
-  success: boolean;
-  message?: string;
-  cardMessageId?: string;
+	success: boolean;
+	message?: string;
+	cardMessageId?: string;
 }
 
 const SUPPORTED_COMMANDS = new Set<string>([
-  "/help",
-  "/new",
-  "/sessions",
-  "/session",
-  "/model",
-  "/agent",
-  "/status",
-  "/abort",
+	"/help",
+	"/new",
+	"/sessions",
+	"/session",
+	"/history",
+	"/model",
+	"/agent",
+	"/status",
+	"/abort",
 ]);
 
+const DEFAULT_HISTORY_COUNT = 10;
+
 export interface OpenCodeSessionClient {
-  create(
-    parameters?: Record<string, unknown>,
-  ): Promise<{ data?: Record<string, unknown> }>;
-  list(parameters?: Record<string, unknown>): Promise<{ data?: unknown }>;
-  status(parameters?: Record<string, unknown>): Promise<{ data?: unknown }>;
-  abort(parameters?: Record<string, unknown>): Promise<{ data?: unknown }>;
+	create(
+		parameters?: Record<string, unknown>,
+	): Promise<{ data?: Record<string, unknown> }>;
+	list(parameters?: Record<string, unknown>): Promise<{ data?: unknown }>;
+	status(parameters?: Record<string, unknown>): Promise<{ data?: unknown }>;
+	abort(parameters?: Record<string, unknown>): Promise<{ data?: unknown }>;
 }
 
 export interface OpenCodeControlClient extends OpenCodeControlCatalogClient {
-  session: OpenCodeSessionClient;
+	session: OpenCodeSessionClient;
 }
 
 export type ControlRouterSettingsStore = Pick<
-  SettingsManager,
-  | "getCurrentProject"
-  | "getCurrentSession"
-  | "setCurrentSession"
-  | "getCurrentAgent"
-  | "setCurrentAgent"
-  | "getCurrentModel"
-  | "setCurrentModel"
+	SettingsManager,
+	| "getCurrentProject"
+	| "getCurrentSession"
+	| "setCurrentSession"
+	| "getCurrentAgent"
+	| "setCurrentAgent"
+	| "getCurrentModel"
+	| "setCurrentModel"
 >;
 
 export type ControlRouterSessionStore = Pick<
-  SessionManager,
-  "getCurrentSession" | "setCurrentSession"
+	SessionManager,
+	"getCurrentSession" | "setCurrentSession"
 >;
 
-export type ControlRouterRenderer = Pick<FeishuRenderer, "sendCard">;
+export type ControlRouterRenderer = Pick<
+	FeishuRenderer,
+	"sendCard" | "sendText"
+>;
 
 export type ControlRouterInteractionStore = Pick<
-  InteractionManager,
-  "clearBusy" | "isBusy"
+	InteractionManager,
+	"clearBusy" | "isBusy"
 >;
 
 export interface ControlRouterOptions {
-  settingsManager: ControlRouterSettingsStore;
-  sessionManager: ControlRouterSessionStore;
-  renderer: ControlRouterRenderer;
-  openCodeClient: OpenCodeControlClient;
-  catalogAdapter?: ControlCatalogProvider;
-  catalogCacheTtlMs?: number;
-  catalogModelStatePath?: string;
-  interactionManager: ControlRouterInteractionStore;
-  logger?: Logger;
+	settingsManager: ControlRouterSettingsStore;
+	sessionManager: ControlRouterSessionStore;
+	renderer: ControlRouterRenderer;
+	openCodeClient: OpenCodeControlClient;
+	feishuClient?: FeishuClients["client"];
+	catalogAdapter?: ControlCatalogProvider;
+	catalogCacheTtlMs?: number;
+	catalogModelStatePath?: string;
+	messageReader?: MessageReader;
+	interactionManager: ControlRouterInteractionStore;
+	logger?: Logger;
 }
 
 function createNoopLogger(): Logger {
-  return { debug: () => {}, info: () => {}, warn: () => {}, error: () => {} };
+	return { debug: () => {}, info: () => {}, warn: () => {}, error: () => {} };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
+	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 export class ControlRouter {
-  private readonly settings: ControlRouterSettingsStore;
-  private readonly sessionManager: ControlRouterSessionStore;
-  private readonly renderer: ControlRouterRenderer;
-  private readonly openCodeSession: OpenCodeSessionClient;
-  private readonly interactionManager: ControlRouterInteractionStore;
-  private readonly logger: Logger;
-  private readonly catalogAdapter: ControlCatalogProvider;
+	private readonly settings: ControlRouterSettingsStore;
+	private readonly sessionManager: ControlRouterSessionStore;
+	private readonly renderer: ControlRouterRenderer;
+	private readonly openCodeSession: OpenCodeSessionClient;
+	private readonly interactionManager: ControlRouterInteractionStore;
+	private readonly logger: Logger;
+	private readonly catalogAdapter: ControlCatalogProvider;
+	private readonly messageReader: MessageReader | null;
 
-  constructor(options: ControlRouterOptions) {
-    this.settings = options.settingsManager;
-    this.sessionManager = options.sessionManager;
-    this.renderer = options.renderer;
-    this.openCodeSession = options.openCodeClient.session;
-    this.interactionManager = options.interactionManager;
-    this.logger = options.logger ?? createNoopLogger();
-    this.catalogAdapter =
-      options.catalogAdapter ??
-      new ControlCatalogAdapter({
-        settingsManager: this.settings,
-        openCodeClient: options.openCodeClient,
-        cacheTtlMs:
-          options.catalogCacheTtlMs ?? DEFAULT_CONTROL_CATALOG_CACHE_TTL_MS,
-        modelStatePath: options.catalogModelStatePath,
-        logger: this.logger,
-      });
-  }
+	constructor(options: ControlRouterOptions) {
+		this.settings = options.settingsManager;
+		this.sessionManager = options.sessionManager;
+		this.renderer = options.renderer;
+		this.openCodeSession = options.openCodeClient.session;
+		this.interactionManager = options.interactionManager;
+		this.logger = options.logger ?? createNoopLogger();
+		this.messageReader =
+			options.messageReader ??
+			(options.feishuClient
+				? new MessageReader({
+						client: options.feishuClient,
+						logger: this.logger,
+					})
+				: null);
+		this.catalogAdapter =
+			options.catalogAdapter ??
+			new ControlCatalogAdapter({
+				settingsManager: this.settings,
+				openCodeClient: options.openCodeClient,
+				cacheTtlMs:
+					options.catalogCacheTtlMs ?? DEFAULT_CONTROL_CATALOG_CACHE_TTL_MS,
+				modelStatePath: options.catalogModelStatePath,
+				logger: this.logger,
+			});
+	}
 
-  parseCommand(
-    text: string,
-  ): { command: ControlCommand; args?: string } | null {
-    const trimmed = text.trim();
-    if (!trimmed.startsWith("/")) {
-      return null;
-    }
+	parseCommand(
+		text: string,
+	): { command: ControlCommand; args?: string } | null {
+		const trimmed = text.trim();
+		if (!trimmed.startsWith("/")) {
+			return null;
+		}
 
-    const normalized = trimmed.toLowerCase();
-    const spaceIndex = normalized.indexOf(" ");
-    const commandPart =
-      spaceIndex === -1 ? normalized : normalized.slice(0, spaceIndex);
-    const args =
-      spaceIndex === -1
-        ? undefined
-        : text
-            .trim()
-            .slice(spaceIndex + 1)
-            .trim();
+		const normalized = trimmed.toLowerCase();
+		const spaceIndex = normalized.indexOf(" ");
+		const commandPart =
+			spaceIndex === -1 ? normalized : normalized.slice(0, spaceIndex);
+		const args =
+			spaceIndex === -1
+				? undefined
+				: text
+						.trim()
+						.slice(spaceIndex + 1)
+						.trim();
 
-    if (!SUPPORTED_COMMANDS.has(commandPart)) {
-      return null;
-    }
+		if (!SUPPORTED_COMMANDS.has(commandPart)) {
+			return null;
+		}
 
-    return { command: commandPart as ControlCommand, args: args || undefined };
-  }
+		return { command: commandPart as ControlCommand, args: args || undefined };
+	}
 
-  async handleCommand(
-    receiveId: string,
-    text: string,
-  ): Promise<ControlCommandResult> {
-    const parsed = this.parseCommand(text);
-    if (!parsed) {
-      return { success: false, message: "Unsupported command" };
-    }
+	async handleCommand(
+		receiveId: string,
+		text: string,
+	): Promise<ControlCommandResult> {
+		const parsed = this.parseCommand(text);
+		if (!parsed) {
+			return { success: false, message: "Unsupported command" };
+		}
 
-    const { command, args } = parsed;
+		const { command, args } = parsed;
 
-    switch (command) {
-      case "/help":
-        return this.handleHelp(receiveId);
-      case "/new":
-        return this.handleNew(receiveId);
-      case "/sessions":
-        return this.handleSessions(receiveId);
-      case "/session":
-        return this.handleSession(receiveId, args);
-      case "/model":
-        return this.handleModel(receiveId, args);
-      case "/agent":
-        return this.handleAgent(receiveId, args);
-      case "/status":
-        return this.handleStatus(receiveId);
-      case "/abort":
-        return this.handleAbort(receiveId);
-    }
-  }
+		switch (command) {
+			case "/help":
+				return this.handleHelp(receiveId);
+			case "/new":
+				return this.handleNew(receiveId);
+			case "/sessions":
+				return this.handleSessions(receiveId);
+			case "/session":
+				return this.handleSession(receiveId, args);
+			case "/history":
+				return this.handleHistory(receiveId, args);
+			case "/model":
+				return this.handleModel(receiveId, args);
+			case "/agent":
+				return this.handleAgent(receiveId, args);
+			case "/status":
+				return this.handleStatus(receiveId);
+			case "/abort":
+				return this.handleAbort(receiveId);
+		}
+	}
 
-  async handleCardAction(
-    event: Record<string, unknown>,
-  ): Promise<Record<string, never>> {
-    const actionRecord = isRecord(event.action) ? event.action : null;
-    const value =
-      actionRecord && isRecord(actionRecord.value) ? actionRecord.value : null;
-    const action = typeof value?.action === "string" ? value.action : null;
+	async handleCardAction(
+		event: Record<string, unknown>,
+	): Promise<Record<string, never>> {
+		const actionRecord = isRecord(event.action) ? event.action : null;
+		const value =
+			actionRecord && isRecord(actionRecord.value) ? actionRecord.value : null;
+		const action = typeof value?.action === "string" ? value.action : null;
 
-    switch (action) {
-      case "select_session": {
-        const sessionId =
-          typeof value?.sessionId === "string" ? value.sessionId : null;
-        if (sessionId) {
-          await this.handleSession("", sessionId);
-        }
-        break;
-      }
-      case "select_model": {
-        const modelName =
-          typeof value?.modelName === "string" ? value.modelName : null;
-        if (modelName) {
-          await this.handleModel("", modelName);
-        }
-        break;
-      }
-      case "select_agent": {
-        const agentName =
-          typeof value?.agentName === "string" ? value.agentName : null;
-        if (agentName) {
-          await this.handleAgent("", agentName);
-        }
-        break;
-      }
-      case "control_cancel":
-        this.interactionManager.clearBusy();
-        break;
-      default:
-        break;
-    }
+		switch (action) {
+			case "select_session": {
+				const sessionId =
+					typeof value?.sessionId === "string" ? value.sessionId : null;
+				if (sessionId) {
+					await this.handleSession("", sessionId);
+				}
+				break;
+			}
+			case "select_model": {
+				const modelName =
+					typeof value?.modelName === "string" ? value.modelName : null;
+				if (modelName) {
+					await this.handleModel("", modelName);
+				}
+				break;
+			}
+			case "select_agent": {
+				const agentName =
+					typeof value?.agentName === "string" ? value.agentName : null;
+				if (agentName) {
+					await this.handleAgent("", agentName);
+				}
+				break;
+			}
+			case "control_cancel":
+				this.interactionManager.clearBusy();
+				break;
+			case "confirm_write": {
+				const operationId =
+					typeof value?.operationId === "string" ? value.operationId : null;
+				if (operationId === "create_new_session") {
+					const receiveId =
+						typeof event.open_chat_id === "string" ? event.open_chat_id : "";
+					const result = await this.executeCreateSession();
+					if (receiveId && result.message) {
+						await this.renderer.sendText(receiveId, result.message);
+					}
+				}
+				break;
+			}
+			case "reject_write": {
+				const receiveId =
+					typeof event.open_chat_id === "string" ? event.open_chat_id : "";
+				if (receiveId) {
+					await this.renderer.sendText(receiveId, "Operation cancelled");
+				}
+				break;
+			}
+			default:
+				break;
+		}
 
-    return {};
-  }
+		return {};
+	}
 
-  private async handleHelp(receiveId: string): Promise<ControlCommandResult> {
-    const card = buildHelpCard();
-    const messageId = await this.renderer.sendCard(receiveId, card);
-    return { success: true, cardMessageId: messageId ?? undefined };
-  }
+	private async handleHelp(receiveId: string): Promise<ControlCommandResult> {
+		const card = buildHelpCard();
+		const messageId = await this.renderer.sendCard(receiveId, card);
+		return { success: true, cardMessageId: messageId ?? undefined };
+	}
 
-  private async handleNew(_receiveId: string): Promise<ControlCommandResult> {
-    try {
-      const result = await this.openCodeSession.create({});
-      const sessionData = result.data;
-      if (
-        !sessionData ||
-        typeof sessionData !== "object" ||
-        !("id" in sessionData)
-      ) {
-        return { success: false, message: "Failed to create session" };
-      }
+	private async handleNew(receiveId: string): Promise<ControlCommandResult> {
+		const card = buildConfirmCard({
+			operationDescription:
+				"This will create a new OpenCode session and reset the current session. Continue?",
+			pendingOperationId: "create_new_session",
+		});
+		const messageId = await this.renderer.sendCard(receiveId, card);
+		return {
+			success: true,
+			cardMessageId: messageId ?? undefined,
+			message: "Confirmation required",
+		};
+	}
 
-      const sessionId = String(sessionData.id);
-      const sessionInfo: SessionInfo = {
-        id: sessionId,
-        title: "New session",
-        directory: process.cwd(),
-      };
-      this.settings.setCurrentSession(sessionInfo);
-      this.logger.info(`[ControlRouter] Created new session: ${sessionId}`);
-      return { success: true, message: `Session created: ${sessionId}` };
-    } catch (error) {
-      this.logger.error("[ControlRouter] Failed to create session", error);
-      return { success: false, message: "Failed to create session" };
-    }
-  }
+	private async executeCreateSession(): Promise<ControlCommandResult> {
+		try {
+			const result = await this.openCodeSession.create({});
+			const sessionData = result.data;
+			if (
+				!sessionData ||
+				typeof sessionData !== "object" ||
+				!("id" in sessionData)
+			) {
+				return { success: false, message: "Failed to create session" };
+			}
 
-  private async handleSessions(
-    receiveId: string,
-  ): Promise<ControlCommandResult> {
-    try {
-      const result = await this.openCodeSession.list({});
-      const sessions = Array.isArray(result.data) ? result.data : [];
-      const summaries: SessionSummary[] = sessions.map((s: unknown) => {
-        const record = s as Record<string, unknown>;
-        return {
-          id: String(record.id ?? ""),
-          title: record.title ? String(record.title) : undefined,
-          ...record,
-        };
-      });
-      const card = buildSessionListCard(summaries);
-      const messageId = await this.renderer.sendCard(receiveId, card);
-      return { success: true, cardMessageId: messageId ?? undefined };
-    } catch (error) {
-      this.logger.error("[ControlRouter] Failed to list sessions", error);
-      return { success: false, message: "Failed to list sessions" };
-    }
-  }
+			const sessionId = String(sessionData.id);
+			const sessionInfo: SessionInfo = {
+				id: sessionId,
+				title: "New session",
+				directory: process.cwd(),
+			};
+			this.settings.setCurrentSession(sessionInfo);
+			this.logger.info(`[ControlRouter] Created new session: ${sessionId}`);
+			return { success: true, message: `Session created: ${sessionId}` };
+		} catch (error) {
+			this.logger.error("[ControlRouter] Failed to create session", error);
+			return { success: false, message: "Failed to create session" };
+		}
+	}
 
-  private async handleSession(
-    receiveId: string,
-    args?: string,
-  ): Promise<ControlCommandResult> {
-    if (!args) {
-      // No session ID provided — show session list as picker
-      return this.handleSessions(receiveId);
-    }
+	private async handleSessions(
+		receiveId: string,
+	): Promise<ControlCommandResult> {
+		try {
+			const result = await this.openCodeSession.list({});
+			const sessions = Array.isArray(result.data) ? result.data : [];
+			const summaries: SessionSummary[] = sessions.map((s: unknown) => {
+				const record = s as Record<string, unknown>;
+				return {
+					id: String(record.id ?? ""),
+					title: record.title ? String(record.title) : undefined,
+					...record,
+				};
+			});
+			const card = buildSessionListCard(summaries);
+			const messageId = await this.renderer.sendCard(receiveId, card);
+			return { success: true, cardMessageId: messageId ?? undefined };
+		} catch (error) {
+			this.logger.error("[ControlRouter] Failed to list sessions", error);
+			return { success: false, message: "Failed to list sessions" };
+		}
+	}
 
-    // Switch to the specified session
-    const sessionId = args.trim();
-    const currentSession = this.sessionManager.getCurrentSession();
-    if (currentSession) {
-      this.sessionManager.setCurrentSession({
-        ...currentSession,
-        id: sessionId,
-        title: currentSession.title,
-        directory: currentSession.directory,
-      });
-    } else {
-      this.sessionManager.setCurrentSession({
-        id: sessionId,
-        title: sessionId,
-        directory: process.cwd(),
-      });
-    }
-    this.logger.info(`[ControlRouter] Switched to session: ${sessionId}`);
-    return { success: true, message: `Switched to session: ${sessionId}` };
-  }
+	private async handleSession(
+		receiveId: string,
+		args?: string,
+	): Promise<ControlCommandResult> {
+		if (!args) {
+			// No session ID provided — show session list as picker
+			return this.handleSessions(receiveId);
+		}
 
-  private async handleModel(
-    receiveId: string,
-    args?: string,
-  ): Promise<ControlCommandResult> {
-    if (!args) {
-      // Show model picker card
-      const models = await this.catalogAdapter.getAvailableModels();
-      const card = buildModelPickerCard(models);
-      const messageId = await this.renderer.sendCard(receiveId, card);
-      return { success: true, cardMessageId: messageId ?? undefined };
-    }
+		// Switch to the specified session
+		const sessionId = args.trim();
+		const currentSession = this.sessionManager.getCurrentSession();
+		if (currentSession) {
+			this.sessionManager.setCurrentSession({
+				...currentSession,
+				id: sessionId,
+				title: currentSession.title,
+				directory: currentSession.directory,
+			});
+		} else {
+			this.sessionManager.setCurrentSession({
+				id: sessionId,
+				title: sessionId,
+				directory: process.cwd(),
+			});
+		}
+		this.logger.info(`[ControlRouter] Switched to session: ${sessionId}`);
+		return { success: true, message: `Switched to session: ${sessionId}` };
+	}
 
-    const modelName = args.trim();
-    const selectedModel = await this.resolveModelSelection(modelName);
-    if (!selectedModel) {
-      return {
-        success: false,
-        message:
-          "Unknown model. Use provider/model (for example openai/gpt-4o) or a unique bare model name from the catalog.",
-      };
-    }
+	private parseHistoryCount(args?: string): number {
+		if (!args) {
+			return DEFAULT_HISTORY_COUNT;
+		}
 
-    const selectedModelName = `${selectedModel.providerID}/${selectedModel.modelID}`;
-    this.settings.setCurrentModel(selectedModel);
-    this.logger.info(`[ControlRouter] Switched to model: ${selectedModelName}`);
-    return {
-      success: true,
-      message: `Model switched to: ${selectedModelName}`,
-    };
-  }
+		const firstToken = args.trim().split(/\s+/, 1)[0];
+		const parsedCount = Number.parseInt(firstToken, 10);
+		if (!Number.isFinite(parsedCount) || parsedCount <= 0) {
+			return DEFAULT_HISTORY_COUNT;
+		}
 
-  private async handleAgent(
-    receiveId: string,
-    args?: string,
-  ): Promise<ControlCommandResult> {
-    if (!args) {
-      // Show agent picker card
-      const agents = await this.catalogAdapter.getAvailableAgents();
-      const card = buildAgentPickerCard(agents);
-      const messageId = await this.renderer.sendCard(receiveId, card);
-      return { success: true, cardMessageId: messageId ?? undefined };
-    }
+		return parsedCount;
+	}
 
-    const agentName = args.trim();
-    this.settings.setCurrentAgent(agentName);
-    this.logger.info(`[ControlRouter] Switched to agent: ${agentName}`);
-    return { success: true, message: `Agent switched to: ${agentName}` };
-  }
+	private async handleHistory(
+		receiveId: string,
+		args?: string,
+	): Promise<ControlCommandResult> {
+		if (!this.messageReader) {
+			await this.renderer.sendText(receiveId, "Message history is unavailable");
+			return { success: false, message: "Message history is unavailable" };
+		}
 
-  private async handleStatus(receiveId: string): Promise<ControlCommandResult> {
-    const currentSession = this.sessionManager.getCurrentSession();
-    const currentModel = this.settings.getCurrentModel();
-    const currentAgent = this.settings.getCurrentAgent();
+		try {
+			const count = this.parseHistoryCount(args);
+			const messages = await this.messageReader.getChatMessages({
+				chatId: receiveId,
+				count,
+			});
 
-    const modelDisplay = currentModel
-      ? `${currentModel.providerID}/${currentModel.modelID}`
-      : null;
+			if (messages.length === 0) {
+				await this.renderer.sendText(receiveId, "No recent messages found");
+				return { success: true, message: "No recent messages found" };
+			}
 
-    const state = this.interactionManager.isBusy() ? "busy" : "idle";
+			const card = buildHistoryCard(messages);
+			const messageId = await this.renderer.sendCard(receiveId, card);
+			return { success: true, cardMessageId: messageId ?? undefined };
+		} catch (error) {
+			this.logger.error("[ControlRouter] Failed to read chat history", error);
+			await this.renderer.sendText(receiveId, "Failed to read recent messages");
+			return { success: false, message: "Failed to read recent messages" };
+		}
+	}
 
-    const card = buildStatusCard({
-      session: currentSession?.id ?? null,
-      model: modelDisplay,
-      agent: currentAgent ?? null,
-      state,
-    });
-    const messageId = await this.renderer.sendCard(receiveId, card);
-    return { success: true, cardMessageId: messageId ?? undefined };
-  }
+	private async handleModel(
+		receiveId: string,
+		args?: string,
+	): Promise<ControlCommandResult> {
+		if (!args) {
+			// Show model picker card
+			const models = await this.catalogAdapter.getAvailableModels();
+			const card = buildModelPickerCard(models);
+			const messageId = await this.renderer.sendCard(receiveId, card);
+			return { success: true, cardMessageId: messageId ?? undefined };
+		}
 
-  private async handleAbort(_receiveId: string): Promise<ControlCommandResult> {
-    const currentSession = this.sessionManager.getCurrentSession();
-    if (!currentSession) {
-      return { success: false, message: "No active session to abort" };
-    }
+		const modelName = args.trim();
+		const selectedModel = await this.resolveModelSelection(modelName);
+		if (!selectedModel) {
+			return {
+				success: false,
+				message:
+					"Unknown model. Use provider/model (for example openai/gpt-4o) or a unique bare model name from the catalog.",
+			};
+		}
 
-    try {
-      await this.openCodeSession.abort({ sessionID: currentSession.id });
-      this.interactionManager.clearBusy();
-      this.logger.info(`[ControlRouter] Aborted session: ${currentSession.id}`);
-      return {
-        success: true,
-        message: `Session aborted: ${currentSession.id}`,
-      };
-    } catch (error) {
-      this.logger.error("[ControlRouter] Failed to abort session", error);
-      return { success: false, message: "Failed to abort session" };
-    }
-  }
+		const selectedModelName = `${selectedModel.providerID}/${selectedModel.modelID}`;
+		this.settings.setCurrentModel(selectedModel);
+		this.logger.info(`[ControlRouter] Switched to model: ${selectedModelName}`);
+		return {
+			success: true,
+			message: `Model switched to: ${selectedModelName}`,
+		};
+	}
 
-  private parseModelSelection(modelName: string): ModelInfo | null {
-    const separator = modelName.indexOf("/");
-    if (separator <= 0 || separator >= modelName.length - 1) {
-      return null;
-    }
+	private async handleAgent(
+		receiveId: string,
+		args?: string,
+	): Promise<ControlCommandResult> {
+		if (!args) {
+			// Show agent picker card
+			const agents = await this.catalogAdapter.getAvailableAgents();
+			const card = buildAgentPickerCard(agents);
+			const messageId = await this.renderer.sendCard(receiveId, card);
+			return { success: true, cardMessageId: messageId ?? undefined };
+		}
 
-    return {
-      providerID: modelName.slice(0, separator),
-      modelID: modelName.slice(separator + 1),
-    };
-  }
+		const agentName = args.trim();
+		this.settings.setCurrentAgent(agentName);
+		this.logger.info(`[ControlRouter] Switched to agent: ${agentName}`);
+		return { success: true, message: `Agent switched to: ${agentName}` };
+	}
 
-  private async resolveModelSelection(
-    modelName: string,
-  ): Promise<ModelInfo | null> {
-    const explicitModel = this.parseModelSelection(modelName);
-    if (explicitModel) {
-      return explicitModel;
-    }
+	private async handleStatus(receiveId: string): Promise<ControlCommandResult> {
+		const currentSession = this.sessionManager.getCurrentSession();
+		const currentModel = this.settings.getCurrentModel();
+		const currentAgent = this.settings.getCurrentAgent();
 
-    const availableModels = await this.catalogAdapter.getAvailableModels();
-    const suffixMatches = availableModels.filter((candidate) => {
-      const separator = candidate.indexOf("/");
-      return separator > 0 && candidate.slice(separator + 1) === modelName;
-    });
+		const modelDisplay = currentModel
+			? `${currentModel.providerID}/${currentModel.modelID}`
+			: null;
 
-    if (suffixMatches.length !== 1) {
-      return null;
-    }
+		const state = this.interactionManager.isBusy() ? "busy" : "idle";
 
-    return this.parseModelSelection(suffixMatches[0]);
-  }
+		const card = buildStatusCard({
+			session: currentSession?.id ?? null,
+			model: modelDisplay,
+			agent: currentAgent ?? null,
+			state,
+		});
+		const messageId = await this.renderer.sendCard(receiveId, card);
+		return { success: true, cardMessageId: messageId ?? undefined };
+	}
+
+	private async handleAbort(_receiveId: string): Promise<ControlCommandResult> {
+		const currentSession = this.sessionManager.getCurrentSession();
+		if (!currentSession) {
+			return { success: false, message: "No active session to abort" };
+		}
+
+		try {
+			await this.openCodeSession.abort({ sessionID: currentSession.id });
+			this.interactionManager.clearBusy();
+			this.logger.info(`[ControlRouter] Aborted session: ${currentSession.id}`);
+			return {
+				success: true,
+				message: `Session aborted: ${currentSession.id}`,
+			};
+		} catch (error) {
+			this.logger.error("[ControlRouter] Failed to abort session", error);
+			return { success: false, message: "Failed to abort session" };
+		}
+	}
+
+	private parseModelSelection(modelName: string): ModelInfo | null {
+		const separator = modelName.indexOf("/");
+		if (separator <= 0 || separator >= modelName.length - 1) {
+			return null;
+		}
+
+		return {
+			providerID: modelName.slice(0, separator),
+			modelID: modelName.slice(separator + 1),
+		};
+	}
+
+	private async resolveModelSelection(
+		modelName: string,
+	): Promise<ModelInfo | null> {
+		const explicitModel = this.parseModelSelection(modelName);
+		if (explicitModel) {
+			return explicitModel;
+		}
+
+		const availableModels = await this.catalogAdapter.getAvailableModels();
+		const suffixMatches = availableModels.filter((candidate) => {
+			const separator = candidate.indexOf("/");
+			return separator > 0 && candidate.slice(separator + 1) === modelName;
+		});
+
+		if (suffixMatches.length !== 1) {
+			return null;
+		}
+
+		return this.parseModelSelection(suffixMatches[0]);
+	}
 }

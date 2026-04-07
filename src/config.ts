@@ -58,11 +58,14 @@ export const DEFAULT_CONTROL_CATALOG_MODEL_STATE_PATH = join(
   "opencode",
   "model.json",
 );
+export const DEFAULT_FEISHU_EVENT_DEDUP_TTL_MS = 300_000;
 export const DEFAULT_FEISHU_EVENT_DEDUP_PERSIST_PATH = join(
   process.cwd(),
   ".data",
   "event-dedup.json",
 );
+export const DEFAULT_FEISHU_CARD_CALLBACK_VERIFICATION_TOKEN = "";
+export const DEFAULT_FEISHU_CARD_CALLBACK_ENCRYPT_KEY = "";
 
 export class ConfigValidationError extends Error {
   constructor(
@@ -113,10 +116,9 @@ export function loadConfig(): AppConfig {
   );
 
   const callbackUrl = getEnvVar("FEISHU_CARD_CALLBACK_URL", false);
-  const verificationToken = getEnvVar(
-    "FEISHU_CARD_CALLBACK_VERIFICATION_TOKEN",
-    false,
-  );
+  const verificationToken =
+    getEnvVar("FEISHU_CARD_CALLBACK_VERIFICATION_TOKEN", false) ||
+    DEFAULT_FEISHU_CARD_CALLBACK_VERIFICATION_TOKEN;
   const hasCardCallbackConfig = Boolean(callbackUrl || verificationToken);
 
   let cardCallback: CardCallbackConfig | null = null;
@@ -136,7 +138,9 @@ export function loadConfig(): AppConfig {
     cardCallback = {
       callbackUrl,
       verificationToken,
-      encryptKey: getEnvVar("FEISHU_CARD_CALLBACK_ENCRYPT_KEY", false),
+      encryptKey:
+        getEnvVar("FEISHU_CARD_CALLBACK_ENCRYPT_KEY", false) ||
+        DEFAULT_FEISHU_CARD_CALLBACK_ENCRYPT_KEY,
     };
   }
 
@@ -152,7 +156,7 @@ export function loadConfig(): AppConfig {
       botOpenId: getEnvVar("FEISHU_BOT_OPEN_ID", false),
       eventDedupTtlMs: getOptionalPositiveIntEnvVar(
         "FEISHU_EVENT_DEDUP_TTL_MS",
-        300_000,
+        DEFAULT_FEISHU_EVENT_DEDUP_TTL_MS,
       ),
       eventDedupPersistPath:
         getEnvVar("FEISHU_EVENT_DEDUP_PERSIST_PATH", false) ||
