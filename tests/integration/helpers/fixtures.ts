@@ -223,6 +223,7 @@ export function createPermissionCardAction(options: {
 
 export function createModelCardAction(options: {
   modelName: string;
+  chatId?: string;
   eventId?: string;
   messageId?: string;
 }): Record<string, unknown> {
@@ -231,6 +232,7 @@ export function createModelCardAction(options: {
       options.eventId ??
       `card-model-${options.modelName.replace(/[^a-zA-Z0-9_-]/g, "-")}`,
     open_message_id: options.messageId ?? "card-message-model",
+    open_chat_id: options.chatId ?? "chat-1",
     action: {
       value: {
         action: "select_model",
@@ -242,6 +244,7 @@ export function createModelCardAction(options: {
 
 export function createAgentCardAction(options: {
   agentName: string;
+  chatId?: string;
   eventId?: string;
   messageId?: string;
 }): Record<string, unknown> {
@@ -250,6 +253,7 @@ export function createAgentCardAction(options: {
       options.eventId ??
       `card-agent-${options.agentName.replace(/[^a-zA-Z0-9_-]/g, "-")}`,
     open_message_id: options.messageId ?? "card-message-agent",
+    open_chat_id: options.chatId ?? "chat-1",
     action: {
       value: {
         action: "select_agent",

@@ -205,6 +205,10 @@ function getTrimmedString(value: unknown): string | null {
     : null;
 }
 
+function getCardActionReceiveId(event: Record<string, unknown>): string {
+  return typeof event.open_chat_id === "string" ? event.open_chat_id : "";
+}
+
 export class ControlRouter {
   private readonly settings: ControlRouterSettingsStore;
   private readonly sessionManager: ControlRouterSessionStore;
@@ -327,7 +331,7 @@ export class ControlRouter {
         const sessionId =
           typeof value?.sessionId === "string" ? value.sessionId : null;
         if (sessionId) {
-          await this.handleSession("", sessionId);
+          await this.handleSession(getCardActionReceiveId(event), sessionId);
         }
         break;
       }
@@ -335,7 +339,7 @@ export class ControlRouter {
         const modelName =
           typeof value?.modelName === "string" ? value.modelName : null;
         if (modelName) {
-          await this.handleModel("", modelName);
+          await this.handleModel(getCardActionReceiveId(event), modelName);
         }
         break;
       }
@@ -343,7 +347,7 @@ export class ControlRouter {
         const agentName =
           typeof value?.agentName === "string" ? value.agentName : null;
         if (agentName) {
-          await this.handleAgent("", agentName);
+          await this.handleAgent(getCardActionReceiveId(event), agentName);
         }
         break;
       }
@@ -351,8 +355,7 @@ export class ControlRouter {
         const projectId =
           typeof value?.projectId === "string" ? value.projectId : null;
         if (projectId) {
-          const receiveId =
-            typeof event.open_chat_id === "string" ? event.open_chat_id : "";
+          const receiveId = getCardActionReceiveId(event);
           await this.handleProjects(receiveId, projectId);
         }
         break;
@@ -364,8 +367,7 @@ export class ControlRouter {
         const operationId =
           typeof value?.operationId === "string" ? value.operationId : null;
         if (operationId === "create_new_session") {
-          const receiveId =
-            typeof event.open_chat_id === "string" ? event.open_chat_id : "";
+          const receiveId = getCardActionReceiveId(event);
           try {
             const result = await this.executeCreateSession();
             if (receiveId && result.message) {
@@ -394,8 +396,7 @@ export class ControlRouter {
         break;
       }
       case "reject_write": {
-        const receiveId =
-          typeof event.open_chat_id === "string" ? event.open_chat_id : "";
+        const receiveId = getCardActionReceiveId(event);
         if (receiveId) {
           await this.renderer.sendText(receiveId, "Operation cancelled");
         }
@@ -495,7 +496,10 @@ export class ControlRouter {
       };
       this.settings.setCurrentSession(sessionInfo);
       this.logger.info(`[ControlRouter] Created new session: ${sessionId}`);
-      return { success: true, message: `Session created: ${sessionId}` };
+      return {
+        success: true,
+        message: `New session created. Session ID: ${sessionId}`,
+      };
     } catch (error) {
       this.logger.error("[ControlRouter] Failed to create session", error);
       return { success: false, message: "Failed to create session" };
@@ -562,7 +566,11 @@ export class ControlRouter {
       });
     }
     this.logger.info(`[ControlRouter] Switched to session: ${sessionId}`);
-    return { success: true, message: `Switched to session: ${sessionId}` };
+    const message = `Session selected: ${sessionId}`;
+    if (receiveId) {
+      await this.renderer.sendText(receiveId, message);
+    }
+    return { success: true, message };
   }
 
   private parseProjects(data: unknown): ProjectSummary[] {
@@ -780,9 +788,13 @@ export class ControlRouter {
     const selectedModelName = `${selectedModel.providerID}/${selectedModel.modelID}`;
     this.settings.setCurrentModel(selectedModel);
     this.logger.info(`[ControlRouter] Switched to model: ${selectedModelName}`);
+    const message = `Model selected: ${selectedModelName}`;
+    if (receiveId) {
+      await this.renderer.sendText(receiveId, message);
+    }
     return {
       success: true,
-      message: `Model switched to: ${selectedModelName}`,
+      message,
     };
   }
 
@@ -801,7 +813,11 @@ export class ControlRouter {
     const agentName = args.trim();
     this.settings.setCurrentAgent(agentName);
     this.logger.info(`[ControlRouter] Switched to agent: ${agentName}`);
-    return { success: true, message: `Agent switched to: ${agentName}` };
+    const message = `Agent selected: ${agentName}`;
+    if (receiveId) {
+      await this.renderer.sendText(receiveId, message);
+    }
+    return { success: true, message };
   }
 
   private async handleStatus(receiveId: string): Promise<ControlCommandResult> {

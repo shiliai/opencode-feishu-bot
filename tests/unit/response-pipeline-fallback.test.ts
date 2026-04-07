@@ -47,6 +47,12 @@ function createHarness() {
   const updateStatusCard = vi
     .fn<Renderer["updateStatusCard"]>()
     .mockResolvedValue(undefined);
+  const renderCompleteCard = vi
+    .fn<Renderer["renderCompleteCard"]>()
+    .mockResolvedValue("complete-card-1");
+  const updateCompleteCard = vi
+    .fn<Renderer["updateCompleteCard"]>()
+    .mockResolvedValue(undefined);
   const replyPost = vi
     .fn<Renderer["replyPost"]>()
     .mockResolvedValue("reply-msg-1");
@@ -57,6 +63,8 @@ function createHarness() {
   const renderer = {
     renderStatusCard,
     updateStatusCard,
+    renderCompleteCard,
+    updateCompleteCard,
     replyPost,
     sendPost,
   } satisfies Renderer;
@@ -190,7 +198,7 @@ describe("ResponsePipelineController fallback behavior", () => {
     );
   });
 
-  it("marks card updates broken when status card creation fails, but still delivers the final reply", async () => {
+  it("marks card updates broken when status card creation fails, but still sends a standalone complete card", async () => {
     const harness = createHarness();
     const context = makeTurnContext();
 
@@ -224,7 +232,8 @@ describe("ResponsePipelineController fallback behavior", () => {
     harness.callbacks.onSessionIdle?.(context.sessionId);
     await drainSession(harness.controller, context.sessionId);
 
-    expect(harness.renderer.replyPost).toHaveBeenCalledTimes(1);
+    expect(harness.renderer.renderCompleteCard).toHaveBeenCalledTimes(1);
+    expect(harness.renderer.replyPost).not.toHaveBeenCalled();
     expect(harness.renderer.sendPost).not.toHaveBeenCalled();
     expect(harness.settingsManager.clearStatusMessageId).toHaveBeenCalledTimes(
       1,
@@ -232,7 +241,7 @@ describe("ResponsePipelineController fallback behavior", () => {
     expect(harness.interactionManager.clearBusy).toHaveBeenCalledTimes(1);
   });
 
-  it("breaks card updates on non-retryable patch failures and still delivers the final reply", async () => {
+  it("breaks card updates on non-retryable patch failures and sends a standalone complete card", async () => {
     const harness = createHarness();
     const context = makeTurnContext();
 
@@ -263,11 +272,12 @@ describe("ResponsePipelineController fallback behavior", () => {
     harness.callbacks.onSessionIdle?.(context.sessionId);
     await drainSession(harness.controller, context.sessionId);
 
-    expect(harness.renderer.replyPost).toHaveBeenCalledTimes(1);
+    expect(harness.renderer.renderCompleteCard).toHaveBeenCalledTimes(1);
+    expect(harness.renderer.replyPost).not.toHaveBeenCalled();
     expect(harness.renderer.sendPost).not.toHaveBeenCalled();
   });
 
-  it("retries retryable patch failures up to the configured max attempts, then breaks card updates", async () => {
+  it("retries retryable patch failures up to the configured max attempts, then falls back to a standalone complete card", async () => {
     const harness = createHarness();
     const context = makeTurnContext();
     const retryableError = { status: 429, message: "rate limit" };
@@ -297,14 +307,18 @@ describe("ResponsePipelineController fallback behavior", () => {
     harness.callbacks.onSessionIdle?.(context.sessionId);
     await drainSession(harness.controller, context.sessionId);
 
-    expect(harness.renderer.replyPost).toHaveBeenCalledTimes(1);
+    expect(harness.renderer.renderCompleteCard).toHaveBeenCalledTimes(1);
+    expect(harness.renderer.replyPost).not.toHaveBeenCalled();
     expect(harness.renderer.sendPost).not.toHaveBeenCalled();
   });
 
-  it("falls back to sendPost when replyPost fails", async () => {
+  it("falls back to post delivery when complete card delivery fails", async () => {
     const harness = createHarness();
     const context = makeTurnContext();
 
+    harness.renderer.renderCompleteCard.mockRejectedValueOnce(
+      new Error("complete card failed"),
+    );
     harness.renderer.replyPost.mockRejectedValueOnce(
       new Error("thread reply failed"),
     );

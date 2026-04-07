@@ -472,6 +472,41 @@ export class SummaryAggregator {
       return;
     }
 
+    if (partType === "subtask") {
+      this.ensureTypingStarted(sessionId);
+      const agentName = getString(part.agent)?.trim();
+      const description = getString(part.description)?.trim();
+      const title =
+        [agentName, description].filter(Boolean).join(" — ") || "Subagent task";
+      const subtaskEvent: SummaryToolEvent = {
+        sessionId,
+        messageId,
+        callId: partId,
+        tool: "subtask",
+        status: "started",
+        title,
+      };
+      this.callbacks.onTool?.(subtaskEvent);
+      return;
+    }
+
+    if (partType === "step-start" || partType === "step-finish") {
+      this.ensureTypingStarted(sessionId);
+      const snapshot = getString(part.snapshot)?.trim();
+      const title = snapshot
+        ? `Step ${partType === "step-start" ? "started" : "finished"} · ${snapshot.slice(0, 12)}`
+        : `Step ${partType === "step-start" ? "started" : "finished"}`;
+      this.callbacks.onTool?.({
+        sessionId,
+        messageId,
+        callId: partId,
+        tool: "step",
+        status: partType === "step-start" ? "running" : "completed",
+        title,
+      });
+      return;
+    }
+
     if (partType !== "tool") {
       return;
     }
@@ -492,22 +527,23 @@ export class SummaryAggregator {
       return;
     }
 
-    if (status !== "completed") {
-      return;
-    }
-
-    const processedKey = `completed:${callId}`;
-    if (this.processedToolStates.has(processedKey)) {
-      return;
-    }
-    this.processedToolStates.add(processedKey);
-
+    this.ensureTypingStarted(sessionId);
     const input =
       rawState && isRecord(rawState.input) ? rawState.input : undefined;
     const title = rawState && getString(rawState.title);
     const metadata =
       rawState && isRecord(rawState.metadata) ? rawState.metadata : undefined;
-    const preparedTool = this.prepareToolContext(tool, input, title, metadata);
+
+    const processedKey = `${status}:${callId}:${title ?? ""}`;
+    if (this.processedToolStates.has(processedKey)) {
+      return;
+    }
+    this.processedToolStates.add(processedKey);
+
+    const preparedTool =
+      status === "completed"
+        ? this.prepareToolContext(tool, input, title, metadata)
+        : {};
 
     const toolEvent: SummaryToolEvent = {
       sessionId,

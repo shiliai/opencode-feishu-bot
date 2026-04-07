@@ -50,6 +50,12 @@ function createHarness() {
   const updateStatusCard = vi
     .fn<Renderer["updateStatusCard"]>()
     .mockResolvedValue(undefined);
+  const renderCompleteCard = vi
+    .fn<Renderer["renderCompleteCard"]>()
+    .mockResolvedValue("complete-card-1");
+  const updateCompleteCard = vi
+    .fn<Renderer["updateCompleteCard"]>()
+    .mockResolvedValue(undefined);
   const replyPost = vi
     .fn<Renderer["replyPost"]>()
     .mockResolvedValue("reply-msg-1");
@@ -60,6 +66,8 @@ function createHarness() {
   const renderer = {
     renderStatusCard,
     updateStatusCard,
+    renderCompleteCard,
+    updateCompleteCard,
     replyPost,
     sendPost,
   } satisfies Renderer;
@@ -244,7 +252,7 @@ describe("ResponsePipelineController", () => {
     );
   });
 
-  it("session idle flushes pending partials, replies once, and clears turn resources", async () => {
+  it("session idle finalizes the existing status card and clears turn resources", async () => {
     const harness = createHarness();
     const context = makeTurnContext();
 
@@ -266,7 +274,7 @@ describe("ResponsePipelineController", () => {
       "Final answer\nSecond line",
     );
     await drainSession(harness.controller, context.sessionId);
-    expect(harness.renderer.replyPost).not.toHaveBeenCalled();
+    expect(harness.renderer.updateCompleteCard).not.toHaveBeenCalled();
 
     harness.callbacks.onSessionIdle?.(context.sessionId);
     await drainSession(harness.controller, context.sessionId);
@@ -275,14 +283,19 @@ describe("ResponsePipelineController", () => {
     expect(harness.renderer.updateStatusCard).toHaveBeenCalledTimes(1);
     expect(
       harness.renderer.updateStatusCard.mock.invocationCallOrder[0],
-    ).toBeLessThan(harness.renderer.replyPost.mock.invocationCallOrder[0]);
-    expect(harness.renderer.replyPost).toHaveBeenCalledTimes(1);
-    expect(harness.renderer.replyPost).toHaveBeenCalledWith(
-      context.sourceMessageId,
-      "OpenCode reply",
-      [["Final answer"], ["Second line"]],
-      { uuid: expect.any(String) },
+    ).toBeLessThan(
+      harness.renderer.updateCompleteCard.mock.invocationCallOrder[0],
     );
+    expect(harness.renderer.updateCompleteCard).toHaveBeenCalledTimes(1);
+    expect(harness.renderer.updateCompleteCard).toHaveBeenCalledWith(
+      "status-card-1",
+      "OpenCode reply",
+      "Final answer\nSecond line",
+      expect.objectContaining({
+        template: "green",
+      }),
+    );
+    expect(harness.renderer.replyPost).not.toHaveBeenCalled();
     expect(harness.renderer.sendPost).not.toHaveBeenCalled();
     expect(harness.settingsManager.clearStatusMessageId).toHaveBeenCalledTimes(
       1,
@@ -312,21 +325,23 @@ describe("ResponsePipelineController", () => {
     );
     await drainSession(harness.controller, context.sessionId);
 
-    expect(harness.renderer.replyPost).not.toHaveBeenCalled();
+    expect(harness.renderer.renderCompleteCard).not.toHaveBeenCalled();
 
     harness.callbacks.onSessionIdle?.(context.sessionId);
     await drainSession(harness.controller, context.sessionId);
 
-    expect(harness.renderer.replyPost).toHaveBeenCalledTimes(1);
-    expect(harness.renderer.replyPost).toHaveBeenCalledWith(
-      context.sourceMessageId,
+    expect(harness.renderer.renderCompleteCard).toHaveBeenCalledTimes(1);
+    expect(harness.renderer.renderCompleteCard).toHaveBeenCalledWith(
+      context.receiveId,
       "OpenCode reply",
-      [["Second reply"]],
-      { uuid: expect.any(String) },
+      "Second reply",
+      expect.objectContaining({
+        template: "green",
+      }),
     );
   });
 
-  it("handleSessionError sends an error reply, clears busy, and stops pending card updates", async () => {
+  it("handleSessionError falls back to a standalone error card when status updates are broken", async () => {
     const harness = createHarness();
     const context = makeTurnContext();
 
@@ -345,12 +360,16 @@ describe("ResponsePipelineController", () => {
     await drainSession(harness.controller, context.sessionId);
     await vi.advanceTimersByTimeAsync(1_000);
 
-    expect(harness.renderer.replyPost).toHaveBeenCalledWith(
-      context.sourceMessageId,
+    expect(harness.renderer.renderCompleteCard).toHaveBeenCalledWith(
+      context.receiveId,
       "OpenCode error",
-      [["pipeline failed"]],
-      { uuid: expect.any(String) },
+      "pipeline failed",
+      expect.objectContaining({
+        template: "red",
+      }),
     );
+    expect(harness.renderer.updateCompleteCard).not.toHaveBeenCalled();
+    expect(harness.renderer.replyPost).not.toHaveBeenCalled();
     expect(harness.renderer.updateStatusCard).not.toHaveBeenCalled();
     expect(harness.clearTimeoutFn).toHaveBeenCalledTimes(1);
     expect(harness.settingsManager.clearStatusMessageId).toHaveBeenCalledTimes(

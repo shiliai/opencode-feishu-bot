@@ -180,19 +180,67 @@ function formatToolSummary(
     return undefined;
   }
 
-  const toolNames = Array.from(
-    new Set(
-      toolEvents
-        .map((toolEvent) => toolEvent.tool.trim())
-        .filter((toolName) => toolName.length > 0),
-    ),
-  );
+  const recentEvents = toolEvents.slice(-4);
+  const lines = recentEvents
+    .map((toolEvent) => formatToolEventLine(toolEvent))
+    .filter((line): line is string => Boolean(line));
 
-  if (toolNames.length === 0) {
+  if (lines.length === 0) {
     return undefined;
   }
 
-  return `🔧 Using: ${toolNames.join(", ")}`;
+  return ["🔧 Progress", ...lines.map((line) => `- ${line}`)].join("\n");
+}
+
+function formatToolEventLine(toolEvent: SummaryToolEvent): string | undefined {
+  const toolName = toolEvent.tool.trim();
+  if (!toolName) {
+    return undefined;
+  }
+
+  const title = toolEvent.title?.trim();
+  const label = title && title.length > 0 ? title : toolName;
+  const status = formatToolStatus(toolEvent.status);
+  return `${getToolIcon(toolName)} ${label}${status ? ` · ${status}` : ""}`;
+}
+
+function formatToolStatus(status: string): string {
+  switch (status.trim().toLowerCase()) {
+    case "running":
+    case "pending":
+      return "in progress";
+    case "completed":
+      return "done";
+    case "error":
+    case "failed":
+      return "failed";
+    default:
+      return status.trim().toLowerCase();
+  }
+}
+
+function getToolIcon(tool: string): string {
+  switch (tool.trim().toLowerCase()) {
+    case "task":
+    case "subtask":
+      return "🤖";
+    case "skill":
+      return "🧠";
+    case "bash":
+      return "⚙️";
+    case "read":
+      return "📄";
+    case "write":
+      return "📝";
+    case "edit":
+    case "apply_patch":
+      return "✏️";
+    case "webfetch":
+    case "websearch_web_search_exa":
+      return "🌐";
+    default:
+      return "🔧";
+  }
 }
 
 function buildFooterLine(

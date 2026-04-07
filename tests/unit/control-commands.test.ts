@@ -212,7 +212,7 @@ describe("ControlRouter — command dispatch", () => {
     expect(renderer.sendCard).not.toHaveBeenCalled();
     expect(renderer.sendText).toHaveBeenCalledWith(
       "chat-1",
-      expect.stringContaining("Session created:"),
+      expect.stringContaining("New session created."),
     );
     expect(settings.setCurrentSession).toHaveBeenCalledWith(
       expect.objectContaining({ id: "new-session-1" }),
@@ -312,26 +312,32 @@ describe("ControlRouter — command dispatch", () => {
   });
 
   it("/session <id> switches to specified session", async () => {
+    const renderer = createMockRenderer();
     const sessionManager = createMockSessionManager();
     sessionManager.getCurrentSession.mockReturnValue({
       id: "old-session",
       title: "Old",
       directory: "/workspace",
     });
-    const router = createRouter({ sessionManager });
+    const router = createRouter({ sessionManager, renderer });
 
     const result = await router.handleCommand("chat-1", "/session sess-42");
 
     expect(result.success).toBe(true);
     expect(result.message).toContain("sess-42");
+    expect(renderer.sendText).toHaveBeenCalledWith(
+      "chat-1",
+      "Session selected: sess-42",
+    );
     expect(sessionManager.setCurrentSession).toHaveBeenCalledWith(
       expect.objectContaining({ id: "sess-42" }),
     );
   });
 
   it("/model <name> updates model in settings", async () => {
+    const renderer = createMockRenderer();
     const settings = createMockSettings();
-    const router = createRouter({ settingsManager: settings });
+    const router = createRouter({ settingsManager: settings, renderer });
 
     const result = await router.handleCommand("chat-1", "/model gpt-4");
 
@@ -340,6 +346,10 @@ describe("ControlRouter — command dispatch", () => {
       providerID: "openai",
       modelID: "gpt-4",
     });
+    expect(renderer.sendText).toHaveBeenCalledWith(
+      "chat-1",
+      "Model selected: openai/gpt-4",
+    );
   });
 
   it("/models alias renders the same picker as /model", async () => {
@@ -357,8 +367,9 @@ describe("ControlRouter — command dispatch", () => {
   });
 
   it("/model <provider/model> stores provider and model separately", async () => {
+    const renderer = createMockRenderer();
     const settings = createMockSettings();
-    const router = createRouter({ settingsManager: settings });
+    const router = createRouter({ settingsManager: settings, renderer });
 
     const result = await router.handleCommand(
       "chat-1",
@@ -370,6 +381,10 @@ describe("ControlRouter — command dispatch", () => {
       providerID: "openai",
       modelID: "gpt-4.1",
     });
+    expect(renderer.sendText).toHaveBeenCalledWith(
+      "chat-1",
+      "Model selected: openai/gpt-4.1",
+    );
   });
 
   it("/model <name> returns failure when bare model name is ambiguous", async () => {
@@ -405,13 +420,18 @@ describe("ControlRouter — command dispatch", () => {
   });
 
   it("/agent <name> updates agent in settings", async () => {
+    const renderer = createMockRenderer();
     const settings = createMockSettings();
-    const router = createRouter({ settingsManager: settings });
+    const router = createRouter({ settingsManager: settings, renderer });
 
     const result = await router.handleCommand("chat-1", "/agent build");
 
     expect(result.success).toBe(true);
     expect(settings.setCurrentAgent).toHaveBeenCalledWith("build");
+    expect(renderer.sendText).toHaveBeenCalledWith(
+      "chat-1",
+      "Agent selected: build",
+    );
   });
 
   it("/status renders current status card", async () => {

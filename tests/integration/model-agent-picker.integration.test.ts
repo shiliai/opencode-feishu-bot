@@ -126,6 +126,15 @@ describe("model and agent picker integration", () => {
       }),
     );
 
+    expect(harness.renderer.sendText).toHaveBeenCalledWith(
+      "chat-1",
+      "Model selected: openai/gpt-4.1",
+    );
+    expect(harness.renderer.sendText).toHaveBeenCalledWith(
+      "chat-1",
+      "Agent selected: oracle",
+    );
+
     await harness.handleMessageReceived(
       createTextMessageEvent({
         eventId: "evt-status-picker-1",

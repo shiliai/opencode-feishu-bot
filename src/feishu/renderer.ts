@@ -9,6 +9,7 @@ import {
 } from "./payloads.js";
 import {
   buildStatusCard,
+  buildCompleteCard,
   buildQuestionCard,
   buildPermissionCard,
   buildControlCard,
@@ -198,6 +199,26 @@ export class FeishuRenderer {
     template?: "blue" | "green" | "red" | "orange" | "grey",
   ): Promise<void> {
     const card = buildStatusCard(title, content, isCompleted, template);
+    return this.updateCard(messageId, card);
+  }
+
+  async renderCompleteCard(
+    receiveId: string,
+    title: string,
+    answerContent: string,
+    options?: Parameters<typeof buildCompleteCard>[2],
+  ): Promise<string | undefined> {
+    const card = buildCompleteCard(title, answerContent, options);
+    return this.sendCard(receiveId, card, undefined, { updateMulti: true });
+  }
+
+  async updateCompleteCard(
+    messageId: string,
+    title: string,
+    answerContent: string,
+    options?: Parameters<typeof buildCompleteCard>[2],
+  ): Promise<void> {
+    const card = buildCompleteCard(title, answerContent, options);
     return this.updateCard(messageId, card);
   }
 

@@ -28,6 +28,8 @@ import {
 interface ResponsePipelineRenderer {
   renderStatusCard: FeishuRenderer["renderStatusCard"];
   updateStatusCard: FeishuRenderer["updateStatusCard"];
+  renderCompleteCard: FeishuRenderer["renderCompleteCard"];
+  updateCompleteCard: FeishuRenderer["updateCompleteCard"];
   replyPost: FeishuRenderer["replyPost"];
   sendPost: FeishuRenderer["sendPost"];
 }
@@ -162,19 +164,67 @@ function formatToolSummary(toolEvents: SummaryToolEvent[]): string | undefined {
     return undefined;
   }
 
-  const toolNames = Array.from(
-    new Set(
-      toolEvents
-        .map((toolEvent) => toolEvent.tool.trim())
-        .filter((toolName) => toolName.length > 0),
-    ),
-  );
+  const lines = toolEvents
+    .slice(-4)
+    .map((toolEvent) => formatToolEventLine(toolEvent))
+    .filter((line): line is string => Boolean(line));
 
-  if (toolNames.length === 0) {
+  if (lines.length === 0) {
     return undefined;
   }
 
-  return `🔧 Using: ${toolNames.join(", ")}`;
+  return ["🔧 Progress", ...lines.map((line) => `- ${line}`)].join("\n");
+}
+
+function formatToolEventLine(toolEvent: SummaryToolEvent): string | undefined {
+  const toolName = toolEvent.tool.trim();
+  if (!toolName) {
+    return undefined;
+  }
+
+  const title = toolEvent.title?.trim();
+  const label = title && title.length > 0 ? title : toolName;
+  const status = formatToolStatus(toolEvent.status);
+  return `${getToolIcon(toolName)} ${label}${status ? ` · ${status}` : ""}`;
+}
+
+function formatToolStatus(status: string): string {
+  switch (status.trim().toLowerCase()) {
+    case "running":
+    case "pending":
+      return "in progress";
+    case "completed":
+      return "done";
+    case "error":
+    case "failed":
+      return "failed";
+    default:
+      return status.trim().toLowerCase();
+  }
+}
+
+function getToolIcon(tool: string): string {
+  switch (tool.trim().toLowerCase()) {
+    case "task":
+    case "subtask":
+      return "🤖";
+    case "skill":
+      return "🧠";
+    case "bash":
+      return "⚙️";
+    case "read":
+      return "📄";
+    case "write":
+      return "📝";
+    case "edit":
+    case "apply_patch":
+      return "✏️";
+    case "webfetch":
+    case "websearch_web_search_exa":
+      return "🌐";
+    default:
+      return "🔧";
+  }
 }
 
 function buildFooterMetricsText(state: StatusTurnState): string | undefined {
@@ -207,16 +257,10 @@ function buildFinalReplyText(
   messageText: string,
 ): string {
   const normalizedText = normalizeText(messageText);
-  const { reasoningText, answerText } = splitReasoningText(normalizedText);
+  const { reasoningText } = splitReasoningText(normalizedText);
   const finalReasoning =
     state.accumulatedReasoning?.trim() || reasoningText?.trim();
-  const strippedAnswer = answerText ?? stripReasoningTags(normalizedText);
-  const answerSource =
-    strippedAnswer ||
-    normalizedText ||
-    state.lastPartialText ||
-    FINAL_REPLY_FALLBACK_TEXT;
-  const finalAnswer = answerSource.trim() || FINAL_REPLY_FALLBACK_TEXT;
+  const finalAnswer = getFinalAnswerContent(state, messageText);
   const toolSummary = formatToolSummary(state.toolEvents);
   const hasEnhancedSections = Boolean(
     finalReasoning || toolSummary || state.latestTokens,
@@ -250,6 +294,21 @@ function buildFinalReplyText(
   }
 
   return sections.join("\n\n");
+}
+
+function getFinalAnswerContent(
+  state: StatusTurnState,
+  messageText: string,
+): string {
+  const normalizedText = normalizeText(messageText);
+  const { answerText } = splitReasoningText(normalizedText);
+  const strippedAnswer = answerText ?? stripReasoningTags(normalizedText);
+  const answerSource =
+    strippedAnswer ||
+    normalizedText ||
+    state.lastPartialText ||
+    FINAL_REPLY_FALLBACK_TEXT;
+  return answerSource.trim() || FINAL_REPLY_FALLBACK_TEXT;
 }
 
 function getErrorStatusCode(error: unknown): number | undefined {
@@ -442,7 +501,17 @@ export class ResponsePipelineController {
       return;
     }
 
-    state.toolEvents.push(toolEvent);
+    const existingIndex = state.toolEvents.findIndex(
+      (existingEvent) => existingEvent.callId === toolEvent.callId,
+    );
+    if (existingIndex >= 0) {
+      state.toolEvents.splice(existingIndex, 1, toolEvent);
+    } else {
+      state.toolEvents.push(toolEvent);
+      if (state.toolEvents.length > 12) {
+        state.toolEvents.splice(0, state.toolEvents.length - 12);
+      }
+    }
 
     if (
       state.statusCardMessageId &&
@@ -742,6 +811,59 @@ export class ResponsePipelineController {
 
     const uuid = state.finalReplyUuid ?? randomUUID();
     state.finalReplyUuid = uuid;
+    const answerContent = getFinalAnswerContent(state, messageText);
+    const resolvedAnswer = this.imageResolver
+      ? await this.imageResolver.resolveImagesAwait(answerContent, 15_000)
+      : answerContent;
+    const completeTemplate = title === ERROR_REPLY_TITLE ? "red" : "green";
+    const reasoningDurationMs = state.reasoningStartTime
+      ? Math.max(0, Date.now() - state.reasoningStartTime)
+      : undefined;
+    const elapsedMs = Math.max(0, Date.now() - state.turnStartTime);
+
+    try {
+      if (state.statusCardMessageId && !state.cardUpdatesBroken) {
+        await this.renderer.updateCompleteCard(
+          state.statusCardMessageId,
+          title,
+          resolvedAnswer,
+          {
+            reasoningText: state.accumulatedReasoning,
+            reasoningDurationMs,
+            elapsedMs,
+            tokens: state.latestTokens,
+            toolEvents: state.toolEvents,
+            template: completeTemplate,
+          },
+        );
+      } else {
+        const messageId = await this.renderer.renderCompleteCard(
+          state.receiveId,
+          title,
+          resolvedAnswer,
+          {
+            reasoningText: state.accumulatedReasoning,
+            reasoningDurationMs,
+            elapsedMs,
+            tokens: state.latestTokens,
+            toolEvents: state.toolEvents,
+            template: completeTemplate,
+          },
+        );
+        if (messageId) {
+          state.statusCardMessageId = messageId;
+          this.settingsManager.setStatusMessageId(messageId);
+        }
+      }
+      state.finalReplySent = true;
+      return;
+    } catch (error) {
+      this.logger.warn(
+        `[ResponsePipeline] Complete card delivery failed, falling back to post reply for session=${state.sessionId}`,
+        error,
+      );
+    }
+
     const replyText = optimizeMarkdownStyle(
       buildFinalReplyText(state, messageText),
     );

@@ -44,6 +44,12 @@ function createHarness() {
   const updateStatusCard = vi
     .fn<Renderer["updateStatusCard"]>()
     .mockResolvedValue(undefined);
+  const renderCompleteCard = vi
+    .fn<Renderer["renderCompleteCard"]>()
+    .mockResolvedValue("complete-card-1");
+  const updateCompleteCard = vi
+    .fn<Renderer["updateCompleteCard"]>()
+    .mockResolvedValue(undefined);
   const replyPost = vi
     .fn<Renderer["replyPost"]>()
     .mockResolvedValue("reply-msg-1");
@@ -54,6 +60,8 @@ function createHarness() {
   const renderer = {
     renderStatusCard,
     updateStatusCard,
+    renderCompleteCard,
+    updateCompleteCard,
     replyPost,
     sendPost,
   } satisfies Renderer;
@@ -261,10 +269,11 @@ describe("ResponsePipelineController status card throttling", () => {
     await drainSession(harness.controller, context.sessionId);
 
     expect(harness.renderer.updateStatusCard).not.toHaveBeenCalled();
-    expect(harness.renderer.replyPost).toHaveBeenCalledTimes(1);
+    expect(harness.renderer.updateCompleteCard).toHaveBeenCalledTimes(1);
+    expect(harness.renderer.replyPost).not.toHaveBeenCalled();
   });
 
-  it("flushes a pending status timer before sending the final reply", async () => {
+  it("flushes a pending status timer before finalizing the status card", async () => {
     const harness = createHarness();
     const context = makeTurnContext();
 
@@ -287,8 +296,11 @@ describe("ResponsePipelineController status card throttling", () => {
     expect(harness.renderer.updateStatusCard).toHaveBeenCalledTimes(1);
     expect(
       harness.renderer.updateStatusCard.mock.invocationCallOrder[0],
-    ).toBeLessThan(harness.renderer.replyPost.mock.invocationCallOrder[0]);
-    expect(harness.renderer.replyPost).toHaveBeenCalledTimes(1);
+    ).toBeLessThan(
+      harness.renderer.updateCompleteCard.mock.invocationCallOrder[0],
+    );
+    expect(harness.renderer.updateCompleteCard).toHaveBeenCalledTimes(1);
+    expect(harness.renderer.replyPost).not.toHaveBeenCalled();
 
     await vi.advanceTimersByTimeAsync(1_000);
     expect(harness.renderer.updateStatusCard).toHaveBeenCalledTimes(1);

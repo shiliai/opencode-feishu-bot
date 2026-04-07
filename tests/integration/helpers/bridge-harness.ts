@@ -42,6 +42,8 @@ interface MockRenderer {
   sendCard: ReturnType<typeof vi.fn>;
   renderStatusCard: ReturnType<typeof vi.fn>;
   updateStatusCard: ReturnType<typeof vi.fn>;
+  renderCompleteCard: ReturnType<typeof vi.fn>;
+  updateCompleteCard: ReturnType<typeof vi.fn>;
   replyPost: ReturnType<typeof vi.fn>;
   sendPost: ReturnType<typeof vi.fn>;
   renderQuestionCard: ReturnType<typeof vi.fn>;
@@ -102,6 +104,8 @@ function createRenderer(): MockRenderer {
     sendCard: vi.fn().mockResolvedValue("control-card-1"),
     renderStatusCard: vi.fn().mockResolvedValue("status-card-1"),
     updateStatusCard: vi.fn().mockResolvedValue(undefined),
+    renderCompleteCard: vi.fn().mockResolvedValue("complete-card-1"),
+    updateCompleteCard: vi.fn().mockResolvedValue(undefined),
     replyPost: vi.fn().mockResolvedValue("reply-message-1"),
     sendPost: vi.fn().mockResolvedValue("send-post-1"),
     renderQuestionCard: vi.fn().mockResolvedValue("question-card-1"),

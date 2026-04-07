@@ -378,15 +378,17 @@ describe("Selection card builders", () => {
   });
 
   it("handleCardAction switches session from a selection card", async () => {
+    const renderer = createMockRenderer();
     const sessionManager = createMockSessionManager();
     sessionManager.getCurrentSession.mockReturnValue({
       id: "sess-old",
       title: "Old",
       directory: "/workspace/project",
     });
-    const router = createRouter({ sessionManager });
+    const router = createRouter({ sessionManager, renderer });
 
     const result = await router.handleCardAction({
+      open_chat_id: "chat-1",
       action: {
         value: { action: "select_session", sessionId: "sess-new" },
       },
@@ -398,18 +400,25 @@ describe("Selection card builders", () => {
       title: "Old",
       directory: "/workspace/project",
     });
+    expect(renderer.sendText).toHaveBeenCalledWith(
+      "chat-1",
+      "Session selected: sess-new",
+    );
   });
 
   it("handleCardAction switches model and agent from selection cards", async () => {
+    const renderer = createMockRenderer();
     const settings = createMockSettings();
-    const router = createRouter({ settingsManager: settings });
+    const router = createRouter({ settingsManager: settings, renderer });
 
     await router.handleCardAction({
+      open_chat_id: "chat-1",
       action: {
         value: { action: "select_model", modelName: "openai/gpt-4.1" },
       },
     });
     await router.handleCardAction({
+      open_chat_id: "chat-1",
       action: {
         value: { action: "select_agent", agentName: "oracle" },
       },
@@ -420,6 +429,14 @@ describe("Selection card builders", () => {
       modelID: "gpt-4.1",
     });
     expect(settings.setCurrentAgent).toHaveBeenCalledWith("oracle");
+    expect(renderer.sendText).toHaveBeenCalledWith(
+      "chat-1",
+      "Model selected: openai/gpt-4.1",
+    );
+    expect(renderer.sendText).toHaveBeenCalledWith(
+      "chat-1",
+      "Agent selected: oracle",
+    );
   });
 
   it("handleCardAction switches project from project picker", async () => {

@@ -35,7 +35,10 @@ describe("duplicate event integration", () => {
 
     await harness.flushSession();
 
-    expect(harness.openCodeClients.session.promptAsync).toHaveBeenCalledTimes(1);
-    expect(harness.renderer.replyPost).toHaveBeenCalledTimes(1);
+    expect(harness.openCodeClients.session.promptAsync).toHaveBeenCalledTimes(
+      1,
+    );
+    expect(harness.renderer.updateCompleteCard).toHaveBeenCalledTimes(1);
+    expect(harness.renderer.replyPost).not.toHaveBeenCalled();
   });
 });

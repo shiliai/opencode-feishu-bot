@@ -323,6 +323,75 @@ describe("SummaryAggregator", () => {
     );
   });
 
+  it("emits progress events for running tools, subtasks, and step lifecycle parts", () => {
+    const onTool = vi.fn();
+    aggregator.setOnTool(onTool);
+    aggregator.setSession("session-1");
+
+    aggregator.processEvent(
+      makeEvent("message.part.updated", {
+        part: {
+          id: "tool-running",
+          sessionID: "session-1",
+          messageID: "message-1",
+          type: "tool",
+          callID: "call-1",
+          tool: "skill",
+          state: {
+            status: "running",
+            title: "code-walkthrough",
+            metadata: {},
+          },
+        },
+      }),
+    );
+    aggregator.processEvent(
+      makeEvent("message.part.updated", {
+        part: {
+          id: "subtask-1",
+          sessionID: "session-1",
+          messageID: "message-1",
+          type: "subtask",
+          agent: "oracle",
+          description: "Inspect pipeline",
+        },
+      }),
+    );
+    aggregator.processEvent(
+      makeEvent("message.part.updated", {
+        part: {
+          id: "step-1",
+          sessionID: "session-1",
+          messageID: "message-1",
+          type: "step-start",
+          snapshot: "abcdef1234567890",
+        },
+      }),
+    );
+
+    expect(onTool).toHaveBeenCalledWith(
+      expect.objectContaining({
+        tool: "skill",
+        status: "running",
+        title: "code-walkthrough",
+      }),
+    );
+    expect(onTool).toHaveBeenCalledWith(
+      expect.objectContaining({
+        tool: "subtask",
+        status: "started",
+        title: "oracle — Inspect pipeline",
+      }),
+    );
+    expect(onTool).toHaveBeenCalledWith(
+      expect.objectContaining({
+        tool: "step",
+        status: "running",
+        title: expect.stringContaining("Step started"),
+      }),
+    );
+  });
+
   it("emits question, permission, session diff, retry, compacted, and error callbacks", () => {
     const onQuestion = vi.fn();
     const onPermission = vi.fn();
