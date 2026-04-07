@@ -189,6 +189,7 @@ export async function startFeishuApp(): Promise<void> {
     openCodeSession: openCodeClient.session,
     openCodeSessionStatus: openCodeClient.session,
     openCodePromptAsync: openCodePromptAsyncClient,
+    messageReader,
     botOpenId: config.feishu.botOpenId || null,
   });
 

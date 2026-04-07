@@ -283,3 +283,24 @@ export function createProjectCardAction(options: {
     },
   };
 }
+
+export function createSessionCardAction(options: {
+  sessionId: string;
+  chatId?: string;
+  eventId?: string;
+  messageId?: string;
+}): Record<string, unknown> {
+  return {
+    event_id:
+      options.eventId ??
+      `card-session-${options.sessionId.replace(/[^a-zA-Z0-9_-]/g, "-")}`,
+    open_message_id: options.messageId ?? "card-message-session",
+    open_chat_id: options.chatId ?? "chat-1",
+    action: {
+      value: {
+        action: "select_session",
+        sessionId: options.sessionId,
+      },
+    },
+  };
+}

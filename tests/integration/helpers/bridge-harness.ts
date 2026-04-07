@@ -54,6 +54,7 @@ interface MockRenderer {
 interface MockOpenCodeClients {
   session: {
     create: ReturnType<typeof vi.fn>;
+    get: ReturnType<typeof vi.fn>;
     list: ReturnType<typeof vi.fn>;
     status: ReturnType<typeof vi.fn>;
     abort: ReturnType<typeof vi.fn>;
@@ -125,6 +126,18 @@ function createOpenCodeClients(): MockOpenCodeClients {
         },
         error: undefined,
       }),
+      get: vi
+        .fn()
+        .mockImplementation(
+          async (parameters?: { sessionID?: string; directory?: string }) => ({
+            data: {
+              id: parameters?.sessionID ?? "session-1",
+              title: `Integration ${parameters?.sessionID ?? "session-1"}`,
+              directory: parameters?.directory ?? "/workspace/project",
+            },
+            error: undefined,
+          }),
+        ),
       list: vi.fn().mockResolvedValue({
         data: [
           {

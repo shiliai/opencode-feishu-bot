@@ -63,7 +63,22 @@ function createMockRenderer() {
 function createMockOpenCodeClient() {
   return {
     session: {
-      create: vi.fn().mockResolvedValue({ data: { id: "new-session-1" } }),
+      create: vi.fn().mockResolvedValue({
+        data: {
+          id: "new-session-1",
+          title: "New Session",
+          directory: "/workspace/project",
+        },
+        error: undefined,
+      }),
+      get: vi.fn().mockResolvedValue({
+        data: {
+          id: "sess-42",
+          title: "Target Session",
+          directory: "/workspace/project",
+        },
+        error: undefined,
+      }),
       list: vi
         .fn()
         .mockResolvedValue({ data: [{ id: "sess-1", title: "Test" }] }),
@@ -380,29 +395,35 @@ describe("Selection card builders", () => {
   it("handleCardAction switches session from a selection card", async () => {
     const renderer = createMockRenderer();
     const sessionManager = createMockSessionManager();
+    const openCodeClient = createMockOpenCodeClient();
     sessionManager.getCurrentSession.mockReturnValue({
       id: "sess-old",
       title: "Old",
       directory: "/workspace/project",
     });
-    const router = createRouter({ sessionManager, renderer });
+    const router = createRouter({ sessionManager, renderer, openCodeClient });
 
     const result = await router.handleCardAction({
       open_chat_id: "chat-1",
       action: {
-        value: { action: "select_session", sessionId: "sess-new" },
+        value: { action: "select_session", sessionId: "sess-42" },
       },
     });
 
-    expect(result).toEqual({});
+    expect(result).toEqual({
+      toast: {
+        type: "success",
+        content: "Session selected: Target Session (sess-42)",
+      },
+    });
     expect(sessionManager.setCurrentSession).toHaveBeenCalledWith({
-      id: "sess-new",
-      title: "Old",
+      id: "sess-42",
+      title: "Target Session",
       directory: "/workspace/project",
     });
     expect(renderer.sendText).toHaveBeenCalledWith(
       "chat-1",
-      "Session selected: sess-new",
+      expect.stringContaining("Session selected:"),
     );
   });
 
@@ -411,16 +432,29 @@ describe("Selection card builders", () => {
     const settings = createMockSettings();
     const router = createRouter({ settingsManager: settings, renderer });
 
-    await router.handleCardAction({
+    const modelResult = await router.handleCardAction({
       open_chat_id: "chat-1",
       action: {
         value: { action: "select_model", modelName: "openai/gpt-4.1" },
       },
     });
-    await router.handleCardAction({
+    const agentResult = await router.handleCardAction({
       open_chat_id: "chat-1",
       action: {
         value: { action: "select_agent", agentName: "oracle" },
+      },
+    });
+
+    expect(modelResult).toEqual({
+      toast: {
+        type: "success",
+        content: "Model selected: openai/gpt-4.1",
+      },
+    });
+    expect(agentResult).toEqual({
+      toast: {
+        type: "success",
+        content: "Agent selected: oracle",
       },
     });
 
@@ -439,23 +473,93 @@ describe("Selection card builders", () => {
     );
   });
 
+  it("handleCardAction supports nested Feishu callback payloads", async () => {
+    const renderer = createMockRenderer();
+    const settings = createMockSettings();
+    const router = createRouter({ settingsManager: settings, renderer });
+
+    const result = await router.handleCardAction({
+      event: {
+        action: {
+          value: { action: "select_model", modelName: "openai/gpt-4.1" },
+        },
+        context: {
+          open_chat_id: "chat-nested",
+        },
+      },
+    });
+
+    expect(result).toEqual({
+      toast: {
+        type: "success",
+        content: "Model selected: openai/gpt-4.1",
+      },
+    });
+    expect(settings.setCurrentModel).toHaveBeenCalledWith({
+      providerID: "openai",
+      modelID: "gpt-4.1",
+    });
+    expect(renderer.sendText).toHaveBeenCalledWith(
+      "chat-nested",
+      "Model selected: openai/gpt-4.1",
+    );
+  });
+
+  it("handleCardAction returns toast feedback when callback has no chat id", async () => {
+    const renderer = createMockRenderer();
+    const router = createRouter({ renderer });
+
+    const result = await router.handleCardAction({
+      action: {
+        value: {
+          action: "confirm_write",
+          operationId: "create_new_session",
+        },
+      },
+    });
+
+    expect(result).toEqual({
+      toast: {
+        type: "success",
+        content: "New session selected: New Session (new-session-1)",
+      },
+    });
+    expect(renderer.sendText).not.toHaveBeenCalled();
+  });
+
   it("handleCardAction switches project from project picker", async () => {
+    const renderer = createMockRenderer();
     const settings = createMockSettings();
     const sessionManager = createMockSessionManager();
-    const router = createRouter({ settingsManager: settings, sessionManager });
+    const router = createRouter({
+      settingsManager: settings,
+      sessionManager,
+      renderer,
+    });
 
-    await router.handleCardAction({
+    const result = await router.handleCardAction({
       open_chat_id: "chat-1",
       action: {
         value: { action: "select_project", projectId: "project-1" },
       },
     });
 
+    expect(result).toEqual({
+      toast: {
+        type: "success",
+        content:
+          "Project selected: Project One\n\nActive session cleared. Use /sessions or /new for this project.",
+      },
+    });
     expect(settings.setCurrentProject).toHaveBeenCalledWith({
       id: "project-1",
       worktree: "/workspace/project-1",
       name: "Project One",
     });
     expect(sessionManager.clearSession).toHaveBeenCalledTimes(1);
+    expect(renderer.sendText).toHaveBeenCalledWith(
+      "chat-1",
+      expect.stringContaining("Project selected: Project One"),
+    );
   });
 });

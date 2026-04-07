@@ -81,12 +81,24 @@ describe("projects picker integration", () => {
       ],
     });
 
-    await harness.handleCardAction(
+    const result = await harness.handleCardAction(
       createProjectCardAction({
         eventId: "evt-project-select-1",
         chatId: "chat-project-2",
         projectId: "project-2",
       }),
+    );
+
+    expect(result).toEqual({
+      toast: {
+        type: "success",
+        content:
+          "Project selected: Project Two\n\nActive session cleared. Use /sessions or /new for this project.",
+      },
+    });
+    expect(harness.renderer.sendText).toHaveBeenCalledWith(
+      "chat-project-2",
+      expect.stringContaining("Project selected: Project Two"),
     );
 
     await harness.handleMessageReceived(

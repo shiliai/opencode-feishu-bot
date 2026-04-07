@@ -50,6 +50,7 @@ const SUPPORTED_COMMANDS = new Set<string>([
   "/help",
   "/new",
   "/projects",
+  "/project",
   "/sessions",
   "/session",
   "/history",
@@ -117,7 +118,11 @@ function resolveDirectoryScope(
 export interface OpenCodeSessionClient {
   create(
     parameters?: Record<string, unknown>,
-  ): Promise<{ data?: Record<string, unknown> }>;
+  ): Promise<{ data?: Record<string, unknown>; error?: unknown }>;
+  get(parameters: {
+    sessionID: string;
+    directory?: string;
+  }): Promise<{ data?: unknown; error?: unknown }>;
   list(parameters?: {
     directory?: string;
     limit?: number;
@@ -205,8 +210,56 @@ function getTrimmedString(value: unknown): string | null {
     : null;
 }
 
+type CardActionToastType = "info" | "success" | "warning" | "error";
+
+export interface CardActionResponse {
+  toast?: {
+    type: CardActionToastType;
+    content: string;
+  };
+}
+
+function getCardActionPayload(
+  event: Record<string, unknown>,
+): Record<string, unknown> {
+  return isRecord(event.event) ? event.event : event;
+}
+
+function getCardActionValue(
+  event: Record<string, unknown>,
+): Record<string, unknown> | null {
+  const payload = getCardActionPayload(event);
+  const actionRecord = isRecord(payload.action) ? payload.action : null;
+  return actionRecord && isRecord(actionRecord.value)
+    ? actionRecord.value
+    : null;
+}
+
 function getCardActionReceiveId(event: Record<string, unknown>): string {
-  return typeof event.open_chat_id === "string" ? event.open_chat_id : "";
+  const payload = getCardActionPayload(event);
+  const context = isRecord(payload.context) ? payload.context : null;
+
+  return typeof payload.open_chat_id === "string"
+    ? payload.open_chat_id
+    : typeof context?.open_chat_id === "string"
+      ? context.open_chat_id
+      : "";
+}
+
+function buildCardActionToast(
+  content: string | undefined,
+  type: CardActionToastType,
+): CardActionResponse {
+  if (!content) {
+    return {};
+  }
+
+  return {
+    toast: {
+      type,
+      content,
+    },
+  };
 }
 
 export class ControlRouter {
@@ -267,7 +320,11 @@ export class ControlRouter {
         : normalizedInput.slice(0, whitespaceIndex);
     const commandPart = commandRaw.toLowerCase();
     const normalizedCommandPart =
-      commandPart === "/models" ? "/model" : commandPart;
+      commandPart === "/models"
+        ? "/model"
+        : commandPart === "/project"
+          ? "/projects"
+          : commandPart;
     const args =
       whitespaceIndex === -1
         ? undefined
@@ -320,59 +377,101 @@ export class ControlRouter {
 
   async handleCardAction(
     event: Record<string, unknown>,
-  ): Promise<Record<string, never>> {
-    const actionRecord = isRecord(event.action) ? event.action : null;
-    const value =
-      actionRecord && isRecord(actionRecord.value) ? actionRecord.value : null;
+  ): Promise<CardActionResponse> {
+    const value = getCardActionValue(event);
     const action = typeof value?.action === "string" ? value.action : null;
 
-    switch (action) {
-      case "select_session": {
-        const sessionId =
-          typeof value?.sessionId === "string" ? value.sessionId : null;
-        if (sessionId) {
-          await this.handleSession(getCardActionReceiveId(event), sessionId);
+    if (!action) {
+      return {};
+    }
+
+    try {
+      switch (action) {
+        case "select_session": {
+          const sessionId =
+            typeof value?.sessionId === "string" ? value.sessionId : null;
+          if (!sessionId) {
+            return {};
+          }
+
+          const result = await this.handleSession(
+            getCardActionReceiveId(event),
+            sessionId,
+          );
+          return buildCardActionToast(
+            result.message,
+            result.success ? "success" : "error",
+          );
         }
-        break;
-      }
-      case "select_model": {
-        const modelName =
-          typeof value?.modelName === "string" ? value.modelName : null;
-        if (modelName) {
-          await this.handleModel(getCardActionReceiveId(event), modelName);
+        case "select_model": {
+          const modelName =
+            typeof value?.modelName === "string" ? value.modelName : null;
+          if (!modelName) {
+            return {};
+          }
+
+          const result = await this.handleModel(
+            getCardActionReceiveId(event),
+            modelName,
+          );
+          return buildCardActionToast(
+            result.message,
+            result.success ? "success" : "error",
+          );
         }
-        break;
-      }
-      case "select_agent": {
-        const agentName =
-          typeof value?.agentName === "string" ? value.agentName : null;
-        if (agentName) {
-          await this.handleAgent(getCardActionReceiveId(event), agentName);
+        case "select_agent": {
+          const agentName =
+            typeof value?.agentName === "string" ? value.agentName : null;
+          if (!agentName) {
+            return {};
+          }
+
+          const result = await this.handleAgent(
+            getCardActionReceiveId(event),
+            agentName,
+          );
+          return buildCardActionToast(
+            result.message,
+            result.success ? "success" : "error",
+          );
         }
-        break;
-      }
-      case "select_project": {
-        const projectId =
-          typeof value?.projectId === "string" ? value.projectId : null;
-        if (projectId) {
-          const receiveId = getCardActionReceiveId(event);
-          await this.handleProjects(receiveId, projectId);
+        case "select_project": {
+          const projectId =
+            typeof value?.projectId === "string" ? value.projectId : null;
+          if (!projectId) {
+            return {};
+          }
+
+          const result = await this.handleProjects(
+            getCardActionReceiveId(event),
+            projectId,
+          );
+          return buildCardActionToast(
+            result.message,
+            result.success ? "success" : "error",
+          );
         }
-        break;
-      }
-      case "control_cancel":
-        this.interactionManager.clearBusy();
-        break;
-      case "confirm_write": {
-        const operationId =
-          typeof value?.operationId === "string" ? value.operationId : null;
-        if (operationId === "create_new_session") {
+        case "control_cancel":
+          this.interactionManager.clearBusy();
+          return buildCardActionToast("Operation cancelled", "info");
+        case "confirm_write": {
+          const operationId =
+            typeof value?.operationId === "string" ? value.operationId : null;
+          if (operationId !== "create_new_session") {
+            return {};
+          }
+
           const receiveId = getCardActionReceiveId(event);
           try {
             const result = await this.executeCreateSession();
             if (receiveId && result.message) {
               await this.renderer.sendText(receiveId, result.message);
             }
+
+            return buildCardActionToast(
+              result.message,
+              result.success ? "success" : "error",
+            );
           } catch (error) {
             this.logger.error(
               "[ControlRouter] Failed to create session from card action",
@@ -391,22 +490,36 @@ export class ControlRouter {
                 );
               }
             }
+
+            return buildCardActionToast(
+              "Failed to create session. Please try again.",
+              "error",
+            );
           }
         }
-        break;
-      }
-      case "reject_write": {
-        const receiveId = getCardActionReceiveId(event);
-        if (receiveId) {
-          await this.renderer.sendText(receiveId, "Operation cancelled");
+        case "reject_write": {
+          const receiveId = getCardActionReceiveId(event);
+          if (receiveId) {
+            await this.renderer.sendText(receiveId, "Operation cancelled");
+          }
+          return buildCardActionToast("Operation cancelled", "info");
         }
-        break;
+        default:
+          return {};
       }
-      default:
-        break;
+    } catch (error) {
+      this.logger.error(
+        "[ControlRouter] Failed to handle control card action",
+        {
+          action,
+          error,
+        },
+      );
+      return buildCardActionToast(
+        "Failed to apply selection. Please try again.",
+        "error",
+      );
     }
-
-    return {};
   }
 
   private async handleHelp(receiveId: string): Promise<ControlCommandResult> {
@@ -478,27 +591,33 @@ export class ControlRouter {
 
   private async executeCreateSession(): Promise<ControlCommandResult> {
     try {
-      const result = await this.openCodeSession.create({});
-      const sessionData = result.data;
-      if (
-        !sessionData ||
-        typeof sessionData !== "object" ||
-        !("id" in sessionData)
-      ) {
+      const directory = resolveDirectoryScope(
+        this.settings.getCurrentProject(),
+        this.sessionManager.getCurrentSession() ?? undefined,
+      );
+      const result = await this.openCodeSession.create({ directory });
+      if (result.error) {
+        throw result.error;
+      }
+
+      const sessionInfo = this.parseSessionInfo(result.data, directory);
+      if (!sessionInfo) {
         return { success: false, message: "Failed to create session" };
       }
 
-      const sessionId = String(sessionData.id);
-      const sessionInfo: SessionInfo = {
-        id: sessionId,
-        title: "New session",
-        directory: process.cwd(),
-      };
-      this.settings.setCurrentSession(sessionInfo);
-      this.logger.info(`[ControlRouter] Created new session: ${sessionId}`);
+      this.sessionManager.setCurrentSession(sessionInfo);
+      this.logger.info(
+        `[ControlRouter] Created new session: ${sessionInfo.id}`,
+      );
+
+      const message =
+        sessionInfo.title !== sessionInfo.id
+          ? `New session selected: ${sessionInfo.title} (${sessionInfo.id})`
+          : `New session selected: ${sessionInfo.id}`;
+
       return {
         success: true,
-        message: `New session created. Session ID: ${sessionId}`,
+        message,
       };
     } catch (error) {
       this.logger.error("[ControlRouter] Failed to create session", error);
@@ -550,27 +669,49 @@ export class ControlRouter {
 
     // Switch to the specified session
     const sessionId = args.trim();
-    const currentSession = this.sessionManager.getCurrentSession();
-    if (currentSession) {
-      this.sessionManager.setCurrentSession({
-        ...currentSession,
-        id: sessionId,
-        title: currentSession.title,
-        directory: currentSession.directory,
+    try {
+      const directory = resolveDirectoryScope(
+        this.settings.getCurrentProject(),
+        this.sessionManager.getCurrentSession() ?? undefined,
+      );
+      const result = await this.openCodeSession.get({
+        sessionID: sessionId,
+        directory,
       });
-    } else {
-      this.sessionManager.setCurrentSession({
-        id: sessionId,
-        title: sessionId,
-        directory: process.cwd(),
-      });
+      if (result.error) {
+        throw result.error;
+      }
+
+      const sessionInfo = this.parseSessionInfo(result.data, directory);
+      if (!sessionInfo) {
+        const message = `Unknown session: ${sessionId}`;
+        if (receiveId) {
+          await this.renderer.sendText(receiveId, message);
+        }
+        return { success: false, message };
+      }
+
+      this.sessionManager.setCurrentSession(sessionInfo);
+      this.logger.info(
+        `[ControlRouter] Switched to session: ${sessionInfo.id}`,
+      );
+
+      const message =
+        sessionInfo.title !== sessionInfo.id
+          ? `Session selected: ${sessionInfo.title} (${sessionInfo.id})`
+          : `Session selected: ${sessionInfo.id}`;
+      if (receiveId) {
+        await this.renderer.sendText(receiveId, message);
+      }
+      return { success: true, message };
+    } catch (error) {
+      this.logger.error("[ControlRouter] Failed to select session", error);
+      const message = "Failed to switch session";
+      if (receiveId) {
+        await this.renderer.sendText(receiveId, message);
+      }
+      return { success: false, message };
     }
-    this.logger.info(`[ControlRouter] Switched to session: ${sessionId}`);
-    const message = `Session selected: ${sessionId}`;
-    if (receiveId) {
-      await this.renderer.sendText(receiveId, message);
-    }
-    return { success: true, message };
   }
 
   private parseProjects(data: unknown): ProjectSummary[] {
@@ -651,7 +792,9 @@ export class ControlRouter {
         }
 
         const projectLabel = selectedProject.name ?? selectedProject.worktree;
-        const message = `Project switched to: ${projectLabel}`;
+        const message =
+          `Project selected: ${projectLabel}\n\n` +
+          "Active session cleared. Use /sessions or /new for this project.";
         this.logger.info(
           `[ControlRouter] Switched to project: ${selectedProject.id}`,
         );
@@ -778,10 +921,14 @@ export class ControlRouter {
     const modelName = args.trim();
     const selectedModel = await this.resolveModelSelection(modelName);
     if (!selectedModel) {
+      const message =
+        "Unknown model. Use provider/model (for example openai/gpt-4o) or a unique bare model name from the catalog.";
+      if (receiveId) {
+        await this.renderer.sendText(receiveId, message);
+      }
       return {
         success: false,
-        message:
-          "Unknown model. Use provider/model (for example openai/gpt-4o) or a unique bare model name from the catalog.",
+        message,
       };
     }
 
@@ -798,6 +945,30 @@ export class ControlRouter {
     };
   }
 
+  private async resolveAgentSelection(
+    agentName: string,
+  ): Promise<string | null> {
+    const requestedAgent = agentName.trim();
+    if (!requestedAgent) {
+      return null;
+    }
+
+    const availableAgents = await this.catalogAdapter.getAvailableAgents();
+    const exactMatch = availableAgents.find(
+      (candidate) => candidate === requestedAgent,
+    );
+    if (exactMatch) {
+      return exactMatch;
+    }
+
+    const caseInsensitiveMatches = availableAgents.filter(
+      (candidate) => candidate.toLowerCase() === requestedAgent.toLowerCase(),
+    );
+    return caseInsensitiveMatches.length === 1
+      ? caseInsensitiveMatches[0]
+      : null;
+  }
+
   private async handleAgent(
     receiveId: string,
     args?: string,
@@ -810,10 +981,22 @@ export class ControlRouter {
       return { success: true, cardMessageId: messageId ?? undefined };
     }
 
-    const agentName = args.trim();
-    this.settings.setCurrentAgent(agentName);
-    this.logger.info(`[ControlRouter] Switched to agent: ${agentName}`);
-    const message = `Agent selected: ${agentName}`;
+    const selectedAgent = await this.resolveAgentSelection(args);
+    if (!selectedAgent) {
+      const message =
+        "Unknown agent. Use /agent to pick an available agent from the current catalog.";
+      if (receiveId) {
+        await this.renderer.sendText(receiveId, message);
+      }
+      return {
+        success: false,
+        message,
+      };
+    }
+
+    this.settings.setCurrentAgent(selectedAgent);
+    this.logger.info(`[ControlRouter] Switched to agent: ${selectedAgent}`);
+    const message = `Agent selected: ${selectedAgent}`;
     if (receiveId) {
       await this.renderer.sendText(receiveId, message);
     }
@@ -849,10 +1032,8 @@ export class ControlRouter {
       );
     }
 
-    let modelDisplay = fallbackModel
-      ? `${fallbackModel.providerID}/${fallbackModel.modelID}`
-      : null;
-    let agentDisplay = fallbackAgent ?? null;
+    let latestModelDisplay: string | null = null;
+    let latestAgentDisplay: string | null = null;
 
     if (currentSession) {
       try {
@@ -878,10 +1059,10 @@ export class ControlRouter {
         const agentName = info ? getTrimmedString(info.agent) : null;
 
         if (providerID && modelID) {
-          modelDisplay = `${providerID}/${modelID}`;
+          latestModelDisplay = `${providerID}/${modelID}`;
         }
         if (agentName) {
-          agentDisplay = agentName;
+          latestAgentDisplay = agentName;
         }
       } catch (error) {
         this.logger.warn(
@@ -890,6 +1071,11 @@ export class ControlRouter {
         );
       }
     }
+
+    const modelDisplay = fallbackModel
+      ? `${fallbackModel.providerID}/${fallbackModel.modelID}`
+      : latestModelDisplay;
+    const agentDisplay = fallbackAgent ?? latestAgentDisplay;
 
     let state = this.interactionManager.isBusy() ? "busy" : "idle";
     try {
@@ -982,5 +1168,25 @@ export class ControlRouter {
     }
 
     return this.parseModelSelection(suffixMatches[0]);
+  }
+
+  private parseSessionInfo(
+    data: unknown,
+    fallbackDirectory: string,
+  ): SessionInfo | null {
+    if (!isRecord(data)) {
+      return null;
+    }
+
+    const id = getTrimmedString(data.id);
+    if (!id) {
+      return null;
+    }
+
+    return {
+      id,
+      title: getTrimmedString(data.title) ?? id,
+      directory: getTrimmedString(data.directory) ?? fallbackDirectory,
+    };
   }
 }

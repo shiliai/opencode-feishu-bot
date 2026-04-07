@@ -160,4 +160,32 @@ describe("model and agent picker integration", () => {
     expect(markdownEl?.content).toContain("openai/gpt-4.1");
     expect(markdownEl?.content).toContain("oracle");
   });
+
+  it("handles nested Feishu callback payloads and returns toast feedback", async () => {
+    const harness = await createBridgeHarness();
+    harnesses.push(harness);
+
+    const result = await harness.handleCardAction({
+      event_id: "evt-model-select-nested-1",
+      event: {
+        action: {
+          value: { action: "select_model", modelName: "openai/gpt-4.1" },
+        },
+        context: {
+          open_chat_id: "chat-picker-nested",
+        },
+      },
+    });
+
+    expect(result).toEqual({
+      toast: {
+        type: "success",
+        content: "Model selected: openai/gpt-4.1",
+      },
+    });
+    expect(harness.renderer.sendText).toHaveBeenCalledWith(
+      "chat-picker-nested",
+      "Model selected: openai/gpt-4.1",
+    );
+  });
 });

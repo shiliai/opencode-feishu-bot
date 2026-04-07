@@ -12,7 +12,10 @@ import type { StoredFile } from "../feishu/file-store.js";
 import type { ResponsePipelineController } from "../feishu/response-pipeline.js";
 import type { QuestionCardHandler } from "../feishu/handlers/question.js";
 import type { PermissionCardHandler } from "../feishu/handlers/permission.js";
-import type { ControlRouter } from "../feishu/control-router.js";
+import type {
+  CardActionResponse,
+  ControlRouter,
+} from "../feishu/control-router.js";
 import type { Logger } from "../utils/logger.js";
 import { logger as defaultLogger } from "../utils/logger.js";
 import { normalizeFeishuEvent } from "../feishu/message-events.js";
@@ -96,9 +99,7 @@ export function createRuntimeEventHandlers(
   options: RuntimeEventHandlersOptions,
 ): {
   handleMessageReceived(event: FeishuMessageReceiveEvent): Promise<void>;
-  handleCardAction(
-    event: Record<string, unknown>,
-  ): Promise<Record<string, never>>;
+  handleCardAction(event: Record<string, unknown>): Promise<CardActionResponse>;
 } {
   const logger = options.logger ?? defaultLogger;
   const messageTasks = new Map<string, Promise<void>>();
@@ -263,14 +264,15 @@ export function createRuntimeEventHandlers(
 
     async handleCardAction(
       event: Record<string, unknown>,
-    ): Promise<Record<string, never>> {
+    ): Promise<CardActionResponse> {
       const queueKey = getCardActionQueueKey(event);
+      let response: CardActionResponse = {};
       await enqueueCardActionTask(queueKey, async () => {
         await options.questionCardHandler.handleCardAction(event);
         await options.permissionCardHandler.handleCardAction(event);
-        await options.controlRouter.handleCardAction(event);
+        response = await options.controlRouter.handleCardAction(event);
       });
-      return {};
+      return response;
     },
   };
 }
