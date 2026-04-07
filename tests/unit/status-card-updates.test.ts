@@ -34,7 +34,7 @@ function makeTurnContext(
   };
 }
 
-function createHarness() {
+function createHarness(options?: { imageResolver?: any }) {
   const statusStore = new StatusStore();
   let callbacks: SummaryCallbacks | undefined;
 
@@ -125,6 +125,7 @@ function createHarness() {
     eventSubscriber,
     summaryAggregator,
     renderer,
+    imageResolver: options?.imageResolver,
     settingsManager,
     interactionManager,
     statusStore,
@@ -304,5 +305,34 @@ describe("ResponsePipelineController status card throttling", () => {
 
     await vi.advanceTimersByTimeAsync(1_000);
     expect(harness.renderer.updateStatusCard).toHaveBeenCalledTimes(1);
+  });
+
+  it("resolves images during streaming status updates", async () => {
+    const mockImageResolver = {
+      resolveImages: vi.fn((text: string) =>
+        text.replace("![img](http://pending)", "![img](img_resolved)"),
+      ),
+    };
+    const harness = createHarness({ imageResolver: mockImageResolver });
+    const context = makeTurnContext();
+
+    await createLiveStatusCard(harness, context);
+
+    harness.callbacks.onPartial?.(
+      context.sessionId,
+      "assistant-msg-1",
+      "Hello ![img](http://pending)",
+    );
+    await vi.advanceTimersByTimeAsync(1_000);
+    await drainSession(harness.controller, context.sessionId);
+
+    expect(mockImageResolver.resolveImages).toHaveBeenCalled();
+    expect(harness.renderer.updateStatusCard).toHaveBeenCalledWith(
+      "status-card-1",
+      "OpenCode is working",
+      "Hello ![img](img_resolved)",
+      false,
+      "blue",
+    );
   });
 });

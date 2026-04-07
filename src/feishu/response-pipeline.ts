@@ -550,6 +550,12 @@ export class ResponsePipelineController {
     }
   }
 
+  handleImageResolved(): void {
+    for (const sessionId of this.statusStore.getSessionIds()) {
+      this.scheduleStatusCardUpdate(sessionId);
+    }
+  }
+
   handleAggregatorCleared(): void {
     const states = this.statusStore.clearAll();
     for (const state of states) {
@@ -906,8 +912,12 @@ export class ResponsePipelineController {
   }
 
   private getStatusCardContent(state: StatusTurnState): string {
+    const resolveImagesFn = this.imageResolver
+      ? (text: string) => this.imageResolver!.resolveImages(text)
+      : undefined;
     return (
-      buildStreamingStatusContent(state) || ACTIVE_STATUS_CARD_FALLBACK_TEXT
+      buildStreamingStatusContent(state, resolveImagesFn) ||
+      ACTIVE_STATUS_CARD_FALLBACK_TEXT
     );
   }
 

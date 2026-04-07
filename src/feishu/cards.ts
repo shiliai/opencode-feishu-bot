@@ -11,6 +11,10 @@ import type { SummaryTokensInfo, SummaryToolEvent } from "../summary/types.js";
 import { optimizeMarkdownStyle } from "./markdown-style.js";
 import type { StatusTurnState } from "./status-store.js";
 
+// Exported element IDs for future plugin/client reference
+export const STREAMING_ELEMENT_ID = "streaming_content";
+export const REASONING_ELEMENT_ID = "reasoning_content";
+
 type CardTemplate = "blue" | "green" | "red" | "orange" | "grey";
 
 export interface CompleteCardOptions {
@@ -133,13 +137,28 @@ export function buildCompleteCard(
   };
 }
 
-export function buildStreamingStatusContent(state: StatusTurnState): string {
+export function buildStreamingStatusContent(
+  state: StatusTurnState,
+  resolveImages?: (text: string) => string,
+): string {
   const sections: string[] = [];
-  const reasoningText = state.accumulatedReasoning?.trim();
+
+  let reasoningText = state.accumulatedReasoning?.trim() ?? "";
+  if (reasoningText && resolveImages) {
+    reasoningText = resolveImages(reasoningText);
+  }
+
   const toolSummary = formatToolSummary(state.toolEvents);
-  const optimizedAnswer = state.lastPartialText?.trim()
-    ? optimizeMarkdownStyle(state.lastPartialText.trim())
+
+  let answerContent = state.lastPartialText?.trim() ?? "";
+  if (answerContent && resolveImages) {
+    answerContent = resolveImages(answerContent);
+  }
+
+  const optimizedAnswer = answerContent
+    ? optimizeMarkdownStyle(answerContent)
     : "";
+
   const shouldShowFooter = Boolean(
     reasoningText || toolSummary || state.latestTokens,
   );

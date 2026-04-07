@@ -80,8 +80,12 @@ export async function startFeishuApp(): Promise<void> {
   const renderer = new FeishuRenderer({
     client: feishuClients.client,
   });
+  let pipelineControllerInstance: ResponsePipelineController | null = null;
   const imageResolver = new ImageResolver({
     client: feishuClients.client,
+    onImageResolved: () => {
+      pipelineControllerInstance?.handleImageResolved();
+    },
   });
 
   // Step 4: Create OpenCode client
@@ -219,6 +223,7 @@ export async function startFeishuApp(): Promise<void> {
     statusStore,
     config,
   });
+  pipelineControllerInstance = pipelineController;
 
   // Step 8: Create event router with message and card action handlers
   const deduplicator = createEventDeduplicator(config);
