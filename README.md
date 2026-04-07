@@ -56,26 +56,29 @@ The service exposes `/healthz` on the same HTTP server used for Feishu card call
 
 The bridge currently supports these slash commands in Feishu chat:
 
-| Command         | Usage                  | What it does                                                      |
-| --------------- | ---------------------- | ----------------------------------------------------------------- |
-| `/help`         | `/help`                | Shows the command help card                                       |
-| `/new`          | `/new`                 | Opens a confirmation card before creating and switching session   |
-| `/sessions`     | `/sessions`            | Lists available/recent sessions                                   |
-| `/session`      | `/session`             | Opens a session picker card                                       |
-| `/session [id]` | `/session ses_xxx`     | Switches current session to the given id                          |
-| `/history`      | `/history`             | Shows recent chat message history (default 10)                    |
-| `/history [n]`  | `/history 20`          | Shows up to `n` recent chat messages (max 50)                     |
-| `/model`        | `/model`               | Opens model picker card (shows currently available model entries) |
-| `/model [name]` | `/model openai/gpt-4o` | Sets current model to `[name]`                                    |
-| `/agent`        | `/agent`               | Opens agent picker card (shows currently available agent entries) |
-| `/agent [name]` | `/agent build`         | Sets current agent to `[name]`                                    |
-| `/status`       | `/status`              | Shows current Session / Model / Agent / State                     |
-| `/abort`        | `/abort`               | Aborts the current session and clears busy state                  |
+| Command          | Usage                  | What it does                                                      |
+| ---------------- | ---------------------- | ----------------------------------------------------------------- |
+| `/help`          | `/help`                | Shows the command help card                                       |
+| `/new`           | `/new`                 | Opens a confirmation card before creating and switching session   |
+| `/projects`      | `/projects`            | Opens project picker card (or text list when card callbacks off)  |
+| `/projects [id]` | `/projects proj_xxx`   | Sets current project to `[id]` and clears active session          |
+| `/sessions`      | `/sessions`            | Lists available/recent sessions                                   |
+| `/session`       | `/session`             | Opens a session picker card                                       |
+| `/session [id]`  | `/session ses_xxx`     | Switches current session to the given id                          |
+| `/history`       | `/history`             | Shows recent chat message history (default 10)                    |
+| `/history [n]`   | `/history 20`          | Shows up to `n` recent chat messages (max 50)                     |
+| `/model`         | `/model`               | Opens model picker card (shows currently available model entries) |
+| `/model [name]`  | `/model openai/gpt-4o` | Sets current model to `[name]`                                    |
+| `/agent`         | `/agent`               | Opens agent picker card (shows currently available agent entries) |
+| `/agent [name]`  | `/agent build`         | Sets current agent to `[name]`                                    |
+| `/status`        | `/status`              | Shows current Session / Model / Agent / State                     |
+| `/abort`         | `/abort`               | Aborts the current session and clears busy state                  |
 
 ### Notes on command behavior
 
 - `State` in `/status` is from the interaction manager (`idle` or `busy`).
 - `/new` now requires explicit confirmation from the card button before a new session is created.
+- When Feishu card callbacks are not configured, `/new` falls back to immediate session creation to avoid callback error `200340`.
 - `/history` reads recent messages from the current chat and renders them as a history card.
 - If no model/agent has been set yet, `/status` shows `Model: none` / `Agent: none`.
 - During busy periods, control commands such as `/status`, `/help`, and `/abort` are still allowed.

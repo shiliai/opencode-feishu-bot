@@ -258,3 +258,24 @@ export function createAgentCardAction(options: {
     },
   };
 }
+
+export function createProjectCardAction(options: {
+  projectId: string;
+  chatId?: string;
+  eventId?: string;
+  messageId?: string;
+}): Record<string, unknown> {
+  return {
+    event_id:
+      options.eventId ??
+      `card-project-${options.projectId.replace(/[^a-zA-Z0-9_-]/g, "-")}`,
+    open_message_id: options.messageId ?? "card-message-project",
+    open_chat_id: options.chatId ?? "chat-1",
+    action: {
+      value: {
+        action: "select_project",
+        projectId: options.projectId,
+      },
+    },
+  };
+}

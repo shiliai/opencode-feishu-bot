@@ -75,6 +75,48 @@ describe("ControlCatalogAdapter", () => {
     });
   });
 
+  it("falls back to unscoped providers when scoped provider list is empty", async () => {
+    const settingsManager = createMockSettingsManager();
+    const openCodeClient = createMockOpenCodeClient();
+    openCodeClient.config.providers
+      .mockResolvedValueOnce({
+        data: {
+          providers: [],
+          default: {},
+        },
+      })
+      .mockResolvedValueOnce({
+        data: {
+          providers: [
+            {
+              id: "openai",
+              models: {
+                "gpt-4o": {},
+              },
+            },
+          ],
+          default: {},
+        },
+      });
+
+    const adapter = new ControlCatalogAdapter({
+      settingsManager: settingsManager as never,
+      openCodeClient: openCodeClient as never,
+      cacheTtlMs: 60_000,
+    });
+
+    const models = await adapter.getAvailableModels();
+
+    expect(models).toEqual(["openai/gpt-4o"]);
+    expect(openCodeClient.config.providers).toHaveBeenNthCalledWith(1, {
+      directory: "/workspace/project",
+    });
+    expect(openCodeClient.config.providers).toHaveBeenNthCalledWith(
+      2,
+      undefined,
+    );
+  });
+
   it("loads agents from OpenCode app catalog with hidden/mode filtering", async () => {
     const settingsManager = createMockSettingsManager();
     const openCodeClient = createMockOpenCodeClient();

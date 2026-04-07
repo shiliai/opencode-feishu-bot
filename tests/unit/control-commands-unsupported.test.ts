@@ -68,6 +68,9 @@ function createMockOpenCodeClient() {
         .fn()
         .mockResolvedValue({ data: { providers: [], default: {} } }),
     },
+    project: {
+      list: vi.fn().mockResolvedValue({ data: [] }),
+    },
   };
 }
 
@@ -217,6 +220,18 @@ describe("ControlRouter — unsupported commands", () => {
     });
     expect(router.parseCommand("\u200b/history")).toEqual({
       command: "/history",
+    });
+  });
+
+  it("parseCommand accepts /projects with and without args", () => {
+    const router = createRouter();
+
+    expect(router.parseCommand("/projects")).toEqual({
+      command: "/projects",
+    });
+    expect(router.parseCommand("/projects project-1")).toEqual({
+      command: "/projects",
+      args: "project-1",
     });
   });
 });

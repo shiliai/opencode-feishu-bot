@@ -77,6 +77,22 @@ function createMockOpenCodeClient() {
         },
       }),
     },
+    project: {
+      list: vi.fn().mockResolvedValue({
+        data: [
+          {
+            id: "project-1",
+            worktree: "/workspace/project-1",
+            name: "Project One",
+          },
+          {
+            id: "project-2",
+            worktree: "/workspace/project-2",
+            name: "Project Two",
+          },
+        ],
+      }),
+    },
   };
 }
 
@@ -172,6 +188,31 @@ describe("ControlRouter — command dispatch", () => {
     });
   });
 
+  it("/new creates session immediately when card callbacks are disabled", async () => {
+    const renderer = createMockRenderer();
+    const openCodeClient = createMockOpenCodeClient();
+    const settings = createMockSettings();
+    const router = createRouter({
+      renderer,
+      openCodeClient,
+      settingsManager: settings,
+      cardActionsEnabled: false,
+    });
+
+    const result = await router.handleCommand("chat-1", "/new");
+
+    expect(result.success).toBe(true);
+    expect(openCodeClient.session.create).toHaveBeenCalledTimes(1);
+    expect(renderer.sendCard).not.toHaveBeenCalled();
+    expect(renderer.sendText).toHaveBeenCalledWith(
+      "chat-1",
+      expect.stringContaining("Session created:"),
+    );
+    expect(settings.setCurrentSession).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "new-session-1" }),
+    );
+  });
+
   it("/new sends fallback text when confirmation card send fails", async () => {
     const renderer = createMockRenderer();
     renderer.sendCard.mockRejectedValueOnce(new Error("card send failed"));
@@ -202,6 +243,66 @@ describe("ControlRouter — command dispatch", () => {
     expect(renderer.sendCard).toHaveBeenCalledTimes(1);
     const sentCard = renderer.sendCard.mock.calls[0][1];
     expect(sentCard.header.title.content).toBe("Sessions");
+  });
+
+  it("/projects without args renders project picker card", async () => {
+    const renderer = createMockRenderer();
+    const openCodeClient = createMockOpenCodeClient();
+    const router = createRouter({ renderer, openCodeClient });
+
+    const result = await router.handleCommand("chat-1", "/projects");
+
+    expect(result.success).toBe(true);
+    expect(openCodeClient.project.list).toHaveBeenCalledTimes(1);
+    expect(renderer.sendCard).toHaveBeenCalledTimes(1);
+    const sentCard = renderer.sendCard.mock.calls[0][1];
+    expect(sentCard.header.title.content).toBe("Projects");
+  });
+
+  it("/projects <id> switches project and clears session", async () => {
+    const renderer = createMockRenderer();
+    const openCodeClient = createMockOpenCodeClient();
+    const settings = createMockSettings();
+    const sessionManager = createMockSessionManager();
+    const router = createRouter({
+      renderer,
+      openCodeClient,
+      settingsManager: settings,
+      sessionManager,
+    });
+
+    const result = await router.handleCommand("chat-1", "/projects project-2");
+
+    expect(result.success).toBe(true);
+    expect(settings.setCurrentProject).toHaveBeenCalledWith({
+      id: "project-2",
+      worktree: "/workspace/project-2",
+      name: "Project Two",
+    });
+    expect(sessionManager.clearSession).toHaveBeenCalledTimes(1);
+    expect(renderer.sendText).toHaveBeenCalledWith(
+      "chat-1",
+      expect.stringContaining("Project switched to"),
+    );
+  });
+
+  it("/projects falls back to text list when card callbacks are disabled", async () => {
+    const renderer = createMockRenderer();
+    const openCodeClient = createMockOpenCodeClient();
+    const router = createRouter({
+      renderer,
+      openCodeClient,
+      cardActionsEnabled: false,
+    });
+
+    const result = await router.handleCommand("chat-1", "/projects");
+
+    expect(result.success).toBe(true);
+    expect(renderer.sendCard).not.toHaveBeenCalled();
+    expect(renderer.sendText).toHaveBeenCalledWith(
+      "chat-1",
+      expect.stringContaining("Use /projects <id>"),
+    );
   });
 
   it("/session <id> switches to specified session", async () => {

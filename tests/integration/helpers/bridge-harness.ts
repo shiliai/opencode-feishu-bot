@@ -63,6 +63,9 @@ interface MockOpenCodeClients {
   config: {
     providers: ReturnType<typeof vi.fn>;
   };
+  project: {
+    list: ReturnType<typeof vi.fn>;
+  };
   question: {
     reply: ReturnType<typeof vi.fn>;
   };
@@ -153,6 +156,17 @@ function createOpenCodeClients(): MockOpenCodeClients {
           ],
           default: {},
         },
+      }),
+    },
+    project: {
+      list: vi.fn().mockResolvedValue({
+        data: [
+          {
+            id: "project-1",
+            worktree: "/workspace/project",
+            name: "Integration Project",
+          },
+        ],
       }),
     },
     question: {

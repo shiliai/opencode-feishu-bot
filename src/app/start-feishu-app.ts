@@ -173,6 +173,9 @@ export async function startFeishuApp(): Promise<void> {
     catalogModelStatePath: config.controlCatalog.modelStatePath,
     messageReader,
     interactionManager: managers.interaction,
+    cardActionsEnabled: Boolean(
+      config.cardCallback && feishuClients.cardActionHandler,
+    ),
     logger,
   });
 

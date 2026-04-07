@@ -275,17 +275,7 @@ export class ControlCatalogAdapter implements ControlCatalogProvider {
   }
 
   private async fetchModels(directory: string): Promise<string[]> {
-    const response = await this.openCodeClient.config.providers({ directory });
-    const responseError = extractClientError(response);
-    if (responseError !== undefined && responseError !== null) {
-      throw responseError;
-    }
-
-    if (response.data === undefined || response.data === null) {
-      throw new Error("providers() returned no data");
-    }
-
-    const providers = this.extractProviders(response.data);
+    const providers = await this.fetchProvidersWithFallback(directory);
     this.logger.debug(
       `[ControlCatalogAdapter] Loaded ${providers.length} provider entries for directory=${directory}`,
     );
@@ -334,6 +324,61 @@ export class ControlCatalogAdapter implements ControlCatalogProvider {
     const preferredSet = new Set(preferredAvailable);
     const remainder = catalogModels.filter((model) => !preferredSet.has(model));
     return [...preferredAvailable, ...remainder];
+  }
+
+  private async fetchProvidersWithFallback(
+    directory: string,
+  ): Promise<unknown[]> {
+    const scoped = await this.fetchProviders({ directory });
+    if (scoped.error) {
+      throw scoped.error;
+    }
+
+    if (scoped.providers.length > 0) {
+      return scoped.providers;
+    }
+
+    this.logger.warn(
+      `[ControlCatalogAdapter] Empty model provider catalog for directory=${directory}; retrying without directory scope`,
+    );
+
+    const fallback = await this.fetchProviders();
+    if (fallback.providers.length > 0) {
+      return fallback.providers;
+    }
+
+    if (fallback.error) {
+      throw fallback.error;
+    }
+
+    return [];
+  }
+
+  private async fetchProviders(parameters?: {
+    directory?: string;
+    workspace?: string;
+  }): Promise<{ providers: unknown[]; error: unknown | null }> {
+    try {
+      const response = await this.openCodeClient.config.providers(parameters);
+      const responseError = extractClientError(response);
+      if (responseError !== undefined && responseError !== null) {
+        return { providers: [], error: responseError };
+      }
+
+      if (response.data === undefined || response.data === null) {
+        return {
+          providers: [],
+          error: new Error("providers() returned no data"),
+        };
+      }
+
+      return {
+        providers: this.extractProviders(response.data),
+        error: null,
+      };
+    } catch (error) {
+      return { providers: [], error };
+    }
   }
 
   private async loadPreferredModels(): Promise<string[]> {

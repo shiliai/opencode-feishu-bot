@@ -11,12 +11,13 @@ import type {
 import type { Logger } from "../utils/logger.js";
 import { buildConfirmCard } from "./cards.js";
 import type { FeishuClients } from "./client.js";
-import type { SessionSummary } from "./control-cards.js";
+import type { ProjectSummary, SessionSummary } from "./control-cards.js";
 import {
   buildAgentPickerCard,
   buildHelpCard,
   buildHistoryCard,
   buildModelPickerCard,
+  buildProjectPickerCard,
   buildSessionListCard,
   buildStatusCard,
 } from "./control-cards.js";
@@ -30,6 +31,7 @@ import { MessageReader } from "./message-reader.js";
 export type ControlCommand =
   | "/help"
   | "/new"
+  | "/projects"
   | "/sessions"
   | "/session"
   | "/history"
@@ -47,6 +49,7 @@ export interface ControlCommandResult {
 const SUPPORTED_COMMANDS = new Set<string>([
   "/help",
   "/new",
+  "/projects",
   "/sessions",
   "/session",
   "/history",
@@ -123,13 +126,22 @@ export interface OpenCodeSessionClient {
   abort(parameters?: Record<string, unknown>): Promise<{ data?: unknown }>;
 }
 
+export interface OpenCodeProjectClient {
+  list(parameters?: {
+    directory?: string;
+    workspace?: string;
+  }): Promise<{ data?: unknown; error?: unknown }>;
+}
+
 export interface OpenCodeControlClient extends OpenCodeControlCatalogClient {
   session: OpenCodeSessionClient;
+  project: OpenCodeProjectClient;
 }
 
 export type ControlRouterSettingsStore = Pick<
   SettingsManager,
   | "getCurrentProject"
+  | "setCurrentProject"
   | "getCurrentSession"
   | "setCurrentSession"
   | "getCurrentAgent"
@@ -140,7 +152,7 @@ export type ControlRouterSettingsStore = Pick<
 
 export type ControlRouterSessionStore = Pick<
   SessionManager,
-  "getCurrentSession" | "setCurrentSession"
+  "getCurrentSession" | "setCurrentSession" | "clearSession"
 >;
 
 export type ControlRouterRenderer = Pick<
@@ -164,6 +176,7 @@ export interface ControlRouterOptions {
   catalogModelStatePath?: string;
   messageReader?: MessageReader;
   interactionManager: ControlRouterInteractionStore;
+  cardActionsEnabled?: boolean;
   logger?: Logger;
 }
 
@@ -180,7 +193,9 @@ export class ControlRouter {
   private readonly sessionManager: ControlRouterSessionStore;
   private readonly renderer: ControlRouterRenderer;
   private readonly openCodeSession: OpenCodeSessionClient;
+  private readonly openCodeProject: OpenCodeProjectClient;
   private readonly interactionManager: ControlRouterInteractionStore;
+  private readonly cardActionsEnabled: boolean;
   private readonly logger: Logger;
   private readonly catalogAdapter: ControlCatalogProvider;
   private readonly messageReader: MessageReader | null;
@@ -190,7 +205,9 @@ export class ControlRouter {
     this.sessionManager = options.sessionManager;
     this.renderer = options.renderer;
     this.openCodeSession = options.openCodeClient.session;
+    this.openCodeProject = options.openCodeClient.project;
     this.interactionManager = options.interactionManager;
+    this.cardActionsEnabled = options.cardActionsEnabled ?? true;
     this.logger = options.logger ?? createNoopLogger();
     this.messageReader =
       options.messageReader ??
@@ -254,6 +271,8 @@ export class ControlRouter {
         return this.handleHelp(receiveId);
       case "/new":
         return this.handleNew(receiveId);
+      case "/projects":
+        return this.handleProjects(receiveId, args);
       case "/sessions":
         return this.handleSessions(receiveId);
       case "/session":
@@ -304,6 +323,16 @@ export class ControlRouter {
         }
         break;
       }
+      case "select_project": {
+        const projectId =
+          typeof value?.projectId === "string" ? value.projectId : null;
+        if (projectId) {
+          const receiveId =
+            typeof event.open_chat_id === "string" ? event.open_chat_id : "";
+          await this.handleProjects(receiveId, projectId);
+        }
+        break;
+      }
       case "control_cancel":
         this.interactionManager.clearBusy();
         break;
@@ -313,9 +342,29 @@ export class ControlRouter {
         if (operationId === "create_new_session") {
           const receiveId =
             typeof event.open_chat_id === "string" ? event.open_chat_id : "";
-          const result = await this.executeCreateSession();
-          if (receiveId && result.message) {
-            await this.renderer.sendText(receiveId, result.message);
+          try {
+            const result = await this.executeCreateSession();
+            if (receiveId && result.message) {
+              await this.renderer.sendText(receiveId, result.message);
+            }
+          } catch (error) {
+            this.logger.error(
+              "[ControlRouter] Failed to create session from card action",
+              error,
+            );
+            if (receiveId) {
+              try {
+                await this.renderer.sendText(
+                  receiveId,
+                  "Failed to create session. Please try again.",
+                );
+              } catch (sendError) {
+                this.logger.error(
+                  "[ControlRouter] Failed to send session creation error message",
+                  sendError,
+                );
+              }
+            }
           }
         }
         break;
@@ -342,6 +391,17 @@ export class ControlRouter {
   }
 
   private async handleNew(receiveId: string): Promise<ControlCommandResult> {
+    if (!this.cardActionsEnabled) {
+      this.logger.warn(
+        "[ControlRouter] Card callbacks are disabled; /new will create a session immediately",
+      );
+      const result = await this.executeCreateSession();
+      if (result.message) {
+        await this.renderer.sendText(receiveId, result.message);
+      }
+      return result;
+    }
+
     const card = buildConfirmCard({
       operationDescription:
         "This will create a new OpenCode session and reset the current session. Continue?",
@@ -479,6 +539,146 @@ export class ControlRouter {
     }
     this.logger.info(`[ControlRouter] Switched to session: ${sessionId}`);
     return { success: true, message: `Switched to session: ${sessionId}` };
+  }
+
+  private parseProjects(data: unknown): ProjectSummary[] {
+    if (!Array.isArray(data)) {
+      return [];
+    }
+
+    const projects: ProjectSummary[] = [];
+    for (const candidate of data) {
+      if (!isRecord(candidate)) {
+        continue;
+      }
+
+      const id = typeof candidate.id === "string" ? candidate.id.trim() : "";
+      const worktree =
+        typeof candidate.worktree === "string" ? candidate.worktree.trim() : "";
+      const name =
+        typeof candidate.name === "string" ? candidate.name.trim() : undefined;
+
+      if (!id || !worktree) {
+        continue;
+      }
+
+      projects.push({
+        id,
+        worktree,
+        name: name && name.length > 0 ? name : undefined,
+      });
+    }
+
+    return projects;
+  }
+
+  private async listProjects(): Promise<ProjectSummary[]> {
+    const result = await this.openCodeProject.list();
+    if (result.error) {
+      throw result.error;
+    }
+
+    return this.parseProjects(result.data);
+  }
+
+  private async selectProject(
+    projectId: string,
+  ): Promise<ProjectSummary | null> {
+    const projects = await this.listProjects();
+    const selectedProject = projects.find(
+      (project) => project.id === projectId,
+    );
+    if (!selectedProject) {
+      return null;
+    }
+
+    this.settings.setCurrentProject({
+      id: selectedProject.id,
+      worktree: selectedProject.worktree,
+      name: selectedProject.name,
+    });
+    this.sessionManager.clearSession();
+
+    return selectedProject;
+  }
+
+  private async handleProjects(
+    receiveId: string,
+    args?: string,
+  ): Promise<ControlCommandResult> {
+    const requestedProjectId = args?.trim();
+    if (requestedProjectId) {
+      try {
+        const selectedProject = await this.selectProject(requestedProjectId);
+        if (!selectedProject) {
+          const message = `Unknown project: ${requestedProjectId}`;
+          if (receiveId) {
+            await this.renderer.sendText(receiveId, message);
+          }
+          return { success: false, message };
+        }
+
+        const projectLabel = selectedProject.name ?? selectedProject.worktree;
+        const message = `Project switched to: ${projectLabel}`;
+        this.logger.info(
+          `[ControlRouter] Switched to project: ${selectedProject.id}`,
+        );
+        if (receiveId) {
+          await this.renderer.sendText(receiveId, message);
+        }
+
+        return { success: true, message };
+      } catch (error) {
+        this.logger.error("[ControlRouter] Failed to select project", error);
+        const message = "Failed to switch project";
+        if (receiveId) {
+          await this.renderer.sendText(receiveId, message);
+        }
+        return { success: false, message };
+      }
+    }
+
+    try {
+      const projects = await this.listProjects();
+      if (projects.length === 0) {
+        const message = "No projects available.";
+        if (receiveId) {
+          await this.renderer.sendText(receiveId, message);
+        }
+        return { success: true, message };
+      }
+
+      if (!this.cardActionsEnabled) {
+        const listedProjects = projects.slice(0, 20);
+        const lines = listedProjects.map((project) => {
+          const label = project.name ?? project.worktree;
+          return `- ${project.id} — ${label}`;
+        });
+        const hiddenCount = Math.max(
+          0,
+          projects.length - listedProjects.length,
+        );
+        const hiddenNotice =
+          hiddenCount > 0 ? `\n…and ${hiddenCount} more projects.` : "";
+        const message = `Projects:\n${lines.join("\n")}${hiddenNotice}\n\nUse /projects <id> to select a project.`;
+        if (receiveId) {
+          await this.renderer.sendText(receiveId, message);
+        }
+        return { success: true, message: `Listed ${projects.length} projects` };
+      }
+
+      const currentProject = this.settings.getCurrentProject();
+      const card = buildProjectPickerCard(projects, currentProject?.id);
+      const messageId = await this.renderer.sendCard(receiveId, card);
+      return { success: true, cardMessageId: messageId ?? undefined };
+    } catch (error) {
+      this.logger.error("[ControlRouter] Failed to list projects", error);
+      const message = "Failed to list projects";
+      if (receiveId) {
+        await this.renderer.sendText(receiveId, message);
+      }
+      return { success: false, message };
+    }
   }
 
   private parseHistoryCount(args?: string): number {

@@ -5,6 +5,7 @@ import {
   buildSessionListCard,
   buildModelPickerCard,
   buildAgentPickerCard,
+  buildProjectPickerCard,
 } from "../../src/feishu/control-cards.js";
 
 function createMockSettings() {
@@ -91,6 +92,17 @@ function createMockOpenCodeClient() {
           ],
           default: {},
         },
+      }),
+    },
+    project: {
+      list: vi.fn().mockResolvedValue({
+        data: [
+          {
+            id: "project-1",
+            worktree: "/workspace/project-1",
+            name: "Project One",
+          },
+        ],
       }),
     },
   };
@@ -258,6 +270,11 @@ describe("Selection card builders", () => {
       action: "select_session",
       sessionId: "sess-2",
     });
+
+    const markdownEl = card.elements?.find(
+      (el: { tag: string }) => el.tag === "markdown",
+    ) as { content?: string } | undefined;
+    expect(markdownEl?.content).toContain("Select a session");
   });
 
   it("buildSessionListCard handles empty sessions", () => {
@@ -285,6 +302,26 @@ describe("Selection card builders", () => {
     });
   });
 
+  it("buildModelPickerCard caps button count and preserves choices", () => {
+    const models = Array.from(
+      { length: 30 },
+      (_, index) => `provider/model-${index}`,
+    );
+    const card = buildModelPickerCard(models);
+
+    const actionElements = card.elements?.filter(
+      (el: { tag: string }) => el.tag === "action",
+    ) as Array<{ actions: Array<{ value: { modelName?: string } }> }>;
+    const modelNames = actionElements.flatMap((el) =>
+      el.actions.map((action) => action.value.modelName),
+    );
+
+    expect(modelNames).toHaveLength(20);
+    expect(modelNames).toContain("provider/model-0");
+    expect(modelNames).toContain("provider/model-19");
+    expect(modelNames).not.toContain("provider/model-20");
+  });
+
   it("buildAgentPickerCard renders agents as buttons", () => {
     const card = buildAgentPickerCard(["build", "oracle"]);
 
@@ -299,6 +336,38 @@ describe("Selection card builders", () => {
     expect(actions[0].value).toEqual({
       action: "select_agent",
       agentName: "build",
+    });
+  });
+
+  it("buildProjectPickerCard renders projects as buttons", () => {
+    const card = buildProjectPickerCard(
+      [
+        {
+          id: "project-1",
+          worktree: "/workspace/project-1",
+          name: "Project One",
+        },
+        {
+          id: "project-2",
+          worktree: "/workspace/project-2",
+          name: "Project Two",
+        },
+      ],
+      "project-2",
+    );
+
+    expect(card.header?.title?.content).toBe("Projects");
+    const actionEl = card.elements?.find(
+      (el: { tag: string }) => el.tag === "action",
+    );
+    expect(actionEl).toBeDefined();
+    const actions = (
+      actionEl as { actions: Array<{ value: Record<string, unknown> }> }
+    ).actions;
+    expect(actions).toHaveLength(2);
+    expect(actions[0].value).toEqual({
+      action: "select_project",
+      projectId: "project-1",
     });
   });
 
@@ -345,5 +414,25 @@ describe("Selection card builders", () => {
       modelID: "gpt-4.1",
     });
     expect(settings.setCurrentAgent).toHaveBeenCalledWith("oracle");
+  });
+
+  it("handleCardAction switches project from project picker", async () => {
+    const settings = createMockSettings();
+    const sessionManager = createMockSessionManager();
+    const router = createRouter({ settingsManager: settings, sessionManager });
+
+    await router.handleCardAction({
+      open_chat_id: "chat-1",
+      action: {
+        value: { action: "select_project", projectId: "project-1" },
+      },
+    });
+
+    expect(settings.setCurrentProject).toHaveBeenCalledWith({
+      id: "project-1",
+      worktree: "/workspace/project-1",
+      name: "Project One",
+    });
+    expect(sessionManager.clearSession).toHaveBeenCalledTimes(1);
   });
 });
