@@ -1,15 +1,23 @@
 import { describe, expect, it, vi } from "vitest";
-import type { SettingsManager } from "../../src/settings/manager.js";
-import type { InteractionManager } from "../../src/interaction/manager.js";
 import type { FeishuMessageReceiveEvent } from "../../src/feishu/event-router.js";
-import type { OpenCodeSessionClient } from "../../src/feishu/handlers/session-resolution.js";
 import {
-  PromptIngressHandler,
   type OpenCodePromptAsyncClient,
   type OpenCodeSessionStatusClient,
+  PromptIngressHandler,
 } from "../../src/feishu/handlers/prompt.js";
+import type { OpenCodeSessionClient } from "../../src/feishu/handlers/session-resolution.js";
+import type { MessageReader } from "../../src/feishu/message-reader.js";
+import type { InteractionManager } from "../../src/interaction/manager.js";
+import type { SettingsManager } from "../../src/settings/manager.js";
+import type { Logger } from "../../src/utils/logger.js";
 
-function createMockSettings(overrides?: Partial<SettingsManager>): SettingsManager {
+type PromptAsyncParams = Parameters<
+  OpenCodePromptAsyncClient["promptAsync"]
+>[0];
+
+function createMockSettings(
+  overrides?: Partial<SettingsManager>,
+): SettingsManager {
   return {
     getCurrentProject: vi.fn().mockReturnValue(undefined),
     getCurrentSession: vi.fn().mockReturnValue(undefined),
@@ -25,7 +33,9 @@ function createMockSettings(overrides?: Partial<SettingsManager>): SettingsManag
 
 function createMockInteractionManager(): InteractionManager {
   return {
-    resolveGuardDecision: vi.fn().mockReturnValue({ allow: true, inputType: "text", state: null }),
+    resolveGuardDecision: vi
+      .fn()
+      .mockReturnValue({ allow: true, inputType: "text", state: null }),
     startBusy: vi.fn(),
     clearBusy: vi.fn(),
     get: vi.fn(),
@@ -58,7 +68,10 @@ function makeDmTextEvent(text: string): FeishuMessageReceiveEvent {
   };
 }
 
-function makeGroupMentionEvent(text: string, botOpenId: string): FeishuMessageReceiveEvent {
+function makeGroupMentionEvent(
+  text: string,
+  botOpenId: string,
+): FeishuMessageReceiveEvent {
   return {
     header: { event_id: "evt-2", event_type: "im.message.receive_v1" },
     event: {
@@ -84,6 +97,28 @@ function makeGroupMentionEvent(text: string, botOpenId: string): FeishuMessageRe
   };
 }
 
+function createMockMessageReader(): MessageReader {
+  return {
+    getChatMessages: vi.fn().mockResolvedValue([]),
+    searchMessages: vi.fn().mockResolvedValue([]),
+  } as unknown as MessageReader;
+}
+
+function createMockLogger(): Logger {
+  return {
+    debug: vi.fn(),
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+  };
+}
+
+async function runScheduledTasks(tasks: Array<() => void>): Promise<void> {
+  for (const task of tasks) {
+    await task();
+  }
+}
+
 describe("PromptIngressHandler", () => {
   it("dispatches a DM text prompt and returns immediately without awaiting promptAsync", async () => {
     const settings = createMockSettings({
@@ -95,12 +130,19 @@ describe("PromptIngressHandler", () => {
     const interactionManager = createMockInteractionManager();
     const openCodeSession: OpenCodeSessionClient = {
       create: vi.fn().mockResolvedValue({
-        data: { id: "sess-1", title: "Session", directory: "/workspace/project" },
+        data: {
+          id: "sess-1",
+          title: "Session",
+          directory: "/workspace/project",
+        },
         error: undefined,
       }),
     };
     const openCodeSessionStatus: OpenCodeSessionStatusClient = {
-      status: vi.fn().mockResolvedValue({ data: { "sess-1": { type: "idle" } }, error: undefined }),
+      status: vi.fn().mockResolvedValue({
+        data: { "sess-1": { type: "idle" } },
+        error: undefined,
+      }),
     };
 
     let promptAsyncCalled = false;
@@ -123,7 +165,9 @@ describe("PromptIngressHandler", () => {
       scheduleAsync: (task) => scheduledTasks.push(task),
     });
 
-    const result = await handler.handleMessageEvent(makeDmTextEvent("Hello, fix the bug"));
+    const result = await handler.handleMessageEvent(
+      makeDmTextEvent("Hello, fix the bug"),
+    );
 
     expect(result.kind).toBe("dispatched");
     if (result.kind !== "dispatched") {
@@ -140,7 +184,9 @@ describe("PromptIngressHandler", () => {
 
     expect(promptAsyncCalled).toBe(true);
     expect(promptAsyncResolved).toBe(true);
-    expect(interactionManager.startBusy).toHaveBeenCalledWith({ messageId: "msg-1" });
+    expect(interactionManager.startBusy).toHaveBeenCalledWith({
+      messageId: "msg-1",
+    });
   });
 
   it("dispatches a group-mention text prompt and strips @_user_N placeholders", async () => {
@@ -160,9 +206,12 @@ describe("PromptIngressHandler", () => {
       create: vi.fn(),
     };
     const openCodeSessionStatus: OpenCodeSessionStatusClient = {
-      status: vi.fn().mockResolvedValue({ data: { "sess-existing": { type: "idle" } }, error: undefined }),
+      status: vi.fn().mockResolvedValue({
+        data: { "sess-existing": { type: "idle" } },
+        error: undefined,
+      }),
     };
-    const promptAsyncCalls: Array<unknown[]> = [];
+    const promptAsyncCalls: PromptAsyncParams[] = [];
     const openCodePromptAsync: OpenCodePromptAsyncClient = {
       promptAsync: vi.fn().mockImplementation(async (params) => {
         promptAsyncCalls.push(params);
@@ -195,11 +244,384 @@ describe("PromptIngressHandler", () => {
     }
 
     expect(promptAsyncCalls).toHaveLength(1);
-    const callParams = promptAsyncCalls[0] as Record<string, unknown>;
+    const callParams = promptAsyncCalls[0];
     expect(callParams.sessionID).toBe("sess-existing");
-    expect((callParams.parts as Array<{ type: string; text: string }>).map((p) => p.text)).toEqual([
-      "fix the types",
+    expect(
+      (callParams.parts as Array<{ type: string; text: string }>).map(
+        (p) => p.text,
+      ),
+    ).toEqual(["fix the types"]);
+  });
+
+  it("prepends recent chat history context before the current prompt parts", async () => {
+    const settings = createMockSettings({
+      getCurrentProject: vi.fn().mockReturnValue({
+        id: "proj-1",
+        worktree: "/workspace/project",
+      }),
+      getCurrentSession: vi.fn().mockReturnValue({
+        id: "sess-1",
+        title: "Existing",
+        directory: "/workspace/project",
+      }),
+    });
+    const interactionManager = createMockInteractionManager();
+    const openCodeSession: OpenCodeSessionClient = { create: vi.fn() };
+    const openCodeSessionStatus: OpenCodeSessionStatusClient = {
+      status: vi.fn().mockResolvedValue({
+        data: { "sess-1": { type: "idle" } },
+        error: undefined,
+      }),
+    };
+    const openCodePromptAsync: OpenCodePromptAsyncClient = {
+      promptAsync: vi.fn().mockResolvedValue(undefined),
+    };
+    const messageReader = createMockMessageReader();
+    vi.mocked(messageReader.getChatMessages).mockResolvedValue([
+      {
+        messageId: "msg-current",
+        senderId: "user-1",
+        senderType: "user",
+        content: "Current prompt",
+        messageType: "text",
+        createdAt: "2026-04-07T10:02:00.000Z",
+      },
+      {
+        messageId: "msg-reply",
+        senderId: "bot-1",
+        senderType: "app",
+        content: "Prior answer",
+        messageType: "text",
+        createdAt: "2026-04-07T10:01:00.000Z",
+      },
+      {
+        messageId: "msg-earlier",
+        senderId: "user-2",
+        senderType: "user",
+        content: "Earlier question",
+        messageType: "text",
+        createdAt: "2026-04-07T10:00:00.000Z",
+      },
     ]);
+
+    const scheduledTasks: Array<() => void> = [];
+    const handler = new PromptIngressHandler({
+      settings,
+      interactionManager,
+      openCodeSession,
+      openCodeSessionStatus,
+      openCodePromptAsync,
+      messageReader,
+      scheduleAsync: (task) => scheduledTasks.push(task),
+    });
+
+    const result = await handler.handlePromptInput({
+      messageId: "msg-current",
+      chatId: "chat-1",
+      text: "Current prompt",
+      parts: [
+        { type: "text", text: "Current prompt" },
+        {
+          type: "file",
+          mime: "text/plain",
+          filename: "notes.txt",
+          url: "file:///tmp/notes.txt",
+        },
+      ],
+    });
+
+    expect(result.kind).toBe("dispatched");
+
+    await runScheduledTasks(scheduledTasks);
+
+    expect(messageReader.getChatMessages).toHaveBeenCalledWith({
+      chatId: "chat-1",
+    });
+    expect(openCodePromptAsync.promptAsync).toHaveBeenCalledWith({
+      sessionID: "sess-1",
+      directory: "/workspace/project",
+      parts: [
+        {
+          type: "text",
+          text: "Recent chat context (oldest to newest, excluding the current message):\n- user:user-2: Earlier question\n- app:bot-1: Prior answer",
+        },
+        { type: "text", text: "Current prompt" },
+        {
+          type: "file",
+          mime: "text/plain",
+          filename: "notes.txt",
+          url: "file:///tmp/notes.txt",
+        },
+      ],
+    });
+  });
+
+  it("excludes the current inbound message from prepended history context", async () => {
+    const settings = createMockSettings({
+      getCurrentProject: vi.fn().mockReturnValue({
+        id: "proj-1",
+        worktree: "/workspace/project",
+      }),
+      getCurrentSession: vi.fn().mockReturnValue({
+        id: "sess-1",
+        title: "Existing",
+        directory: "/workspace/project",
+      }),
+    });
+    const interactionManager = createMockInteractionManager();
+    const openCodeSession: OpenCodeSessionClient = { create: vi.fn() };
+    const openCodeSessionStatus: OpenCodeSessionStatusClient = {
+      status: vi.fn().mockResolvedValue({
+        data: { "sess-1": { type: "idle" } },
+        error: undefined,
+      }),
+    };
+    const openCodePromptAsync: OpenCodePromptAsyncClient = {
+      promptAsync: vi.fn().mockResolvedValue(undefined),
+    };
+    const messageReader = createMockMessageReader();
+    vi.mocked(messageReader.getChatMessages).mockResolvedValue([
+      {
+        messageId: "msg-current",
+        senderId: "user-1",
+        senderType: "user",
+        content: "Current prompt",
+        messageType: "text",
+        createdAt: "2026-04-07T10:01:00.000Z",
+      },
+      {
+        messageId: "msg-prior",
+        senderId: "user-2",
+        senderType: "user",
+        content: "Prior context only",
+        messageType: "text",
+        createdAt: "2026-04-07T10:00:00.000Z",
+      },
+    ]);
+
+    const scheduledTasks: Array<() => void> = [];
+    const handler = new PromptIngressHandler({
+      settings,
+      interactionManager,
+      openCodeSession,
+      openCodeSessionStatus,
+      openCodePromptAsync,
+      messageReader,
+      scheduleAsync: (task) => scheduledTasks.push(task),
+    });
+
+    await handler.handlePromptInput({
+      messageId: "msg-current",
+      chatId: "chat-1",
+      text: "Current prompt",
+    });
+
+    await runScheduledTasks(scheduledTasks);
+
+    const firstCall = vi.mocked(openCodePromptAsync.promptAsync).mock
+      .calls[0]?.[0];
+    const historyPart = firstCall?.parts?.[0];
+    expect(historyPart).toEqual({
+      type: "text",
+      text: "Recent chat context (oldest to newest, excluding the current message):\n- user:user-2: Prior context only",
+    });
+    expect(historyPart?.type).toBe("text");
+    if (historyPart?.type !== "text") {
+      throw new Error("expected text history part");
+    }
+    expect(historyPart.text).not.toContain("Current prompt");
+  });
+
+  it("skips history enrichment when fetched history is empty after filtering", async () => {
+    const settings = createMockSettings({
+      getCurrentProject: vi.fn().mockReturnValue({
+        id: "proj-1",
+        worktree: "/workspace/project",
+      }),
+      getCurrentSession: vi.fn().mockReturnValue({
+        id: "sess-1",
+        title: "Existing",
+        directory: "/workspace/project",
+      }),
+    });
+    const interactionManager = createMockInteractionManager();
+    const openCodeSession: OpenCodeSessionClient = { create: vi.fn() };
+    const openCodeSessionStatus: OpenCodeSessionStatusClient = {
+      status: vi.fn().mockResolvedValue({
+        data: { "sess-1": { type: "idle" } },
+        error: undefined,
+      }),
+    };
+    const openCodePromptAsync: OpenCodePromptAsyncClient = {
+      promptAsync: vi.fn().mockResolvedValue(undefined),
+    };
+    const messageReader = createMockMessageReader();
+    vi.mocked(messageReader.getChatMessages).mockResolvedValue([
+      {
+        messageId: "msg-current",
+        senderId: "user-1",
+        senderType: "user",
+        content: "Current prompt",
+        messageType: "text",
+        createdAt: "2026-04-07T10:01:00.000Z",
+      },
+      {
+        messageId: "msg-empty",
+        senderId: "user-2",
+        senderType: "user",
+        content: "   ",
+        messageType: "text",
+        createdAt: "2026-04-07T10:00:00.000Z",
+      },
+    ]);
+
+    const scheduledTasks: Array<() => void> = [];
+    const handler = new PromptIngressHandler({
+      settings,
+      interactionManager,
+      openCodeSession,
+      openCodeSessionStatus,
+      openCodePromptAsync,
+      messageReader,
+      scheduleAsync: (task) => scheduledTasks.push(task),
+    });
+
+    await handler.handlePromptInput({
+      messageId: "msg-current",
+      chatId: "chat-1",
+      text: "Current prompt",
+    });
+
+    await runScheduledTasks(scheduledTasks);
+
+    expect(openCodePromptAsync.promptAsync).toHaveBeenCalledWith({
+      sessionID: "sess-1",
+      directory: "/workspace/project",
+      parts: [{ type: "text", text: "Current prompt" }],
+    });
+  });
+
+  it("fails open when history loading throws", async () => {
+    const settings = createMockSettings({
+      getCurrentProject: vi.fn().mockReturnValue({
+        id: "proj-1",
+        worktree: "/workspace/project",
+      }),
+      getCurrentSession: vi.fn().mockReturnValue({
+        id: "sess-1",
+        title: "Existing",
+        directory: "/workspace/project",
+      }),
+    });
+    const interactionManager = createMockInteractionManager();
+    const openCodeSession: OpenCodeSessionClient = { create: vi.fn() };
+    const openCodeSessionStatus: OpenCodeSessionStatusClient = {
+      status: vi.fn().mockResolvedValue({
+        data: { "sess-1": { type: "idle" } },
+        error: undefined,
+      }),
+    };
+    const openCodePromptAsync: OpenCodePromptAsyncClient = {
+      promptAsync: vi.fn().mockResolvedValue(undefined),
+    };
+    const messageReader = createMockMessageReader();
+    const logger = createMockLogger();
+    vi.mocked(messageReader.getChatMessages).mockRejectedValue(
+      new Error("history unavailable"),
+    );
+
+    const scheduledTasks: Array<() => void> = [];
+    const handler = new PromptIngressHandler({
+      settings,
+      interactionManager,
+      openCodeSession,
+      openCodeSessionStatus,
+      openCodePromptAsync,
+      messageReader,
+      logger,
+      scheduleAsync: (task) => scheduledTasks.push(task),
+    });
+
+    await handler.handlePromptInput({
+      messageId: "msg-current",
+      chatId: "chat-1",
+      text: "Current prompt",
+    });
+
+    await runScheduledTasks(scheduledTasks);
+
+    expect(openCodePromptAsync.promptAsync).toHaveBeenCalledWith({
+      sessionID: "sess-1",
+      directory: "/workspace/project",
+      parts: [{ type: "text", text: "Current prompt" }],
+    });
+    expect(logger.warn).toHaveBeenCalledTimes(1);
+  });
+
+  it("preserves existing behavior when no messageReader is provided", async () => {
+    const settings = createMockSettings({
+      getCurrentProject: vi.fn().mockReturnValue({
+        id: "proj-1",
+        worktree: "/workspace/project",
+      }),
+      getCurrentSession: vi.fn().mockReturnValue({
+        id: "sess-1",
+        title: "Existing",
+        directory: "/workspace/project",
+      }),
+    });
+    const interactionManager = createMockInteractionManager();
+    const openCodeSession: OpenCodeSessionClient = { create: vi.fn() };
+    const openCodeSessionStatus: OpenCodeSessionStatusClient = {
+      status: vi.fn().mockResolvedValue({
+        data: { "sess-1": { type: "idle" } },
+        error: undefined,
+      }),
+    };
+    const openCodePromptAsync: OpenCodePromptAsyncClient = {
+      promptAsync: vi.fn().mockResolvedValue(undefined),
+    };
+
+    const scheduledTasks: Array<() => void> = [];
+    const handler = new PromptIngressHandler({
+      settings,
+      interactionManager,
+      openCodeSession,
+      openCodeSessionStatus,
+      openCodePromptAsync,
+      scheduleAsync: (task) => scheduledTasks.push(task),
+    });
+
+    await handler.handlePromptInput({
+      messageId: "msg-current",
+      chatId: "chat-1",
+      text: "Current prompt",
+      parts: [
+        { type: "text", text: "Current prompt" },
+        {
+          type: "file",
+          mime: "text/plain",
+          filename: "notes.txt",
+          url: "file:///tmp/notes.txt",
+        },
+      ],
+    });
+
+    await runScheduledTasks(scheduledTasks);
+
+    expect(openCodePromptAsync.promptAsync).toHaveBeenCalledWith({
+      sessionID: "sess-1",
+      directory: "/workspace/project",
+      parts: [
+        { type: "text", text: "Current prompt" },
+        {
+          type: "file",
+          mime: "text/plain",
+          filename: "notes.txt",
+          url: "file:///tmp/notes.txt",
+        },
+      ],
+    });
   });
 
   it("threads current model and agent into promptAsync when available", async () => {
@@ -223,9 +645,12 @@ describe("PromptIngressHandler", () => {
     const interactionManager = createMockInteractionManager();
     const openCodeSession: OpenCodeSessionClient = { create: vi.fn() };
     const openCodeSessionStatus: OpenCodeSessionStatusClient = {
-      status: vi.fn().mockResolvedValue({ data: { "sess-1": { type: "idle" } }, error: undefined }),
+      status: vi.fn().mockResolvedValue({
+        data: { "sess-1": { type: "idle" } },
+        error: undefined,
+      }),
     };
-    const promptAsyncCalls: Array<unknown[]> = [];
+    const promptAsyncCalls: PromptAsyncParams[] = [];
     const openCodePromptAsync: OpenCodePromptAsyncClient = {
       promptAsync: vi.fn().mockImplementation(async (params) => {
         promptAsyncCalls.push(params);
@@ -242,7 +667,9 @@ describe("PromptIngressHandler", () => {
       scheduleAsync: (task) => scheduledTasks.push(task),
     });
 
-    const result = await handler.handleMessageEvent(makeDmTextEvent("test model threading"));
+    const result = await handler.handleMessageEvent(
+      makeDmTextEvent("test model threading"),
+    );
 
     expect(result.kind).toBe("dispatched");
     for (const task of scheduledTasks) {
@@ -250,8 +677,11 @@ describe("PromptIngressHandler", () => {
     }
 
     expect(promptAsyncCalls).toHaveLength(1);
-    const callParams = promptAsyncCalls[0] as Record<string, unknown>;
-    expect(callParams.model).toEqual({ providerID: "anthropic", modelID: "claude-sonnet-4-20250514" });
+    const callParams = promptAsyncCalls[0];
+    expect(callParams.model).toEqual({
+      providerID: "anthropic",
+      modelID: "claude-sonnet-4-20250514",
+    });
     expect(callParams.agent).toBe("build");
     expect(callParams.variant).toBe("beta");
   });
@@ -271,7 +701,10 @@ describe("PromptIngressHandler", () => {
     const interactionManager = createMockInteractionManager();
     const openCodeSession: OpenCodeSessionClient = { create: vi.fn() };
     const openCodeSessionStatus: OpenCodeSessionStatusClient = {
-      status: vi.fn().mockResolvedValue({ data: { "sess-1": { type: "idle" } }, error: undefined }),
+      status: vi.fn().mockResolvedValue({
+        data: { "sess-1": { type: "idle" } },
+        error: undefined,
+      }),
     };
     const openCodePromptAsync: OpenCodePromptAsyncClient = {
       promptAsync: vi.fn().mockRejectedValue(new Error("network failure")),
@@ -287,7 +720,9 @@ describe("PromptIngressHandler", () => {
       scheduleAsync: (task) => scheduledTasks.push(task),
     });
 
-    const result = await handler.handleMessageEvent(makeDmTextEvent("trigger error"));
+    const result = await handler.handleMessageEvent(
+      makeDmTextEvent("trigger error"),
+    );
 
     expect(result.kind).toBe("dispatched");
 
@@ -317,7 +752,9 @@ describe("PromptIngressHandler", () => {
       openCodePromptAsync,
     });
 
-    const result = await handler.handleMessageEvent(makeDmTextEvent("no project"));
+    const result = await handler.handleMessageEvent(
+      makeDmTextEvent("no project"),
+    );
 
     expect(result).toEqual({ kind: "no-project" });
   });
@@ -336,8 +773,12 @@ describe("PromptIngressHandler", () => {
     });
     const interactionManager = createMockInteractionManager();
     const openCodeSession: OpenCodeSessionClient = { create: vi.fn() };
-    const openCodeSessionStatus: OpenCodeSessionStatusClient = { status: vi.fn() };
-    const openCodePromptAsync: OpenCodePromptAsyncClient = { promptAsync: vi.fn() };
+    const openCodeSessionStatus: OpenCodeSessionStatusClient = {
+      status: vi.fn(),
+    };
+    const openCodePromptAsync: OpenCodePromptAsyncClient = {
+      promptAsync: vi.fn(),
+    };
 
     const handler = new PromptIngressHandler({
       settings,
@@ -347,7 +788,9 @@ describe("PromptIngressHandler", () => {
       openCodePromptAsync,
     });
 
-    const result = await handler.handleMessageEvent(makeDmTextEvent("mismatch"));
+    const result = await handler.handleMessageEvent(
+      makeDmTextEvent("mismatch"),
+    );
 
     expect(result).toEqual({
       kind: "session-reset",
@@ -361,8 +804,12 @@ describe("PromptIngressHandler", () => {
     const settings = createMockSettings();
     const interactionManager = createMockInteractionManager();
     const openCodeSession: OpenCodeSessionClient = { create: vi.fn() };
-    const openCodeSessionStatus: OpenCodeSessionStatusClient = { status: vi.fn() };
-    const openCodePromptAsync: OpenCodePromptAsyncClient = { promptAsync: vi.fn() };
+    const openCodeSessionStatus: OpenCodeSessionStatusClient = {
+      status: vi.fn(),
+    };
+    const openCodePromptAsync: OpenCodePromptAsyncClient = {
+      promptAsync: vi.fn(),
+    };
 
     const handler = new PromptIngressHandler({
       settings,

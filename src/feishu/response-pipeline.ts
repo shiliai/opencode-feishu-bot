@@ -1,13 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { Event } from "@opencode-ai/sdk/v2";
-import { getConfig, type AppConfig, type ThrottleConfig } from "../config.js";
-import type { FeishuRenderer } from "./renderer.js";
-import {
-  statusStore as defaultStatusStore,
-  type ResponsePipelineTurnContext,
-  type StatusStore,
-  type StatusTurnState,
-} from "./status-store.js";
+import { type AppConfig, getConfig, type ThrottleConfig } from "../config.js";
 import {
   openCodeEventSubscriber,
   type SubscribeToEventsOptions,
@@ -19,12 +12,24 @@ import type {
   SummaryTokenEvent,
   SummaryToolEvent,
 } from "../summary/types.js";
-import type { Logger } from "../utils/logger.js";
-import { logger as defaultLogger } from "../utils/logger.js";
+import { logger as defaultLogger, type Logger } from "../utils/logger.js";
+import { buildStreamingStatusContent } from "./cards.js";
+import type { ImageResolver } from "./image-resolver.js";
+import { optimizeMarkdownStyle } from "./markdown-style.js";
+import { splitReasoningText, stripReasoningTags } from "./reasoning-utils.js";
+import type { FeishuRenderer } from "./renderer.js";
+import {
+  statusStore as defaultStatusStore,
+  type ResponsePipelineTurnContext,
+  type StatusStore,
+  type StatusTurnState,
+} from "./status-store.js";
 
 interface ResponsePipelineRenderer {
   renderStatusCard: FeishuRenderer["renderStatusCard"];
   updateStatusCard: FeishuRenderer["updateStatusCard"];
+  renderCompleteCard: FeishuRenderer["renderCompleteCard"];
+  updateCompleteCard: FeishuRenderer["updateCompleteCard"];
   replyPost: FeishuRenderer["replyPost"];
   sendPost: FeishuRenderer["sendPost"];
 }
@@ -56,6 +61,7 @@ export interface ResponsePipelineControllerOptions {
   eventSubscriber?: ResponsePipelineEventSubscriber;
   summaryAggregator?: ResponsePipelineSummaryAggregator;
   renderer: ResponsePipelineRenderer;
+  imageResolver?: ImageResolver;
   settingsManager: ResponsePipelineSettingsManager;
   interactionManager: ResponsePipelineInteractionManager;
   statusStore?: StatusStore;
@@ -73,9 +79,11 @@ export interface ResponsePipelineControllerSnapshot {
 const ACTIVE_STATUS_CARD_TITLE = "OpenCode is working";
 const ACTIVE_STATUS_CARD_TEMPLATE = "blue" as const;
 const ACTIVE_STATUS_CARD_FALLBACK_TEXT = "Thinking…";
+const FINAL_REPLY_FALLBACK_TEXT = "Done.";
 const FINAL_REPLY_TITLE = "OpenCode reply";
 const ERROR_REPLY_TITLE = "OpenCode error";
-const STREAM_ENDED_MESSAGE = "OpenCode stream ended before a final reply was delivered.";
+const STREAM_ENDED_MESSAGE =
+  "OpenCode stream ended before a final reply was delivered.";
 const RETRYABLE_UPDATE_KEYWORDS = [
   "rate limit",
   "too many requests",
@@ -91,7 +99,9 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function getNumber(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+  return typeof value === "number" && Number.isFinite(value)
+    ? value
+    : undefined;
 }
 
 function getString(value: unknown): string | undefined {
@@ -119,6 +129,186 @@ function toPostParagraphs(text: string): string[][] {
   }
 
   return normalized.split("\n").map((line) => [line.length > 0 ? line : " "]);
+}
+
+function formatElapsed(ms: number): string {
+  const seconds = ms / 1_000;
+  if (seconds < 60) {
+    return `${seconds.toFixed(1)}s`;
+  }
+
+  return `${Math.floor(seconds / 60)}m ${Math.round(seconds % 60)}s`;
+}
+
+function compactNumber(value: number): string {
+  const abs = Math.abs(value);
+  if (abs >= 1_000_000) {
+    const millions = value / 1_000_000;
+    return Math.abs(millions) >= 100
+      ? `${Math.round(millions)}m`
+      : `${millions.toFixed(1)}m`;
+  }
+
+  if (abs >= 1_000) {
+    const thousands = value / 1_000;
+    return Math.abs(thousands) >= 100
+      ? `${Math.round(thousands)}k`
+      : `${thousands.toFixed(1)}k`;
+  }
+
+  return `${Math.round(value)}`;
+}
+
+function formatToolSummary(toolEvents: SummaryToolEvent[]): string | undefined {
+  if (toolEvents.length === 0) {
+    return undefined;
+  }
+
+  const lines = toolEvents
+    .slice(-4)
+    .map((toolEvent) => formatToolEventLine(toolEvent))
+    .filter((line): line is string => Boolean(line));
+
+  if (lines.length === 0) {
+    return undefined;
+  }
+
+  return ["🔧 Progress", ...lines.map((line) => `- ${line}`)].join("\n");
+}
+
+function formatToolEventLine(toolEvent: SummaryToolEvent): string | undefined {
+  const toolName = toolEvent.tool.trim();
+  if (!toolName) {
+    return undefined;
+  }
+
+  const title = toolEvent.title?.trim();
+  const label = title && title.length > 0 ? title : toolName;
+  const status = formatToolStatus(toolEvent.status);
+  return `${getToolIcon(toolName)} ${label}${status ? ` · ${status}` : ""}`;
+}
+
+function formatToolStatus(status: string): string {
+  switch (status.trim().toLowerCase()) {
+    case "running":
+    case "pending":
+      return "in progress";
+    case "completed":
+      return "done";
+    case "error":
+    case "failed":
+      return "failed";
+    default:
+      return status.trim().toLowerCase();
+  }
+}
+
+function getToolIcon(tool: string): string {
+  switch (tool.trim().toLowerCase()) {
+    case "task":
+    case "subtask":
+      return "🤖";
+    case "skill":
+      return "🧠";
+    case "bash":
+      return "⚙️";
+    case "read":
+      return "📄";
+    case "write":
+      return "📝";
+    case "edit":
+    case "apply_patch":
+      return "✏️";
+    case "webfetch":
+    case "websearch_web_search_exa":
+      return "🌐";
+    default:
+      return "🔧";
+  }
+}
+
+function buildFooterMetricsText(state: StatusTurnState): string | undefined {
+  const elapsedMs = Math.max(0, Date.now() - state.turnStartTime);
+  const parts: string[] = [`⏱️ ${formatElapsed(elapsedMs)}`];
+
+  if (state.latestTokens) {
+    parts.push(
+      `↑ ${compactNumber(state.latestTokens.input)} ↓ ${compactNumber(state.latestTokens.output)}`,
+    );
+
+    if (state.latestTokens.reasoning > 0) {
+      parts.push(`💭 ${compactNumber(state.latestTokens.reasoning)}`);
+    }
+
+    if (state.latestTokens.cacheRead > 0 || state.latestTokens.cacheWrite > 0) {
+      parts.push(
+        `cache ${compactNumber(state.latestTokens.cacheRead)}/${compactNumber(
+          state.latestTokens.cacheWrite,
+        )}`,
+      );
+    }
+  }
+
+  return parts.join(" · ");
+}
+
+function buildFinalReplyText(
+  state: StatusTurnState,
+  messageText: string,
+): string {
+  const normalizedText = normalizeText(messageText);
+  const { reasoningText } = splitReasoningText(normalizedText);
+  const finalReasoning =
+    state.accumulatedReasoning?.trim() || reasoningText?.trim();
+  const finalAnswer = getFinalAnswerContent(state, messageText);
+  const toolSummary = formatToolSummary(state.toolEvents);
+  const hasEnhancedSections = Boolean(
+    finalReasoning || toolSummary || state.latestTokens,
+  );
+
+  if (!hasEnhancedSections) {
+    return finalAnswer;
+  }
+
+  const sections: string[] = [];
+
+  if (finalReasoning) {
+    const reasoningElapsed = state.reasoningStartTime
+      ? Math.max(0, Date.now() - state.reasoningStartTime)
+      : undefined;
+    const reasoningLabel = reasoningElapsed
+      ? `💭 Reasoning (${formatElapsed(reasoningElapsed)})`
+      : "💭 Reasoning";
+    sections.push(`${reasoningLabel}\n${finalReasoning}`);
+  }
+
+  if (toolSummary) {
+    sections.push(toolSummary);
+  }
+
+  sections.push(finalAnswer);
+
+  const footer = buildFooterMetricsText(state);
+  if (footer) {
+    sections.push(footer);
+  }
+
+  return sections.join("\n\n");
+}
+
+function getFinalAnswerContent(
+  state: StatusTurnState,
+  messageText: string,
+): string {
+  const normalizedText = normalizeText(messageText);
+  const { answerText } = splitReasoningText(normalizedText);
+  const strippedAnswer = answerText ?? stripReasoningTags(normalizedText);
+  const answerSource =
+    strippedAnswer ||
+    normalizedText ||
+    state.lastPartialText ||
+    FINAL_REPLY_FALLBACK_TEXT;
+  return answerSource.trim() || FINAL_REPLY_FALLBACK_TEXT;
 }
 
 function getErrorStatusCode(error: unknown): number | undefined {
@@ -158,7 +348,12 @@ function getErrorMessage(error: unknown): string {
 
 export function isRetryableStatusCardUpdateError(error: unknown): boolean {
   const statusCode = getErrorStatusCode(error);
-  if (statusCode === 408 || statusCode === 409 || statusCode === 423 || statusCode === 425) {
+  if (
+    statusCode === 408 ||
+    statusCode === 409 ||
+    statusCode === 423 ||
+    statusCode === 425
+  ) {
     return true;
   }
 
@@ -167,13 +362,16 @@ export function isRetryableStatusCardUpdateError(error: unknown): boolean {
   }
 
   const normalizedMessage = getErrorMessage(error).toLowerCase();
-  return RETRYABLE_UPDATE_KEYWORDS.some((keyword) => normalizedMessage.includes(keyword));
+  return RETRYABLE_UPDATE_KEYWORDS.some((keyword) =>
+    normalizedMessage.includes(keyword),
+  );
 }
 
 export class ResponsePipelineController {
   private readonly eventSubscriber: ResponsePipelineEventSubscriber;
   private readonly summaryAggregator: ResponsePipelineSummaryAggregator;
   private readonly renderer: ResponsePipelineRenderer;
+  private readonly imageResolver?: ImageResolver;
   private readonly settingsManager: ResponsePipelineSettingsManager;
   private readonly interactionManager: ResponsePipelineInteractionManager;
   private readonly statusStore: StatusStore;
@@ -186,27 +384,39 @@ export class ResponsePipelineController {
 
   constructor(options: ResponsePipelineControllerOptions) {
     this.eventSubscriber = options.eventSubscriber ?? openCodeEventSubscriber;
-    this.summaryAggregator = options.summaryAggregator ?? defaultSummaryAggregator;
+    this.summaryAggregator =
+      options.summaryAggregator ?? defaultSummaryAggregator;
     this.renderer = options.renderer;
+    this.imageResolver = options.imageResolver;
     this.settingsManager = options.settingsManager;
     this.interactionManager = options.interactionManager;
     this.statusStore = options.statusStore ?? defaultStatusStore;
     this.throttleConfig = options.config?.throttle ?? getConfig().throttle;
     this.logger = options.logger ?? defaultLogger;
-    this.scheduleAsync = options.scheduleAsync ?? ((task) => setImmediate(task));
+    this.scheduleAsync =
+      options.scheduleAsync ?? ((task) => setImmediate(task));
     this.setTimeoutFn = options.setTimeoutFn ?? setTimeout;
     this.clearTimeoutFn = options.clearTimeoutFn ?? clearTimeout;
 
     this.summaryAggregator.setCallbacks({
       onTypingStart: (sessionId) => {
-        void this.enqueueSessionTask(sessionId, () => this.handleTypingStart(sessionId));
+        void this.enqueueSessionTask(sessionId, () =>
+          this.handleTypingStart(sessionId),
+        );
       },
       onTypingStop: () => undefined,
       onPartial: (sessionId, _messageId, messageText) => {
         this.handlePartial(sessionId, messageText);
       },
       onComplete: (sessionId, _messageId, messageText) => {
-        void this.enqueueSessionTask(sessionId, () => this.handleComplete(sessionId, messageText));
+        void this.enqueueSessionTask(sessionId, () =>
+          this.handleComplete(sessionId, messageText),
+        );
+      },
+      onSessionIdle: (sessionId) => {
+        void this.enqueueSessionTask(sessionId, () =>
+          this.handleSessionIdle(sessionId),
+        );
       },
       onTool: (toolEvent) => {
         this.handleTool(toolEvent);
@@ -223,7 +433,9 @@ export class ResponsePipelineController {
       onSessionRetry: () => undefined,
       onSessionCompacted: () => undefined,
       onSessionError: (sessionId, message) => {
-        void this.enqueueSessionTask(sessionId, () => this.handleSessionError(sessionId, message));
+        void this.enqueueSessionTask(sessionId, () =>
+          this.handleSessionError(sessionId, message),
+        );
       },
       onCleared: () => {
         this.handleAggregatorCleared();
@@ -265,7 +477,17 @@ export class ResponsePipelineController {
       return;
     }
 
-    state.lastPartialText = normalizedText;
+    const { reasoningText, answerText } = splitReasoningText(normalizedText);
+    if (reasoningText && !state.accumulatedReasoning) {
+      state.reasoningStartTime = Date.now();
+    }
+    if (reasoningText) {
+      state.accumulatedReasoning = reasoningText;
+    }
+
+    const strippedText = answerText ?? stripReasoningTags(normalizedText);
+    state.lastPartialText =
+      reasoningText && !answerText ? undefined : strippedText || undefined;
     state.lastPartialSignature = signature;
 
     if (state.statusCardMessageId && !state.cardUpdatesBroken) {
@@ -279,7 +501,26 @@ export class ResponsePipelineController {
       return;
     }
 
-    state.toolEvents.push(toolEvent);
+    const existingIndex = state.toolEvents.findIndex(
+      (existingEvent) => existingEvent.callId === toolEvent.callId,
+    );
+    if (existingIndex >= 0) {
+      state.toolEvents.splice(existingIndex, 1, toolEvent);
+    } else {
+      state.toolEvents.push(toolEvent);
+      if (state.toolEvents.length > 12) {
+        state.toolEvents.splice(0, state.toolEvents.length - 12);
+      }
+    }
+
+    if (
+      state.statusCardMessageId &&
+      !state.cardUpdatesBroken &&
+      !state.finalReplySent &&
+      !state.pendingCompletion
+    ) {
+      this.scheduleStatusCardUpdate(toolEvent.sessionId);
+    }
   }
 
   handleSessionDiff(diffEvent: SummarySessionDiffEvent): void {
@@ -298,6 +539,21 @@ export class ResponsePipelineController {
     }
 
     state.latestTokens = tokenEvent.tokens;
+
+    if (
+      state.statusCardMessageId &&
+      !state.cardUpdatesBroken &&
+      !state.finalReplySent &&
+      !state.pendingCompletion
+    ) {
+      this.scheduleStatusCardUpdate(tokenEvent.sessionId);
+    }
+  }
+
+  handleImageResolved(): void {
+    for (const sessionId of this.statusStore.getSessionIds()) {
+      this.scheduleStatusCardUpdate(sessionId);
+    }
   }
 
   handleAggregatorCleared(): void {
@@ -311,6 +567,10 @@ export class ResponsePipelineController {
     const state = this.statusStore.get(sessionId);
     if (!state || state.finalReplySent || state.cardUpdatesBroken) {
       return;
+    }
+
+    if (!state.turnStartTime) {
+      state.turnStartTime = Date.now();
     }
 
     if (state.statusCardMessageId) {
@@ -341,7 +601,10 @@ export class ResponsePipelineController {
       }
 
       if (!messageId) {
-        this.markCardUpdatesBroken(latestState, new Error("Status card create returned no message ID"));
+        this.markCardUpdatesBroken(
+          latestState,
+          new Error("Status card create returned no message ID"),
+        );
         return;
       }
 
@@ -367,11 +630,36 @@ export class ResponsePipelineController {
       return;
     }
 
+    const normalizedText = normalizeText(messageText);
+    const { reasoningText, answerText } = splitReasoningText(normalizedText);
+    if (reasoningText && !state.accumulatedReasoning) {
+      state.reasoningStartTime = Date.now();
+    }
+    if (reasoningText) {
+      state.accumulatedReasoning = reasoningText;
+    }
+
+    const strippedText = answerText ?? stripReasoningTags(normalizedText);
+    if (strippedText) {
+      state.lastPartialText = strippedText;
+      state.lastPartialSignature = hashString(normalizedText);
+    }
+    state.latestCompletedText = normalizedText;
+  }
+
+  async handleSessionIdle(sessionId: string): Promise<void> {
+    const state = this.statusStore.get(sessionId);
+    if (!state || state.finalReplySent) {
+      return;
+    }
+
     state.pendingCompletion = true;
+    const completionText =
+      state.latestCompletedText ?? state.lastPartialText ?? "";
 
     try {
       await this.flushPendingPartialUpdate(sessionId);
-      await this.sendFinalReply(state, messageText, FINAL_REPLY_TITLE);
+      await this.sendFinalReply(state, completionText, FINAL_REPLY_TITLE);
     } finally {
       this.finishTurn(sessionId);
     }
@@ -444,7 +732,9 @@ export class ResponsePipelineController {
         latestState.statusUpdateTimer = undefined;
       }
 
-      void this.enqueueSessionTask(sessionId, () => this.flushStatusCardUpdate(sessionId));
+      void this.enqueueSessionTask(sessionId, () =>
+        this.flushStatusCardUpdate(sessionId),
+      );
     }, this.throttleConfig.statusCardUpdateIntervalMs);
   }
 
@@ -470,13 +760,14 @@ export class ResponsePipelineController {
   private async flushStatusCardUpdate(sessionId: string): Promise<void> {
     const state = this.statusStore.get(sessionId);
     if (
-      !state ||
-      !state.statusCardMessageId ||
+      !state?.statusCardMessageId ||
       state.cardUpdatesBroken ||
       state.finalReplySent
     ) {
       return;
     }
+
+    const statusCardMessageId = state.statusCardMessageId;
 
     const content = this.getStatusCardContent(state);
     const signature = hashString(content);
@@ -484,12 +775,15 @@ export class ResponsePipelineController {
       return;
     }
 
-    const maxAttempts = Math.max(1, this.throttleConfig.statusCardPatchMaxAttempts);
+    const maxAttempts = Math.max(
+      1,
+      this.throttleConfig.statusCardPatchMaxAttempts,
+    );
 
     for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
       try {
         await this.renderer.updateStatusCard(
-          state.statusCardMessageId,
+          statusCardMessageId,
           ACTIVE_STATUS_CARD_TITLE,
           content,
           false,
@@ -500,7 +794,9 @@ export class ResponsePipelineController {
         return;
       } catch (error) {
         if (attempt < maxAttempts && isRetryableStatusCardUpdateError(error)) {
-          await this.waitFor(this.throttleConfig.statusCardPatchRetryDelayMs * attempt);
+          await this.waitFor(
+            this.throttleConfig.statusCardPatchRetryDelayMs * attempt,
+          );
           continue;
         }
 
@@ -521,10 +817,71 @@ export class ResponsePipelineController {
 
     const uuid = state.finalReplyUuid ?? randomUUID();
     state.finalReplyUuid = uuid;
-    const paragraphs = toPostParagraphs(messageText);
+    const answerContent = getFinalAnswerContent(state, messageText);
+    const resolvedAnswer = this.imageResolver
+      ? await this.imageResolver.resolveImagesAwait(answerContent, 15_000)
+      : answerContent;
+    const completeTemplate = title === ERROR_REPLY_TITLE ? "red" : "green";
+    const reasoningDurationMs = state.reasoningStartTime
+      ? Math.max(0, Date.now() - state.reasoningStartTime)
+      : undefined;
+    const elapsedMs = Math.max(0, Date.now() - state.turnStartTime);
 
     try {
-      await this.renderer.replyPost(state.sourceMessageId, title, paragraphs, { uuid });
+      if (state.statusCardMessageId && !state.cardUpdatesBroken) {
+        await this.renderer.updateCompleteCard(
+          state.statusCardMessageId,
+          title,
+          resolvedAnswer,
+          {
+            reasoningText: state.accumulatedReasoning,
+            reasoningDurationMs,
+            elapsedMs,
+            tokens: state.latestTokens,
+            toolEvents: state.toolEvents,
+            template: completeTemplate,
+          },
+        );
+      } else {
+        const messageId = await this.renderer.renderCompleteCard(
+          state.receiveId,
+          title,
+          resolvedAnswer,
+          {
+            reasoningText: state.accumulatedReasoning,
+            reasoningDurationMs,
+            elapsedMs,
+            tokens: state.latestTokens,
+            toolEvents: state.toolEvents,
+            template: completeTemplate,
+          },
+        );
+        if (messageId) {
+          state.statusCardMessageId = messageId;
+          this.settingsManager.setStatusMessageId(messageId);
+        }
+      }
+      state.finalReplySent = true;
+      return;
+    } catch (error) {
+      this.logger.warn(
+        `[ResponsePipeline] Complete card delivery failed, falling back to post reply for session=${state.sessionId}`,
+        error,
+      );
+    }
+
+    const replyText = optimizeMarkdownStyle(
+      buildFinalReplyText(state, messageText),
+    );
+    const resolvedText = this.imageResolver
+      ? await this.imageResolver.resolveImagesAwait(replyText, 15_000)
+      : replyText;
+    const paragraphs = toPostParagraphs(resolvedText);
+
+    try {
+      await this.renderer.replyPost(state.sourceMessageId, title, paragraphs, {
+        uuid,
+      });
       state.finalReplySent = true;
       return;
     } catch (error) {
@@ -555,7 +912,13 @@ export class ResponsePipelineController {
   }
 
   private getStatusCardContent(state: StatusTurnState): string {
-    return state.lastPartialText ?? ACTIVE_STATUS_CARD_FALLBACK_TEXT;
+    const resolveImagesFn = this.imageResolver
+      ? (text: string) => this.imageResolver!.resolveImages(text)
+      : undefined;
+    return (
+      buildStreamingStatusContent(state, resolveImagesFn) ||
+      ACTIVE_STATUS_CARD_FALLBACK_TEXT
+    );
   }
 
   private markCardUpdatesBroken(state: StatusTurnState, error: unknown): void {
@@ -582,7 +945,10 @@ export class ResponsePipelineController {
       .catch(() => undefined)
       .then(task)
       .catch((error) => {
-        this.logger.error(`[ResponsePipeline] Session task failed: session=${sessionId}`, error);
+        this.logger.error(
+          `[ResponsePipeline] Session task failed: session=${sessionId}`,
+          error,
+        );
       })
       .finally(() => {
         if (this.sessionTasks.get(sessionId) === nextTask) {

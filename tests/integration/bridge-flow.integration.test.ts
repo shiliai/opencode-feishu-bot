@@ -48,12 +48,13 @@ describe("bridge flow integration", () => {
       false,
       "blue",
     );
-    expect(harness.renderer.replyPost).toHaveBeenCalledWith(
-      "source-msg-1",
+    expect(harness.renderer.updateCompleteCard).toHaveBeenCalledWith(
+      "status-card-1",
       "OpenCode reply",
-      [["Bridge reply complete"]],
-      { uuid: expect.any(String) },
+      "Bridge reply complete",
+      expect.objectContaining({ template: "green" }),
     );
+    expect(harness.renderer.replyPost).not.toHaveBeenCalled();
     expect(harness.renderer.sendPost).not.toHaveBeenCalled();
   });
 });

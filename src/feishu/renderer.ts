@@ -9,10 +9,43 @@ import {
 } from "./payloads.js";
 import {
   buildStatusCard,
+  buildCompleteCard,
   buildQuestionCard,
   buildPermissionCard,
   buildControlCard,
 } from "./cards.js";
+
+interface FeishuApiResponse {
+  code?: number;
+  msg?: string;
+  data?: {
+    message_id?: string;
+  };
+}
+
+function assertFeishuApiSuccess(
+  action: string,
+  response: FeishuApiResponse,
+): void {
+  if (typeof response.code === "number" && response.code !== 0) {
+    throw new Error(
+      `[FeishuRenderer] ${action} failed: code=${response.code}, msg=${response.msg ?? "unknown"}`,
+    );
+  }
+}
+
+function extractMessageId(action: string, response: FeishuApiResponse): string {
+  assertFeishuApiSuccess(action, response);
+
+  const messageId = response.data?.message_id;
+  if (!messageId) {
+    throw new Error(
+      `[FeishuRenderer] ${action} failed: missing message_id in response`,
+    );
+  }
+
+  return messageId;
+}
 
 export interface FeishuSendOptions {
   uuid?: string;
@@ -29,7 +62,12 @@ export interface FeishuRendererOptions {
 
 export class FeishuRenderer {
   private client: FeishuClients["client"];
-  private defaultReceiveIdType: "open_id" | "user_id" | "union_id" | "email" | "chat_id";
+  private defaultReceiveIdType:
+    | "open_id"
+    | "user_id"
+    | "union_id"
+    | "email"
+    | "chat_id";
 
   constructor(options: FeishuRendererOptions) {
     this.client = options.client;
@@ -47,7 +85,7 @@ export class FeishuRenderer {
     const messageIds: string[] = [];
 
     for (const payload of payloads) {
-      const res = await this.client.im.message.create({
+      const res = (await this.client.im.message.create({
         params: {
           receive_id_type: receiveIdType || this.defaultReceiveIdType,
         },
@@ -57,10 +95,9 @@ export class FeishuRenderer {
           content: payload,
           uuid: options.uuid,
         },
-      });
-      if (res.data?.message_id) {
-        messageIds.push(res.data.message_id);
-      }
+      })) as FeishuApiResponse;
+
+      messageIds.push(extractMessageId("send text message", res));
     }
     return messageIds;
   }
@@ -73,7 +110,7 @@ export class FeishuRenderer {
     options: FeishuSendOptions = {},
   ): Promise<string | undefined> {
     const payload = buildPostPayload(title, paragraphs);
-    const res = await this.client.im.message.create({
+    const res = (await this.client.im.message.create({
       params: {
         receive_id_type: receiveIdType || this.defaultReceiveIdType,
       },
@@ -83,8 +120,8 @@ export class FeishuRenderer {
         content: payload,
         uuid: options.uuid,
       },
-    });
-    return res.data?.message_id;
+    })) as FeishuApiResponse;
+    return extractMessageId("send post message", res);
   }
 
   async sendCard(
@@ -94,7 +131,7 @@ export class FeishuRenderer {
     options: FeishuSendCardOptions = {},
   ): Promise<string | undefined> {
     const payload = truncateCardPayload(card, options.updateMulti ?? false);
-    const res = await this.client.im.message.create({
+    const res = (await this.client.im.message.create({
       params: {
         receive_id_type: receiveIdType || this.defaultReceiveIdType,
       },
@@ -104,8 +141,8 @@ export class FeishuRenderer {
         content: payload,
         uuid: options.uuid,
       },
-    });
-    return res.data?.message_id;
+    })) as FeishuApiResponse;
+    return extractMessageId("send card message", res);
   }
 
   async replyPost(
@@ -115,7 +152,7 @@ export class FeishuRenderer {
     options: FeishuSendOptions = {},
   ): Promise<string | undefined> {
     const payload = buildPostPayload(title, paragraphs);
-    const res = await this.client.im.message.reply({
+    const res = (await this.client.im.message.reply({
       path: {
         message_id: messageId,
       },
@@ -124,20 +161,22 @@ export class FeishuRenderer {
         content: payload,
         uuid: options.uuid,
       },
-    });
-    return res.data?.message_id;
+    })) as FeishuApiResponse;
+    return extractMessageId("reply post message", res);
   }
 
   async updateCard(messageId: string, card: InteractiveCard): Promise<void> {
     const payload = truncateCardPayload(card, true);
-    await this.client.im.message.patch({
+    const response = (await this.client.im.message.patch({
       path: {
-        message_id: messageId
+        message_id: messageId,
       },
       data: {
-        content: payload
-      }
-    });
+        content: payload,
+      },
+    })) as FeishuApiResponse;
+
+    assertFeishuApiSuccess("patch card message", response);
   }
 
   // Pre-bound card senders
@@ -160,6 +199,26 @@ export class FeishuRenderer {
     template?: "blue" | "green" | "red" | "orange" | "grey",
   ): Promise<void> {
     const card = buildStatusCard(title, content, isCompleted, template);
+    return this.updateCard(messageId, card);
+  }
+
+  async renderCompleteCard(
+    receiveId: string,
+    title: string,
+    answerContent: string,
+    options?: Parameters<typeof buildCompleteCard>[2],
+  ): Promise<string | undefined> {
+    const card = buildCompleteCard(title, answerContent, options);
+    return this.sendCard(receiveId, card, undefined, { updateMulti: true });
+  }
+
+  async updateCompleteCard(
+    messageId: string,
+    title: string,
+    answerContent: string,
+    options?: Parameters<typeof buildCompleteCard>[2],
+  ): Promise<void> {
+    const card = buildCompleteCard(title, answerContent, options);
     return this.updateCard(messageId, card);
   }
 

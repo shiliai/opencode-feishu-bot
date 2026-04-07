@@ -1,17 +1,18 @@
-import type { FeishuMessageReceiveEvent } from "../event-router.js";
-import {
-  parseFeishuPromptEvent,
-  normalizeFeishuEvent,
-} from "../message-events.js";
-import type { ResponsePipelineTurnContext } from "../status-store.js";
+import type { InteractionManager } from "../../interaction/manager.js";
 import type { GuardDecision } from "../../interaction/types.js";
-import { InteractionManager } from "../../interaction/manager.js";
 import type { SettingsManager } from "../../settings/manager.js";
 import type { Logger } from "../../utils/logger.js";
 import { logger as defaultLogger } from "../../utils/logger.js";
+import type { FeishuMessageReceiveEvent } from "../event-router.js";
 import {
-  resolvePromptSession,
+  normalizeFeishuEvent,
+  parseFeishuPromptEvent,
+} from "../message-events.js";
+import type { ChatMessage, MessageReader } from "../message-reader.js";
+import type { ResponsePipelineTurnContext } from "../status-store.js";
+import {
   type OpenCodeSessionClient,
+  resolvePromptSession,
   type SessionResolutionDependencies,
   type SessionResolutionResult,
 } from "./session-resolution.js";
@@ -73,10 +74,14 @@ export interface PromptIngressDependencies {
   openCodeSession: OpenCodeSessionClient;
   openCodeSessionStatus: OpenCodeSessionStatusClient;
   openCodePromptAsync: OpenCodePromptAsyncClient;
+  messageReader?: MessageReader;
   botOpenId?: string | null;
   logger?: Logger;
   scheduleAsync?: (task: () => void) => void;
 }
+
+const HISTORY_CONTEXT_PREFIX =
+  "Recent chat context (oldest to newest, excluding the current message):";
 
 export async function isOpenCodeSessionBusy(
   client: OpenCodeSessionStatusClient,
@@ -115,6 +120,7 @@ export class PromptIngressHandler {
   private readonly openCodeSession: OpenCodeSessionClient;
   private readonly openCodeSessionStatus: OpenCodeSessionStatusClient;
   private readonly openCodePromptAsync: OpenCodePromptAsyncClient;
+  private readonly messageReader: MessageReader | null;
   private readonly botOpenId: string | null;
   private readonly logger: Logger;
   private readonly scheduleAsync: (task: () => void) => void;
@@ -125,10 +131,76 @@ export class PromptIngressHandler {
     this.openCodeSession = dependencies.openCodeSession;
     this.openCodeSessionStatus = dependencies.openCodeSessionStatus;
     this.openCodePromptAsync = dependencies.openCodePromptAsync;
+    this.messageReader = dependencies.messageReader ?? null;
     this.botOpenId = dependencies.botOpenId ?? null;
     this.logger = dependencies.logger ?? defaultLogger;
     this.scheduleAsync =
       dependencies.scheduleAsync ?? ((task) => setImmediate(task));
+  }
+
+  private getBasePromptParts(input: PromptIngressInput): PromptPartInput[] {
+    return [...(input.parts ?? [{ type: "text", text: input.text }])];
+  }
+
+  private formatHistorySender(message: ChatMessage): string {
+    if (message.senderId.trim().length > 0) {
+      return `${message.senderType}:${message.senderId}`;
+    }
+
+    return message.senderType;
+  }
+
+  private createHistoryContextPart(
+    messages: ChatMessage[],
+  ): PromptTextPart | null {
+    const historyLines = messages
+      .filter((message) => message.content.trim().length > 0)
+      .reverse()
+      .map(
+        (message) =>
+          `- ${this.formatHistorySender(message)}: ${message.content.trim()}`,
+      );
+
+    if (historyLines.length === 0) {
+      return null;
+    }
+
+    return {
+      type: "text",
+      text: `${HISTORY_CONTEXT_PREFIX}\n${historyLines.join("\n")}`,
+    };
+  }
+
+  private async buildPromptParts(
+    input: PromptIngressInput,
+  ): Promise<PromptPartInput[]> {
+    const baseParts = this.getBasePromptParts(input);
+    if (!this.messageReader) {
+      return baseParts;
+    }
+
+    try {
+      const historyMessages = await this.messageReader.getChatMessages({
+        chatId: input.chatId,
+      });
+      const historyPart = this.createHistoryContextPart(
+        historyMessages.filter(
+          (message) => message.messageId !== input.messageId,
+        ),
+      );
+
+      if (!historyPart) {
+        return baseParts;
+      }
+
+      return [historyPart, ...baseParts];
+    } catch (error) {
+      this.logger.warn(
+        `[PromptIngress] Failed to load chat history for chat=${input.chatId}, continuing without history context`,
+        error,
+      );
+      return baseParts;
+    }
   }
 
   async handleMessageEvent(
@@ -264,6 +336,7 @@ export class PromptIngressHandler {
 
     this.scheduleAsync(async () => {
       try {
+        const parts = await this.buildPromptParts(input);
         const promptParams: {
           sessionID: string;
           directory: string;
@@ -274,7 +347,7 @@ export class PromptIngressHandler {
         } = {
           sessionID: resolution.sessionInfo.id,
           directory: resolution.directory,
-          parts: input.parts ?? [{ type: "text", text: input.text }],
+          parts,
         };
 
         if (model) {

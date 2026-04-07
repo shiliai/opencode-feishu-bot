@@ -1,7 +1,7 @@
 import type {
   SummaryFileChange,
-  SummaryToolEvent,
   SummaryTokensInfo,
+  SummaryToolEvent,
 } from "../summary/types.js";
 
 export interface ResponsePipelineTurnContext {
@@ -17,6 +17,10 @@ export interface StatusTurnState extends ResponsePipelineTurnContext {
   lastPartialText?: string;
   lastPatchedSignature?: string;
   lastPatchedText?: string;
+  accumulatedReasoning?: string;
+  reasoningStartTime?: number;
+  latestCompletedText?: string;
+  turnStartTime: number;
   pendingCompletion: boolean;
   cardUpdatesBroken: boolean;
   finalReplySent: boolean;
@@ -34,6 +38,7 @@ export class StatusStore {
   startTurn(context: ResponsePipelineTurnContext): StatusTurnState {
     const state: StatusTurnState = {
       ...context,
+      turnStartTime: Date.now(),
       pendingCompletion: false,
       cardUpdatesBroken: false,
       finalReplySent: false,

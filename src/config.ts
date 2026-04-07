@@ -1,4 +1,6 @@
 import "dotenv/config";
+import { homedir } from "node:os";
+import { join } from "node:path";
 
 export type ConnectionType = "ws" | "webhook";
 
@@ -12,6 +14,7 @@ export interface FeishuConfig {
   appSecret: string;
   botOpenId: string;
   eventDedupTtlMs: number;
+  eventDedupPersistPath: string;
 }
 
 export interface CardCallbackConfig {
@@ -26,6 +29,11 @@ export interface ThrottleConfig {
   statusCardPatchMaxAttempts: number;
 }
 
+export interface ControlCatalogConfig {
+  cacheTtlMs: number;
+  modelStatePath: string;
+}
+
 export interface ServiceConfig {
   port: number;
   host: string;
@@ -37,9 +45,27 @@ export interface AppConfig {
   connectionType: ConnectionType;
   cardCallback: CardCallbackConfig | null;
   throttle: ThrottleConfig;
+  controlCatalog: ControlCatalogConfig;
   service: ServiceConfig;
   logLevel: string;
 }
+
+export const DEFAULT_CONTROL_CATALOG_CACHE_TTL_MS = 600_000;
+export const DEFAULT_CONTROL_CATALOG_MODEL_STATE_PATH = join(
+  homedir(),
+  ".local",
+  "state",
+  "opencode",
+  "model.json",
+);
+export const DEFAULT_FEISHU_EVENT_DEDUP_TTL_MS = 300_000;
+export const DEFAULT_FEISHU_EVENT_DEDUP_PERSIST_PATH = join(
+  process.cwd(),
+  ".data",
+  "event-dedup.json",
+);
+export const DEFAULT_FEISHU_CARD_CALLBACK_VERIFICATION_TOKEN = "";
+export const DEFAULT_FEISHU_CARD_CALLBACK_ENCRYPT_KEY = "";
 
 export class ConfigValidationError extends Error {
   constructor(
@@ -90,10 +116,9 @@ export function loadConfig(): AppConfig {
   );
 
   const callbackUrl = getEnvVar("FEISHU_CARD_CALLBACK_URL", false);
-  const verificationToken = getEnvVar(
-    "FEISHU_CARD_CALLBACK_VERIFICATION_TOKEN",
-    false,
-  );
+  const verificationToken =
+    getEnvVar("FEISHU_CARD_CALLBACK_VERIFICATION_TOKEN", false) ||
+    DEFAULT_FEISHU_CARD_CALLBACK_VERIFICATION_TOKEN;
   const hasCardCallbackConfig = Boolean(callbackUrl || verificationToken);
 
   let cardCallback: CardCallbackConfig | null = null;
@@ -113,13 +138,16 @@ export function loadConfig(): AppConfig {
     cardCallback = {
       callbackUrl,
       verificationToken,
-      encryptKey: getEnvVar("FEISHU_CARD_CALLBACK_ENCRYPT_KEY", false),
+      encryptKey:
+        getEnvVar("FEISHU_CARD_CALLBACK_ENCRYPT_KEY", false) ||
+        DEFAULT_FEISHU_CARD_CALLBACK_ENCRYPT_KEY,
     };
   }
 
   return {
     opencode: {
-      apiUrl: getEnvVar("OPENCODE_API_BASE_URL", false) || "http://localhost:4096",
+      apiUrl:
+        getEnvVar("OPENCODE_API_BASE_URL", false) || "http://localhost:4096",
       apiKey: getEnvVar("OPENCODE_API_KEY", false),
     },
     feishu: {
@@ -128,8 +156,11 @@ export function loadConfig(): AppConfig {
       botOpenId: getEnvVar("FEISHU_BOT_OPEN_ID", false),
       eventDedupTtlMs: getOptionalPositiveIntEnvVar(
         "FEISHU_EVENT_DEDUP_TTL_MS",
-        300_000,
+        DEFAULT_FEISHU_EVENT_DEDUP_TTL_MS,
       ),
+      eventDedupPersistPath:
+        getEnvVar("FEISHU_EVENT_DEDUP_PERSIST_PATH", false) ||
+        DEFAULT_FEISHU_EVENT_DEDUP_PERSIST_PATH,
     },
     connectionType,
     cardCallback,
@@ -146,6 +177,15 @@ export function loadConfig(): AppConfig {
         "THROTTLE_STATUS_CARD_PATCH_MAX_ATTEMPTS",
         3,
       ),
+    },
+    controlCatalog: {
+      cacheTtlMs: getOptionalPositiveIntEnvVar(
+        "CONTROL_CATALOG_CACHE_TTL_MS",
+        DEFAULT_CONTROL_CATALOG_CACHE_TTL_MS,
+      ),
+      modelStatePath:
+        getEnvVar("CONTROL_CATALOG_MODEL_STATE_PATH", false) ||
+        DEFAULT_CONTROL_CATALOG_MODEL_STATE_PATH,
     },
     service: {
       port: getOptionalPositiveIntEnvVar("SERVICE_PORT", 3000),

@@ -1,14 +1,31 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import type { AppConfig } from "../../src/config.js";
-import { createFeishuClients, type FeishuClients } from "../../src/feishu/sdk.js";
+import {
+  createFeishuClients,
+  type FeishuClients,
+} from "../../src/feishu/sdk.js";
 
 function makeConfig(overrides: Partial<AppConfig> = {}): AppConfig {
   return {
     opencode: { apiUrl: "http://localhost:4096", apiKey: "" },
-    feishu: { appId: "test-app-id", appSecret: "test-app-secret", eventDedupTtlMs: 300000 },
+    feishu: {
+      appId: "test-app-id",
+      appSecret: "test-app-secret",
+      botOpenId: "",
+      eventDedupTtlMs: 300000,
+      eventDedupPersistPath: ".data/event-dedup.json",
+    },
     connectionType: "ws",
     cardCallback: null,
-    throttle: { statusCardUpdateIntervalMs: 2000 },
+    throttle: {
+      statusCardUpdateIntervalMs: 2000,
+      statusCardPatchRetryDelayMs: 500,
+      statusCardPatchMaxAttempts: 3,
+    },
+    controlCatalog: {
+      cacheTtlMs: 600000,
+      modelStatePath: "~/.local/state/opencode/model.json",
+    },
     service: { port: 3000, host: "0.0.0.0" },
     logLevel: "info",
     ...overrides,
@@ -64,7 +81,13 @@ describe("createFeishuClients", () => {
 
   it("creates client with correct appId and appSecret", () => {
     const config = makeConfig({
-      feishu: { appId: "my-id", appSecret: "my-secret" },
+      feishu: {
+        appId: "my-id",
+        appSecret: "my-secret",
+        botOpenId: "",
+        eventDedupTtlMs: 300000,
+        eventDedupPersistPath: ".data/event-dedup.json",
+      },
     });
     const clients = createFeishuClients(config);
 

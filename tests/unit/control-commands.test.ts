@@ -55,10 +55,63 @@ function createMockRenderer() {
 function createMockOpenCodeClient() {
   return {
     session: {
-      create: vi.fn().mockResolvedValue({ data: { id: "new-session-1" } }),
-      list: vi.fn().mockResolvedValue({ data: [{ id: "sess-1", title: "Test Session" }] }),
-      status: vi.fn().mockResolvedValue({ data: { "sess-1": { type: "idle" } } }),
+      create: vi.fn().mockResolvedValue({
+        data: {
+          id: "new-session-1",
+          title: "New Session",
+          directory: "/workspace/project",
+        },
+      }),
+      get: vi.fn().mockResolvedValue({
+        data: {
+          id: "sess-42",
+          title: "Target Session",
+          directory: "/workspace/project",
+        },
+        error: undefined,
+      }),
+      list: vi
+        .fn()
+        .mockResolvedValue({ data: [{ id: "sess-1", title: "Test Session" }] }),
+      status: vi
+        .fn()
+        .mockResolvedValue({ data: { "sess-1": { type: "idle" } } }),
       abort: vi.fn().mockResolvedValue({ data: true }),
+      messages: vi.fn().mockResolvedValue({ data: [] }),
+    },
+    app: {
+      agents: vi.fn().mockResolvedValue({
+        data: [{ name: "build", mode: "primary" }],
+      }),
+    },
+    config: {
+      providers: vi.fn().mockResolvedValue({
+        data: {
+          providers: [{ id: "openai", models: { "gpt-4": {} } }],
+          default: {},
+        },
+      }),
+    },
+    project: {
+      list: vi.fn().mockResolvedValue({
+        data: [
+          {
+            id: "project-1",
+            worktree: "/workspace/project-1",
+            name: "Project One",
+          },
+          {
+            id: "project-2",
+            worktree: "/workspace/project-2",
+            name: "Project Two",
+          },
+        ],
+      }),
+    },
+    global: {
+      health: vi.fn().mockResolvedValue({
+        data: { healthy: true, version: "1.3.17" },
+      }),
     },
   };
 }
@@ -80,7 +133,9 @@ function createMockInteractionManager() {
   };
 }
 
-function createRouter(overrides?: Partial<ControlRouterOptions>): ControlRouter {
+function createRouter(
+  overrides?: Partial<ControlRouterOptions>,
+): ControlRouter {
   const settings = createMockSettings();
   const sessionManager = createMockSessionManager();
   const renderer = createMockRenderer();
@@ -110,28 +165,91 @@ describe("ControlRouter — command dispatch", () => {
     expect(sentCard.header.title.content).toBe("OpenCode Commands");
   });
 
-  it("/new creates session and updates settings", async () => {
-    const settings = createMockSettings();
+  it("/new sends confirmation card instead of creating session immediately", async () => {
+    const renderer = createMockRenderer();
     const openCodeClient = createMockOpenCodeClient();
-    const router = createRouter({ settingsManager: settings, openCodeClient });
+    const router = createRouter({ renderer, openCodeClient });
 
     const result = await router.handleCommand("chat-1", "/new");
 
     expect(result.success).toBe(true);
-    expect(openCodeClient.session.create).toHaveBeenCalledWith({});
-    expect(settings.setCurrentSession).toHaveBeenCalledWith(
+    expect(result.cardMessageId).toBe("msg-123");
+    expect(result.message).toBe("Confirmation required");
+    expect(openCodeClient.session.create).not.toHaveBeenCalled();
+    expect(renderer.sendCard).toHaveBeenCalledTimes(1);
+    const sentCard = renderer.sendCard.mock.calls[0][1];
+    expect(sentCard.header.title.content).toBe("⚠️ Confirmation Required");
+  });
+
+  it("/new confirmation card has confirm and cancel buttons", async () => {
+    const renderer = createMockRenderer();
+    const router = createRouter({ renderer });
+
+    await router.handleCommand("chat-1", "/new");
+
+    const sentCard = renderer.sendCard.mock.calls[0][1];
+    const actionEl = sentCard.elements.find(
+      (el: { tag: string }) => el.tag === "action",
+    );
+    expect(actionEl).toBeDefined();
+    const actions = actionEl.actions;
+    expect(actions).toHaveLength(2);
+    expect(actions[0].text.content).toBe("✅ Confirm");
+    expect(actions[0].type).toBe("primary");
+    expect(actions[0].value).toEqual({
+      action: "confirm_write",
+      operationId: "create_new_session",
+    });
+    expect(actions[1].text.content).toBe("❌ Cancel");
+    expect(actions[1].type).toBe("danger");
+    expect(actions[1].value).toEqual({
+      action: "reject_write",
+      operationId: "create_new_session",
+    });
+  });
+
+  it("/new creates session immediately when card callbacks are disabled", async () => {
+    const renderer = createMockRenderer();
+    const openCodeClient = createMockOpenCodeClient();
+    const settings = createMockSettings();
+    const sessionManager = createMockSessionManager();
+    const router = createRouter({
+      renderer,
+      openCodeClient,
+      settingsManager: settings,
+      sessionManager,
+      cardActionsEnabled: false,
+    });
+
+    const result = await router.handleCommand("chat-1", "/new");
+
+    expect(result.success).toBe(true);
+    expect(openCodeClient.session.create).toHaveBeenCalledWith({
+      directory: process.cwd(),
+    });
+    expect(renderer.sendCard).not.toHaveBeenCalled();
+    expect(renderer.sendText).toHaveBeenCalledWith(
+      "chat-1",
+      "New session selected: New Session (new-session-1)",
+    );
+    expect(sessionManager.setCurrentSession).toHaveBeenCalledWith(
       expect.objectContaining({ id: "new-session-1" }),
     );
   });
 
-  it("/new returns failure when session creation returns no data", async () => {
-    const openCodeClient = createMockOpenCodeClient();
-    openCodeClient.session.create.mockResolvedValue({ data: undefined });
-    const router = createRouter({ openCodeClient });
+  it("/new sends fallback text when confirmation card send fails", async () => {
+    const renderer = createMockRenderer();
+    renderer.sendCard.mockRejectedValueOnce(new Error("card send failed"));
+    const router = createRouter({ renderer });
 
     const result = await router.handleCommand("chat-1", "/new");
 
     expect(result.success).toBe(false);
+    expect(result.message).toContain("Failed to send confirmation card");
+    expect(renderer.sendText).toHaveBeenCalledWith(
+      "chat-1",
+      "Failed to send confirmation card. Please try again.",
+    );
   });
 
   it("/sessions lists sessions as a card", async () => {
@@ -142,57 +260,266 @@ describe("ControlRouter — command dispatch", () => {
     const result = await router.handleCommand("chat-1", "/sessions");
 
     expect(result.success).toBe(true);
-    expect(openCodeClient.session.list).toHaveBeenCalledWith({});
+    expect(openCodeClient.session.list).toHaveBeenCalledWith({
+      directory: process.cwd(),
+      roots: true,
+    });
     expect(renderer.sendCard).toHaveBeenCalledTimes(1);
     const sentCard = renderer.sendCard.mock.calls[0][1];
     expect(sentCard.header.title.content).toBe("Sessions");
   });
 
+  it("/projects without args renders project picker card", async () => {
+    const renderer = createMockRenderer();
+    const openCodeClient = createMockOpenCodeClient();
+    const router = createRouter({ renderer, openCodeClient });
+
+    const result = await router.handleCommand("chat-1", "/projects");
+
+    expect(result.success).toBe(true);
+    expect(openCodeClient.project.list).toHaveBeenCalledTimes(1);
+    expect(renderer.sendCard).toHaveBeenCalledTimes(1);
+    const sentCard = renderer.sendCard.mock.calls[0][1];
+    expect(sentCard.header.title.content).toBe("Projects");
+  });
+
+  it("/project alias renders the same picker as /projects", async () => {
+    const renderer = createMockRenderer();
+    const openCodeClient = createMockOpenCodeClient();
+    const router = createRouter({ renderer, openCodeClient });
+
+    const result = await router.handleCommand("chat-1", "/project");
+
+    expect(result.success).toBe(true);
+    expect(openCodeClient.project.list).toHaveBeenCalledTimes(1);
+    expect(renderer.sendCard).toHaveBeenCalledTimes(1);
+    const sentCard = renderer.sendCard.mock.calls[0][1];
+    expect(sentCard.header.title.content).toBe("Projects");
+  });
+
+  it("/projects <id> switches project and clears session", async () => {
+    const renderer = createMockRenderer();
+    const openCodeClient = createMockOpenCodeClient();
+    const settings = createMockSettings();
+    const sessionManager = createMockSessionManager();
+    const router = createRouter({
+      renderer,
+      openCodeClient,
+      settingsManager: settings,
+      sessionManager,
+    });
+
+    const result = await router.handleCommand("chat-1", "/projects project-2");
+
+    expect(result.success).toBe(true);
+    expect(settings.setCurrentProject).toHaveBeenCalledWith({
+      id: "project-2",
+      worktree: "/workspace/project-2",
+      name: "Project Two",
+    });
+    expect(sessionManager.clearSession).toHaveBeenCalledTimes(1);
+    expect(renderer.sendText).toHaveBeenCalledWith(
+      "chat-1",
+      expect.stringContaining("Project selected:"),
+    );
+  });
+
+  it("/projects falls back to text list when card callbacks are disabled", async () => {
+    const renderer = createMockRenderer();
+    const openCodeClient = createMockOpenCodeClient();
+    const router = createRouter({
+      renderer,
+      openCodeClient,
+      cardActionsEnabled: false,
+    });
+
+    const result = await router.handleCommand("chat-1", "/projects");
+
+    expect(result.success).toBe(true);
+    expect(renderer.sendCard).not.toHaveBeenCalled();
+    expect(renderer.sendText).toHaveBeenCalledWith(
+      "chat-1",
+      expect.stringContaining("Use /projects <id>"),
+    );
+  });
+
   it("/session <id> switches to specified session", async () => {
+    const renderer = createMockRenderer();
     const sessionManager = createMockSessionManager();
     sessionManager.getCurrentSession.mockReturnValue({
       id: "old-session",
       title: "Old",
       directory: "/workspace",
     });
-    const router = createRouter({ sessionManager });
+    const openCodeClient = createMockOpenCodeClient();
+    openCodeClient.session.get.mockResolvedValue({
+      data: { id: "sess-42", title: "Target Session", directory: "/workspace" },
+      error: undefined,
+    });
+    const router = createRouter({ sessionManager, renderer, openCodeClient });
 
     const result = await router.handleCommand("chat-1", "/session sess-42");
 
     expect(result.success).toBe(true);
     expect(result.message).toContain("sess-42");
+    expect(openCodeClient.session.get).toHaveBeenCalledWith({
+      sessionID: "sess-42",
+      directory: "/workspace",
+    });
+    expect(renderer.sendText).toHaveBeenCalledWith(
+      "chat-1",
+      expect.stringContaining("Session selected:"),
+    );
     expect(sessionManager.setCurrentSession).toHaveBeenCalledWith(
       expect.objectContaining({ id: "sess-42" }),
     );
   });
 
   it("/model <name> updates model in settings", async () => {
+    const renderer = createMockRenderer();
     const settings = createMockSettings();
-    const router = createRouter({ settingsManager: settings });
+    const router = createRouter({ settingsManager: settings, renderer });
 
     const result = await router.handleCommand("chat-1", "/model gpt-4");
 
     expect(result.success).toBe(true);
     expect(settings.setCurrentModel).toHaveBeenCalledWith({
-      providerID: "gpt-4",
+      providerID: "openai",
       modelID: "gpt-4",
     });
+    expect(renderer.sendText).toHaveBeenCalledWith(
+      "chat-1",
+      "Model selected: openai/gpt-4",
+    );
+  });
+
+  it("/models alias renders the same picker as /model", async () => {
+    const renderer = createMockRenderer();
+    const openCodeClient = createMockOpenCodeClient();
+    const router = createRouter({ renderer, openCodeClient });
+
+    const result = await router.handleCommand("chat-1", "/models");
+
+    expect(result.success).toBe(true);
+    expect(openCodeClient.config.providers).toHaveBeenCalledTimes(1);
+    expect(renderer.sendCard).toHaveBeenCalledTimes(1);
+    const sentCard = renderer.sendCard.mock.calls[0][1];
+    expect(sentCard.header.title.content).toBe("Model Picker");
+  });
+
+  it("/model <provider/model> stores provider and model separately", async () => {
+    const renderer = createMockRenderer();
+    const settings = createMockSettings();
+    const router = createRouter({ settingsManager: settings, renderer });
+
+    const result = await router.handleCommand(
+      "chat-1",
+      "/model openai/gpt-4.1",
+    );
+
+    expect(result.success).toBe(true);
+    expect(settings.setCurrentModel).toHaveBeenCalledWith({
+      providerID: "openai",
+      modelID: "gpt-4.1",
+    });
+    expect(renderer.sendText).toHaveBeenCalledWith(
+      "chat-1",
+      "Model selected: openai/gpt-4.1",
+    );
+  });
+
+  it("/model <name> returns failure when bare model name is ambiguous", async () => {
+    const renderer = createMockRenderer();
+    const settings = createMockSettings();
+    const openCodeClient = createMockOpenCodeClient();
+    openCodeClient.config.providers.mockResolvedValue({
+      data: {
+        providers: [
+          { id: "openai", models: { "gpt-4o": {} } },
+          { id: "anthropic", models: { "gpt-4o": {} } },
+        ],
+        default: {},
+      },
+    });
+
+    const router = createRouter({
+      settingsManager: settings,
+      openCodeClient,
+      renderer,
+    });
+    const result = await router.handleCommand("chat-1", "/model gpt-4o");
+
+    expect(result.success).toBe(false);
+    expect(result.message).toContain("provider/model");
+    expect(settings.setCurrentModel).not.toHaveBeenCalled();
+    expect(renderer.sendText).toHaveBeenCalledWith(
+      "chat-1",
+      expect.stringContaining("provider/model"),
+    );
+  });
+
+  it("/model <name> returns failure when bare model name is unknown", async () => {
+    const renderer = createMockRenderer();
+    const settings = createMockSettings();
+    const router = createRouter({ settingsManager: settings, renderer });
+
+    const result = await router.handleCommand("chat-1", "/model not-real");
+
+    expect(result.success).toBe(false);
+    expect(result.message).toContain("Unknown model");
+    expect(settings.setCurrentModel).not.toHaveBeenCalled();
+    expect(renderer.sendText).toHaveBeenCalledWith(
+      "chat-1",
+      expect.stringContaining("Unknown model"),
+    );
   });
 
   it("/agent <name> updates agent in settings", async () => {
+    const renderer = createMockRenderer();
     const settings = createMockSettings();
-    const router = createRouter({ settingsManager: settings });
+    const router = createRouter({ settingsManager: settings, renderer });
 
     const result = await router.handleCommand("chat-1", "/agent build");
 
     expect(result.success).toBe(true);
     expect(settings.setCurrentAgent).toHaveBeenCalledWith("build");
+    expect(renderer.sendText).toHaveBeenCalledWith(
+      "chat-1",
+      "Agent selected: build",
+    );
+  });
+
+  it("/agent <name> returns failure when agent is unknown", async () => {
+    const renderer = createMockRenderer();
+    const settings = createMockSettings();
+    const openCodeClient = createMockOpenCodeClient();
+    openCodeClient.app.agents.mockResolvedValue({
+      data: [{ name: "oracle", mode: "all" }],
+    });
+    const router = createRouter({
+      settingsManager: settings,
+      renderer,
+      openCodeClient,
+    });
+
+    const result = await router.handleCommand("chat-1", "/agent build");
+
+    expect(result.success).toBe(false);
+    expect(result.message).toContain("Unknown agent");
+    expect(settings.setCurrentAgent).not.toHaveBeenCalled();
+    expect(renderer.sendText).toHaveBeenCalledWith(
+      "chat-1",
+      expect.stringContaining("Unknown agent"),
+    );
   });
 
   it("/status renders current status card", async () => {
     const renderer = createMockRenderer();
     const settings = createMockSettings();
-    settings.getCurrentModel.mockReturnValue({ providerID: "openai", modelID: "gpt-4" });
+    settings.getCurrentModel.mockReturnValue({
+      providerID: "openai",
+      modelID: "gpt-4",
+    });
     settings.getCurrentAgent.mockReturnValue("build");
     const sessionManager = createMockSessionManager();
     sessionManager.getCurrentSession.mockReturnValue({
@@ -200,7 +527,11 @@ describe("ControlRouter — command dispatch", () => {
       title: "Test",
       directory: "/workspace",
     });
-    const router = createRouter({ renderer, settingsManager: settings, sessionManager });
+    const router = createRouter({
+      renderer,
+      settingsManager: settings,
+      sessionManager,
+    });
 
     const result = await router.handleCommand("chat-1", "/status");
 
@@ -208,6 +539,108 @@ describe("ControlRouter — command dispatch", () => {
     expect(renderer.sendCard).toHaveBeenCalledTimes(1);
     const sentCard = renderer.sendCard.mock.calls[0][1];
     expect(sentCard.header.title.content).toBe("OpenCode Status");
+  });
+
+  it("/status prefers current model and agent from the OpenCode session API", async () => {
+    const renderer = createMockRenderer();
+    const settings = createMockSettings();
+    settings.getCurrentModel.mockReturnValue(undefined);
+    settings.getCurrentAgent.mockReturnValue(undefined);
+    settings.getCurrentProject.mockReturnValue({
+      id: "project-1",
+      worktree: "/workspace/project-1",
+      name: "Project One",
+    });
+    const sessionManager = createMockSessionManager();
+    sessionManager.getCurrentSession.mockReturnValue({
+      id: "sess-1",
+      title: "Test",
+      directory: "/workspace/project-1",
+    });
+    const openCodeClient = createMockOpenCodeClient();
+    openCodeClient.session.messages.mockResolvedValue({
+      data: [
+        {
+          info: {
+            providerID: "relay-gpt-sub",
+            modelID: "gpt-5.4",
+            agent: "oracle",
+          },
+        },
+      ],
+    });
+
+    const router = createRouter({
+      renderer,
+      settingsManager: settings,
+      sessionManager,
+      openCodeClient,
+    });
+
+    const result = await router.handleCommand("chat-1", "/status");
+
+    expect(result.success).toBe(true);
+    expect(openCodeClient.global.health).toHaveBeenCalledTimes(1);
+    expect(openCodeClient.session.messages).toHaveBeenCalledWith({
+      sessionID: "sess-1",
+      directory: "/workspace/project-1",
+      limit: 1,
+    });
+    const sentCard = renderer.sendCard.mock.calls[0][1];
+    const markdownEl = sentCard.elements.find(
+      (el: { tag: string }) => el.tag === "markdown",
+    );
+    expect(markdownEl.content).toContain("**Server**: healthy");
+    expect(markdownEl.content).toContain("**Version**: 1.3.17");
+    expect(markdownEl.content).toContain("**Project**: Project One");
+    expect(markdownEl.content).toContain("**Scope**: /workspace/project-1");
+    expect(markdownEl.content).toContain("**Model**: relay-gpt-sub/gpt-5.4");
+    expect(markdownEl.content).toContain("**Agent**: oracle");
+  });
+
+  it("/status preserves explicitly selected model and agent overrides", async () => {
+    const renderer = createMockRenderer();
+    const settings = createMockSettings();
+    settings.getCurrentModel.mockReturnValue({
+      providerID: "openai",
+      modelID: "gpt-4.1",
+    });
+    settings.getCurrentAgent.mockReturnValue("build");
+    const sessionManager = createMockSessionManager();
+    sessionManager.getCurrentSession.mockReturnValue({
+      id: "sess-1",
+      title: "Test",
+      directory: "/workspace/project-1",
+    });
+    const openCodeClient = createMockOpenCodeClient();
+    openCodeClient.session.messages.mockResolvedValue({
+      data: [
+        {
+          info: {
+            providerID: "relay-gpt-sub",
+            modelID: "gpt-5.4",
+            agent: "oracle",
+          },
+        },
+      ],
+    });
+
+    const router = createRouter({
+      renderer,
+      settingsManager: settings,
+      sessionManager,
+      openCodeClient,
+    });
+
+    const result = await router.handleCommand("chat-1", "/status");
+
+    expect(result.success).toBe(true);
+    const sentCard = renderer.sendCard.mock.calls[0][1];
+    const markdownEl = sentCard.elements.find(
+      (el: { tag: string }) => el.tag === "markdown",
+    );
+    expect(markdownEl.content).toContain("**Model**: openai/gpt-4.1");
+    expect(markdownEl.content).toContain("**Agent**: build");
   });
 
   it("/abort aborts current session", async () => {
@@ -219,12 +652,18 @@ describe("ControlRouter — command dispatch", () => {
       directory: "/workspace",
     });
     const interactionManager = createMockInteractionManager();
-    const router = createRouter({ openCodeClient, sessionManager, interactionManager });
+    const router = createRouter({
+      openCodeClient,
+      sessionManager,
+      interactionManager,
+    });
 
     const result = await router.handleCommand("chat-1", "/abort");
 
     expect(result.success).toBe(true);
-    expect(openCodeClient.session.abort).toHaveBeenCalledWith({ sessionID: "sess-1" });
+    expect(openCodeClient.session.abort).toHaveBeenCalledWith({
+      sessionID: "sess-1",
+    });
     expect(interactionManager.clearBusy).toHaveBeenCalledTimes(1);
   });
 

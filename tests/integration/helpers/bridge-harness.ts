@@ -39,8 +39,11 @@ import { createRuntimeEventHandlers } from "../../../src/app/runtime-event-handl
 import { ControlRouter } from "../../../src/feishu/control-router.js";
 
 interface MockRenderer {
+  sendCard: ReturnType<typeof vi.fn>;
   renderStatusCard: ReturnType<typeof vi.fn>;
   updateStatusCard: ReturnType<typeof vi.fn>;
+  renderCompleteCard: ReturnType<typeof vi.fn>;
+  updateCompleteCard: ReturnType<typeof vi.fn>;
   replyPost: ReturnType<typeof vi.fn>;
   sendPost: ReturnType<typeof vi.fn>;
   renderQuestionCard: ReturnType<typeof vi.fn>;
@@ -51,8 +54,20 @@ interface MockRenderer {
 interface MockOpenCodeClients {
   session: {
     create: ReturnType<typeof vi.fn>;
+    get: ReturnType<typeof vi.fn>;
+    list: ReturnType<typeof vi.fn>;
     status: ReturnType<typeof vi.fn>;
+    abort: ReturnType<typeof vi.fn>;
     promptAsync: ReturnType<typeof vi.fn>;
+  };
+  app: {
+    agents: ReturnType<typeof vi.fn>;
+  };
+  config: {
+    providers: ReturnType<typeof vi.fn>;
+  };
+  project: {
+    list: ReturnType<typeof vi.fn>;
   };
   question: {
     reply: ReturnType<typeof vi.fn>;
@@ -87,8 +102,11 @@ function createLogger(): Logger {
 
 function createRenderer(): MockRenderer {
   return {
+    sendCard: vi.fn().mockResolvedValue("control-card-1"),
     renderStatusCard: vi.fn().mockResolvedValue("status-card-1"),
     updateStatusCard: vi.fn().mockResolvedValue(undefined),
+    renderCompleteCard: vi.fn().mockResolvedValue("complete-card-1"),
+    updateCompleteCard: vi.fn().mockResolvedValue(undefined),
     replyPost: vi.fn().mockResolvedValue("reply-message-1"),
     sendPost: vi.fn().mockResolvedValue("send-post-1"),
     renderQuestionCard: vi.fn().mockResolvedValue("question-card-1"),
@@ -108,8 +126,65 @@ function createOpenCodeClients(): MockOpenCodeClients {
         },
         error: undefined,
       }),
+      get: vi
+        .fn()
+        .mockImplementation(
+          async (parameters?: { sessionID?: string; directory?: string }) => ({
+            data: {
+              id: parameters?.sessionID ?? "session-1",
+              title: `Integration ${parameters?.sessionID ?? "session-1"}`,
+              directory: parameters?.directory ?? "/workspace/project",
+            },
+            error: undefined,
+          }),
+        ),
+      list: vi.fn().mockResolvedValue({
+        data: [
+          {
+            id: "session-1",
+            title: "Integration Session",
+            directory: "/workspace/project",
+          },
+        ],
+        error: undefined,
+      }),
       status: vi.fn().mockResolvedValue({ data: {}, error: undefined }),
+      abort: vi.fn().mockResolvedValue({ data: true, error: undefined }),
       promptAsync: vi.fn().mockResolvedValue(undefined),
+    },
+    app: {
+      agents: vi.fn().mockResolvedValue({
+        data: [
+          { name: "build", mode: "primary" },
+          { name: "oracle", mode: "all" },
+        ],
+      }),
+    },
+    config: {
+      providers: vi.fn().mockResolvedValue({
+        data: {
+          providers: [
+            {
+              id: "openai",
+              models: {
+                "gpt-4": {},
+              },
+            },
+          ],
+          default: {},
+        },
+      }),
+    },
+    project: {
+      list: vi.fn().mockResolvedValue({
+        data: [
+          {
+            id: "project-1",
+            worktree: "/workspace/project",
+            name: "Integration Project",
+          },
+        ],
+      }),
     },
     question: {
       reply: vi.fn().mockResolvedValue(undefined),
@@ -242,7 +317,7 @@ export async function createBridgeHarness(): Promise<BridgeHarness> {
     settingsManager,
     sessionManager,
     renderer: renderer as never,
-    openCodeClient: { session: openCodeClients.session },
+    openCodeClient: openCodeClients as never,
     interactionManager,
     logger,
   });

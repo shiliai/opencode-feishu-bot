@@ -4,6 +4,8 @@ import {
   getConfig,
   resetConfig,
   ConfigValidationError,
+  DEFAULT_CONTROL_CATALOG_MODEL_STATE_PATH,
+  DEFAULT_FEISHU_EVENT_DEDUP_PERSIST_PATH,
 } from "../../src/config.js";
 
 const VALID_ENV = {
@@ -48,6 +50,9 @@ function clearAllConfigKeys(): void {
     ...Object.keys(WEBHOOK_ENV),
     "OPENCODE_API_KEY",
     "THROTTLE_STATUS_CARD_UPDATE_INTERVAL_MS",
+    "CONTROL_CATALOG_CACHE_TTL_MS",
+    "CONTROL_CATALOG_MODEL_STATE_PATH",
+    "FEISHU_EVENT_DEDUP_PERSIST_PATH",
     "FEISHU_CARD_CALLBACK_ENCRYPT_KEY",
   ]);
   clearEnv([...allKeys]);
@@ -72,6 +77,9 @@ describe("loadConfig", () => {
     expect(config.feishu.appSecret).toBe("test-app-secret");
     expect(config.feishu.botOpenId).toBe("ou_bot_test");
     expect(config.feishu.eventDedupTtlMs).toBe(300000);
+    expect(config.feishu.eventDedupPersistPath).toBe(
+      DEFAULT_FEISHU_EVENT_DEDUP_PERSIST_PATH,
+    );
     expect(config.connectionType).toBe("ws");
     expect(config.opencode.apiUrl).toBe("http://localhost:4096");
     expect(config.opencode.apiKey).toBe("");
@@ -80,6 +88,10 @@ describe("loadConfig", () => {
     expect(config.logLevel).toBe("info");
     expect(config.cardCallback).toBeNull();
     expect(config.throttle.statusCardUpdateIntervalMs).toBe(2000);
+    expect(config.controlCatalog.cacheTtlMs).toBe(600000);
+    expect(config.controlCatalog.modelStatePath).toBe(
+      DEFAULT_CONTROL_CATALOG_MODEL_STATE_PATH,
+    );
   });
 
   it("produces a valid config from webhook environment", () => {
@@ -103,7 +115,9 @@ describe("loadConfig", () => {
 
     expect(config.connectionType).toBe("ws");
     expect(config.cardCallback).not.toBeNull();
-    expect(config.cardCallback!.callbackUrl).toBe("https://example.com/webhook/card");
+    expect(config.cardCallback!.callbackUrl).toBe(
+      "https://example.com/webhook/card",
+    );
   });
 
   it("defaults connection type to ws when FEISHU_CONNECTION_TYPE is unset", () => {
@@ -167,6 +181,37 @@ describe("loadConfig", () => {
     expect(config.feishu.eventDedupTtlMs).toBe(60000);
   });
 
+  it("reads optional FEISHU_EVENT_DEDUP_PERSIST_PATH", () => {
+    setEnv({
+      ...VALID_ENV,
+      FEISHU_EVENT_DEDUP_PERSIST_PATH: "/tmp/feishu-event-dedup.json",
+    });
+    const config = loadConfig();
+
+    expect(config.feishu.eventDedupPersistPath).toBe(
+      "/tmp/feishu-event-dedup.json",
+    );
+  });
+
+  it("reads optional CONTROL_CATALOG_CACHE_TTL_MS", () => {
+    setEnv({ ...VALID_ENV, CONTROL_CATALOG_CACHE_TTL_MS: "120000" });
+    const config = loadConfig();
+
+    expect(config.controlCatalog.cacheTtlMs).toBe(120000);
+  });
+
+  it("reads optional CONTROL_CATALOG_MODEL_STATE_PATH", () => {
+    setEnv({
+      ...VALID_ENV,
+      CONTROL_CATALOG_MODEL_STATE_PATH: "/tmp/opencode/model.json",
+    });
+    const config = loadConfig();
+
+    expect(config.controlCatalog.modelStatePath).toBe(
+      "/tmp/opencode/model.json",
+    );
+  });
+
   it("falls back to default for invalid throttle value", () => {
     setEnv({ ...VALID_ENV, THROTTLE_STATUS_CARD_UPDATE_INTERVAL_MS: "abc" });
     const config = loadConfig();
@@ -189,6 +234,13 @@ describe("loadConfig", () => {
     const config = loadConfig();
 
     expect(config.feishu.eventDedupTtlMs).toBe(300000);
+  });
+
+  it("falls back to default for invalid catalog cache ttl", () => {
+    setEnv({ ...VALID_ENV, CONTROL_CATALOG_CACHE_TTL_MS: "abc" });
+    const config = loadConfig();
+
+    expect(config.controlCatalog.cacheTtlMs).toBe(600000);
   });
 
   it("reads optional FEISHU_CARD_CALLBACK_ENCRYPT_KEY in webhook mode", () => {
@@ -255,9 +307,9 @@ describe("loadConfig - validation errors", () => {
     setEnv(without);
 
     expect(() => loadConfig()).toThrow(ConfigValidationError);
-    expect(() =>
-      loadConfig(),
-    ).toThrow(/FEISHU_CARD_CALLBACK_VERIFICATION_TOKEN/);
+    expect(() => loadConfig()).toThrow(
+      /FEISHU_CARD_CALLBACK_VERIFICATION_TOKEN/,
+    );
   });
 });
 
@@ -268,9 +320,7 @@ describe("ConfigValidationError", () => {
     } catch (err) {
       expect(err).toBeInstanceOf(ConfigValidationError);
       expect((err as ConfigValidationError).missingVar).toBe("FEISHU_APP_ID");
-      expect((err as ConfigValidationError).name).toBe(
-        "ConfigValidationError",
-      );
+      expect((err as ConfigValidationError).name).toBe("ConfigValidationError");
       return;
     }
     throw new Error("Expected ConfigValidationError");

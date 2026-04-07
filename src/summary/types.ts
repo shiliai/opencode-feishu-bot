@@ -68,8 +68,17 @@ export interface SummarySessionRetryInfo {
 export interface SummaryCallbacks {
   onTypingStart?: (sessionId: string) => void;
   onTypingStop?: (sessionId: string, reason: string) => void;
-  onPartial?: (sessionId: string, messageId: string, messageText: string) => void;
-  onComplete?: (sessionId: string, messageId: string, messageText: string) => void;
+  onPartial?: (
+    sessionId: string,
+    messageId: string,
+    messageText: string,
+  ) => void;
+  onComplete?: (
+    sessionId: string,
+    messageId: string,
+    messageText: string,
+  ) => void;
+  onSessionIdle?: (sessionId: string) => void;
   onTool?: (toolEvent: SummaryToolEvent) => void;
   onQuestion?: (questionEvent: SummaryQuestionEvent) => void;
   onQuestionError?: (sessionId: string) => void;

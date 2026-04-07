@@ -16,7 +16,9 @@ describe("fallback response integration", () => {
     const harness = await createBridgeHarness();
     harnesses.push(harness);
 
-    harness.renderer.updateStatusCard.mockRejectedValueOnce(new Error("patch failed"));
+    harness.renderer.updateStatusCard.mockRejectedValueOnce(
+      new Error("patch failed"),
+    );
     harness.setSseEvents(
       createAssistantTextEvents({
         sessionId: "session-1",
@@ -35,14 +37,21 @@ describe("fallback response integration", () => {
 
     await harness.flushSession();
 
-    expect(harness.renderer.replyPost).toHaveBeenCalledTimes(1);
+    expect(
+      harness.renderer.renderCompleteCard.mock.calls.length +
+        harness.renderer.updateCompleteCard.mock.calls.length,
+    ).toBeGreaterThan(0);
+    expect(harness.renderer.replyPost).not.toHaveBeenCalled();
     expect(harness.renderer.sendPost).not.toHaveBeenCalled();
   });
 
-  it("falls back to a non-threaded post when replyPost fails", async () => {
+  it("falls back to a non-threaded post when complete-card and reply-post delivery fail", async () => {
     const harness = await createBridgeHarness();
     harnesses.push(harness);
 
+    harness.renderer.updateCompleteCard.mockRejectedValueOnce(
+      new Error("complete card patch failed"),
+    );
     harness.renderer.replyPost.mockRejectedValueOnce(new Error("reply failed"));
     harness.setSseEvents(
       createAssistantTextEvents({

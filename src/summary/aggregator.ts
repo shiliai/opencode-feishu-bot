@@ -41,7 +41,9 @@ function getString(value: unknown): string | undefined {
 }
 
 function getNumber(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+  return typeof value === "number" && Number.isFinite(value)
+    ? value
+    : undefined;
 }
 
 function getEventProperties(event: Event): Record<string, unknown> | undefined {
@@ -49,8 +51,14 @@ function getEventProperties(event: Event): Record<string, unknown> | undefined {
   return isRecord(rawEvent.properties) ? rawEvent.properties : undefined;
 }
 
-function isQuestionOption(value: unknown): value is Question["options"][number] {
-  return isRecord(value) && typeof value.label === "string" && typeof value.description === "string";
+function isQuestionOption(
+  value: unknown,
+): value is Question["options"][number] {
+  return (
+    isRecord(value) &&
+    typeof value.label === "string" &&
+    typeof value.description === "string"
+  );
 }
 
 function isQuestion(value: unknown): value is Question {
@@ -95,7 +103,10 @@ function extractFirstUpdatedFileFromTitle(title: string): string {
   return "";
 }
 
-export function countDiffChangesFromText(text: string): { additions: number; deletions: number } {
+export function countDiffChangesFromText(text: string): {
+  additions: number;
+  deletions: number;
+} {
   let additions = 0;
   let deletions = 0;
 
@@ -118,7 +129,12 @@ function formatDiffForAttachment(diff: string): string {
   const formattedLines: string[] = [];
 
   for (const line of lines) {
-    if (line.startsWith("@@") || line.startsWith("---") || line.startsWith("+++") || line.startsWith("Index:")) {
+    if (
+      line.startsWith("@@") ||
+      line.startsWith("---") ||
+      line.startsWith("+++") ||
+      line.startsWith("Index:")
+    ) {
       continue;
     }
 
@@ -166,18 +182,23 @@ export class SummaryAggregator {
 
   constructor(options: SummaryAggregatorOptions = {}) {
     this.getCurrentProjectFn = options.getCurrentProject ?? getCurrentProject;
-    this.scheduleAsync = options.scheduleAsync ?? ((callback) => setImmediate(callback));
+    this.scheduleAsync =
+      options.scheduleAsync ?? ((callback) => setImmediate(callback));
   }
 
   setCallbacks(callbacks: SummaryCallbacks): void {
     this.callbacks = { ...this.callbacks, ...callbacks };
   }
 
-  setOnTypingStart(callback: NonNullable<SummaryCallbacks["onTypingStart"]>): void {
+  setOnTypingStart(
+    callback: NonNullable<SummaryCallbacks["onTypingStart"]>,
+  ): void {
     this.callbacks.onTypingStart = callback;
   }
 
-  setOnTypingStop(callback: NonNullable<SummaryCallbacks["onTypingStop"]>): void {
+  setOnTypingStop(
+    callback: NonNullable<SummaryCallbacks["onTypingStop"]>,
+  ): void {
     this.callbacks.onTypingStop = callback;
   }
 
@@ -189,6 +210,12 @@ export class SummaryAggregator {
     this.callbacks.onComplete = callback;
   }
 
+  setOnSessionIdle(
+    callback: NonNullable<SummaryCallbacks["onSessionIdle"]>,
+  ): void {
+    this.callbacks.onSessionIdle = callback;
+  }
+
   setOnTool(callback: NonNullable<SummaryCallbacks["onTool"]>): void {
     this.callbacks.onTool = callback;
   }
@@ -197,31 +224,45 @@ export class SummaryAggregator {
     this.callbacks.onQuestion = callback;
   }
 
-  setOnQuestionError(callback: NonNullable<SummaryCallbacks["onQuestionError"]>): void {
+  setOnQuestionError(
+    callback: NonNullable<SummaryCallbacks["onQuestionError"]>,
+  ): void {
     this.callbacks.onQuestionError = callback;
   }
 
-  setOnPermission(callback: NonNullable<SummaryCallbacks["onPermission"]>): void {
+  setOnPermission(
+    callback: NonNullable<SummaryCallbacks["onPermission"]>,
+  ): void {
     this.callbacks.onPermission = callback;
   }
 
-  setOnSessionDiff(callback: NonNullable<SummaryCallbacks["onSessionDiff"]>): void {
+  setOnSessionDiff(
+    callback: NonNullable<SummaryCallbacks["onSessionDiff"]>,
+  ): void {
     this.callbacks.onSessionDiff = callback;
   }
 
-  setOnTokenUpdate(callback: NonNullable<SummaryCallbacks["onTokenUpdate"]>): void {
+  setOnTokenUpdate(
+    callback: NonNullable<SummaryCallbacks["onTokenUpdate"]>,
+  ): void {
     this.callbacks.onTokenUpdate = callback;
   }
 
-  setOnSessionRetry(callback: NonNullable<SummaryCallbacks["onSessionRetry"]>): void {
+  setOnSessionRetry(
+    callback: NonNullable<SummaryCallbacks["onSessionRetry"]>,
+  ): void {
     this.callbacks.onSessionRetry = callback;
   }
 
-  setOnSessionCompacted(callback: NonNullable<SummaryCallbacks["onSessionCompacted"]>): void {
+  setOnSessionCompacted(
+    callback: NonNullable<SummaryCallbacks["onSessionCompacted"]>,
+  ): void {
     this.callbacks.onSessionCompacted = callback;
   }
 
-  setOnSessionError(callback: NonNullable<SummaryCallbacks["onSessionError"]>): void {
+  setOnSessionError(
+    callback: NonNullable<SummaryCallbacks["onSessionError"]>,
+  ): void {
     this.callbacks.onSessionError = callback;
   }
 
@@ -296,12 +337,18 @@ export class SummaryAggregator {
 
   private handleMessageUpdated(event: Event): void {
     const properties = getEventProperties(event);
-    const info = properties && isRecord(properties.info) ? properties.info : undefined;
+    const info =
+      properties && isRecord(properties.info) ? properties.info : undefined;
     const sessionId = info && getString(info.sessionID);
     const messageId = info && getString(info.id);
     const role = info && getString(info.role);
 
-    if (!sessionId || !messageId || !role || sessionId !== this.currentSessionId) {
+    if (
+      !sessionId ||
+      !messageId ||
+      !role ||
+      sessionId !== this.currentSessionId
+    ) {
       return;
     }
 
@@ -317,13 +364,22 @@ export class SummaryAggregator {
     const timeRecord = isRecord(time) ? time : undefined;
     const isCompleted = typeof getNumber(timeRecord?.completed) === "number";
     const messageText = this.getCombinedMessageText(messageId);
-    const tokenEvent = this.createTokenEvent(sessionId, messageId, info, isCompleted);
+    const tokenEvent = this.createTokenEvent(
+      sessionId,
+      messageId,
+      info,
+      isCompleted,
+    );
 
     if (tokenEvent) {
       this.callbacks.onTokenUpdate?.(tokenEvent);
     }
 
-    if (!isCompleted && state.optimisticUpdateCount === 1 && messageText.trim()) {
+    if (
+      !isCompleted &&
+      state.optimisticUpdateCount === 1 &&
+      messageText.trim()
+    ) {
       this.callbacks.onPartial?.(sessionId, messageId, messageText);
     }
 
@@ -348,13 +404,20 @@ export class SummaryAggregator {
 
   private handleMessagePartUpdated(event: Event): void {
     const properties = getEventProperties(event);
-    const part = properties && isRecord(properties.part) ? properties.part : undefined;
+    const part =
+      properties && isRecord(properties.part) ? properties.part : undefined;
     const sessionId = part && getString(part.sessionID);
     const messageId = part && getString(part.messageID);
     const partId = part && getString(part.id);
     const partType = part && getString(part.type);
 
-    if (!sessionId || !messageId || !partId || !partType || sessionId !== this.currentSessionId) {
+    if (
+      !sessionId ||
+      !messageId ||
+      !partId ||
+      !partType ||
+      sessionId !== this.currentSessionId
+    ) {
       return;
     }
 
@@ -382,7 +445,11 @@ export class SummaryAggregator {
         return;
       }
 
-      const wasUpdated = this.setOptimisticTextSnapshot(messageId, partId, text);
+      const wasUpdated = this.setOptimisticTextSnapshot(
+        messageId,
+        partId,
+        text,
+      );
       if (!wasUpdated) {
         return;
       }
@@ -390,7 +457,11 @@ export class SummaryAggregator {
       const state = this.getOrCreateTextMessageState(messageId);
       state.optimisticUpdateCount += 1;
       if (state.optimisticUpdateCount >= 2) {
-        this.callbacks.onPartial?.(sessionId, messageId, this.getCombinedMessageText(messageId));
+        this.callbacks.onPartial?.(
+          sessionId,
+          messageId,
+          this.getCombinedMessageText(messageId),
+        );
       }
       return;
     }
@@ -398,6 +469,41 @@ export class SummaryAggregator {
     if (partType === "reasoning") {
       this.reasoningMessages.add(messageId);
       this.ensureTypingStarted(sessionId);
+      return;
+    }
+
+    if (partType === "subtask") {
+      this.ensureTypingStarted(sessionId);
+      const agentName = getString(part.agent)?.trim();
+      const description = getString(part.description)?.trim();
+      const title =
+        [agentName, description].filter(Boolean).join(" — ") || "Subagent task";
+      const subtaskEvent: SummaryToolEvent = {
+        sessionId,
+        messageId,
+        callId: partId,
+        tool: "subtask",
+        status: "started",
+        title,
+      };
+      this.callbacks.onTool?.(subtaskEvent);
+      return;
+    }
+
+    if (partType === "step-start" || partType === "step-finish") {
+      this.ensureTypingStarted(sessionId);
+      const snapshot = getString(part.snapshot)?.trim();
+      const title = snapshot
+        ? `Step ${partType === "step-start" ? "started" : "finished"} · ${snapshot.slice(0, 12)}`
+        : `Step ${partType === "step-start" ? "started" : "finished"}`;
+      this.callbacks.onTool?.({
+        sessionId,
+        messageId,
+        callId: partId,
+        tool: "step",
+        status: partType === "step-start" ? "running" : "completed",
+        title,
+      });
       return;
     }
 
@@ -421,20 +527,23 @@ export class SummaryAggregator {
       return;
     }
 
-    if (status !== "completed") {
-      return;
-    }
+    this.ensureTypingStarted(sessionId);
+    const input =
+      rawState && isRecord(rawState.input) ? rawState.input : undefined;
+    const title = rawState && getString(rawState.title);
+    const metadata =
+      rawState && isRecord(rawState.metadata) ? rawState.metadata : undefined;
 
-    const processedKey = `completed:${callId}`;
+    const processedKey = `${status}:${callId}:${title ?? ""}`;
     if (this.processedToolStates.has(processedKey)) {
       return;
     }
     this.processedToolStates.add(processedKey);
 
-    const input = rawState && isRecord(rawState.input) ? rawState.input : undefined;
-    const title = rawState && getString(rawState.title);
-    const metadata = rawState && isRecord(rawState.metadata) ? rawState.metadata : undefined;
-    const preparedTool = this.prepareToolContext(tool, input, title, metadata);
+    const preparedTool =
+      status === "completed"
+        ? this.prepareToolContext(tool, input, title, metadata)
+        : {};
 
     const toolEvent: SummaryToolEvent = {
       sessionId,
@@ -459,14 +568,22 @@ export class SummaryAggregator {
     }
 
     const part = isRecord(properties.part) ? properties.part : undefined;
-    const sessionId = getString(part?.sessionID) ?? getString(properties.sessionID);
-    const messageId = getString(part?.messageID) ?? getString(properties.messageID);
-    const partId = getString(part?.id) ?? getString(properties.partID) ?? "text";
+    const sessionId =
+      getString(part?.sessionID) ?? getString(properties.sessionID);
+    const messageId =
+      getString(part?.messageID) ?? getString(properties.messageID);
+    const partId =
+      getString(part?.id) ?? getString(properties.partID) ?? "text";
     const partType = getString(part?.type) ?? getString(properties.type);
     const delta = getString(properties.delta);
     const fullTextHint = getString(part?.text);
 
-    if (!sessionId || !messageId || !delta || sessionId !== this.currentSessionId) {
+    if (
+      !sessionId ||
+      !messageId ||
+      !delta ||
+      sessionId !== this.currentSessionId
+    ) {
       return;
     }
 
@@ -492,7 +609,8 @@ export class SummaryAggregator {
     const state = this.getOrCreateTextMessageState(messageId);
     const previous = state.partTexts.get(partId) ?? "";
     const next =
-      typeof fullTextHint === "string" && fullTextHint.length > previous.length + delta.length
+      typeof fullTextHint === "string" &&
+      fullTextHint.length > previous.length + delta.length
         ? fullTextHint
         : `${previous}${delta}`;
     state.partTexts.set(partId, next);
@@ -512,7 +630,12 @@ export class SummaryAggregator {
     const requestId = properties && getString(properties.id);
     const questions = properties?.questions;
 
-    if (!sessionId || !requestId || sessionId !== this.currentSessionId || !Array.isArray(questions)) {
+    if (
+      !sessionId ||
+      !requestId ||
+      sessionId !== this.currentSessionId ||
+      !Array.isArray(questions)
+    ) {
       return;
     }
 
@@ -534,7 +657,11 @@ export class SummaryAggregator {
 
   private handlePermissionAsked(event: Event): void {
     const properties = getEventProperties(event);
-    if (!properties || !isPermissionRequest(properties) || properties.sessionID !== this.currentSessionId) {
+    if (
+      !properties ||
+      !isPermissionRequest(properties) ||
+      properties.sessionID !== this.currentSessionId
+    ) {
       return;
     }
 
@@ -553,7 +680,11 @@ export class SummaryAggregator {
     const sessionId = properties && getString(properties.sessionID);
     const diff = properties?.diff;
 
-    if (!sessionId || sessionId !== this.currentSessionId || !Array.isArray(diff)) {
+    if (
+      !sessionId ||
+      sessionId !== this.currentSessionId ||
+      !Array.isArray(diff)
+    ) {
       return;
     }
 
@@ -584,7 +715,11 @@ export class SummaryAggregator {
     const status = properties?.status;
     const statusRecord = isRecord(status) ? status : undefined;
 
-    if (!sessionId || sessionId !== this.currentSessionId || statusRecord?.type !== "retry") {
+    if (
+      !sessionId ||
+      sessionId !== this.currentSessionId ||
+      statusRecord?.type !== "retry"
+    ) {
       return;
     }
 
@@ -623,7 +758,9 @@ export class SummaryAggregator {
     const sessionId = properties && getString(properties.sessionID);
     const error = properties?.error;
     const errorRecord = isRecord(error) ? error : undefined;
-    const dataRecord = isRecord(errorRecord?.data) ? errorRecord.data : undefined;
+    const dataRecord = isRecord(errorRecord?.data)
+      ? errorRecord.data
+      : undefined;
     const message =
       getString(dataRecord?.message) ||
       getString(errorRecord?.message) ||
@@ -648,6 +785,9 @@ export class SummaryAggregator {
     }
 
     this.stopTyping("session_idle", sessionId);
+    this.scheduleAsync(() => {
+      this.callbacks.onSessionIdle?.(sessionId);
+    });
   }
 
   private createTokenEvent(
@@ -661,7 +801,9 @@ export class SummaryAggregator {
       return null;
     }
 
-    const cacheRecord = isRecord(tokensRecord.cache) ? tokensRecord.cache : undefined;
+    const cacheRecord = isRecord(tokensRecord.cache)
+      ? tokensRecord.cache
+      : undefined;
     const tokens: SummaryTokensInfo = {
       input: getNumber(tokensRecord.input) ?? 0,
       output: getNumber(tokensRecord.output) ?? 0,
@@ -685,15 +827,21 @@ export class SummaryAggregator {
       return normalizedPath;
     }
 
-    const normalizedWorktree = project.worktree.replace(/\\/g, "/").replace(/\/+$/, "");
+    const normalizedWorktree = project.worktree
+      .replace(/\\/g, "/")
+      .replace(/\/+$/, "");
     if (!normalizedWorktree) {
       return normalizedPath;
     }
 
     const pathForCompare =
-      process.platform === "win32" ? normalizedPath.toLowerCase() : normalizedPath;
+      process.platform === "win32"
+        ? normalizedPath.toLowerCase()
+        : normalizedPath;
     const worktreeForCompare =
-      process.platform === "win32" ? normalizedWorktree.toLowerCase() : normalizedWorktree;
+      process.platform === "win32"
+        ? normalizedWorktree.toLowerCase()
+        : normalizedWorktree;
 
     if (pathForCompare === worktreeForCompare) {
       return ".";
@@ -762,7 +910,11 @@ export class SummaryAggregator {
 
       const displayPath = this.normalizePathForDisplay(rawPath);
       return {
-        attachment: this.buildAttachment(displayPath, formatDiffForAttachment(diffText), "edit"),
+        attachment: this.buildAttachment(
+          displayPath,
+          formatDiffForAttachment(diffText),
+          "edit",
+        ),
         fileChange: {
           file: displayPath,
           additions: getNumber(filediffRecord?.additions) ?? 0,
@@ -800,7 +952,11 @@ export class SummaryAggregator {
 
       return {
         attachment: diffText
-          ? this.buildAttachment(displayPath, formatDiffForAttachment(diffText), "edit")
+          ? this.buildAttachment(
+              displayPath,
+              formatDiffForAttachment(diffText),
+              "edit",
+            )
           : undefined,
         fileChange,
       };
@@ -818,7 +974,10 @@ export class SummaryAggregator {
     this.callbacks.onTypingStart?.(sessionId);
   }
 
-  private stopTyping(reason: string, sessionId: string | null = this.currentSessionId): void {
+  private stopTyping(
+    reason: string,
+    sessionId: string | null = this.currentSessionId,
+  ): void {
     if (!this.typingActive || !sessionId) {
       this.typingActive = false;
       return;
@@ -860,7 +1019,11 @@ export class SummaryAggregator {
     }
   }
 
-  private setTextPartSnapshot(messageId: string, partId: string, text: string): boolean {
+  private setTextPartSnapshot(
+    messageId: string,
+    partId: string,
+    text: string,
+  ): boolean {
     const normalized = text;
     const partHash = this.hashString(`${partId}\n${normalized}`);
     const existingHashes = this.partHashes.get(messageId);
@@ -873,11 +1036,18 @@ export class SummaryAggregator {
     this.partHashes.set(messageId, hashes);
 
     this.registerTextPart(messageId, partId);
-    this.getOrCreateTextMessageState(messageId).partTexts.set(partId, normalized);
+    this.getOrCreateTextMessageState(messageId).partTexts.set(
+      partId,
+      normalized,
+    );
     return true;
   }
 
-  private setOptimisticTextSnapshot(messageId: string, partId: string, text: string): boolean {
+  private setOptimisticTextSnapshot(
+    messageId: string,
+    partId: string,
+    text: string,
+  ): boolean {
     const wasUpdated = this.setTextPartSnapshot(messageId, partId, text);
     if (!wasUpdated) {
       return false;
@@ -895,7 +1065,9 @@ export class SummaryAggregator {
       return "";
     }
 
-    return state.orderedPartIds.map((partId) => state.partTexts.get(partId) ?? "").join("");
+    return state.orderedPartIds
+      .map((partId) => state.partTexts.get(partId) ?? "")
+      .join("");
   }
 
   private hashString(value: string): string {

@@ -8,7 +8,7 @@ import { normalizeFeishuEvent } from "./message-events.js";
 
 export interface EventDispatcherLike {
   register(
-    handles: Record<string, (data: unknown) => Promise<void> | void>,
+    handles: Record<string, (data: unknown) => Promise<unknown> | unknown>,
   ): unknown;
 }
 
@@ -18,13 +18,16 @@ export interface WSClientLike {
 
 export interface StartFeishuWsClientOptions {
   wsClient: WSClientLike;
-  eventRouter: Pick<FeishuEventRouter, "handleMessageReceived">;
+  eventRouter: Pick<
+    FeishuEventRouter,
+    "handleMessageReceived" | "handleCardAction"
+  >;
   createEventDispatcher?: () => EventDispatcherLike;
   logger?: Logger;
 }
 
 export function createDefaultEventDispatcher(): EventDispatcherLike {
-  return new EventDispatcher({});
+  return new EventDispatcher({}) as unknown as EventDispatcherLike;
 }
 
 export async function startFeishuWsClient(
@@ -47,6 +50,12 @@ export async function startFeishuWsClient(
           `chat_type=${typeof message?.chat_type === "string" ? message.chat_type : "unknown"}`,
       );
       options.eventRouter.handleMessageReceived(eventData);
+    },
+    "card.action.trigger": async (data) => {
+      logger.debug("[FeishuWsClient] card.action.trigger ingress");
+      return options.eventRouter.handleCardAction(
+        data as Record<string, unknown>,
+      );
     },
   });
 

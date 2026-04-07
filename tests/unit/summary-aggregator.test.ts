@@ -1,6 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Event } from "@opencode-ai/sdk/v2";
-import { SummaryAggregator, countDiffChangesFromText } from "../../src/summary/aggregator.js";
+import {
+  SummaryAggregator,
+  countDiffChangesFromText,
+} from "../../src/summary/aggregator.js";
 import type { ProjectInfo } from "../../src/settings/manager.js";
 
 function makeEvent(type: string, properties: Record<string, unknown>): Event {
@@ -12,7 +15,11 @@ describe("SummaryAggregator", () => {
   let currentProject: ProjectInfo | undefined;
 
   beforeEach(() => {
-    currentProject = { id: "project-1", worktree: "/workspace/repo", name: "repo" };
+    currentProject = {
+      id: "project-1",
+      worktree: "/workspace/repo",
+      name: "repo",
+    };
     aggregator = new SummaryAggregator({
       getCurrentProject: () => currentProject,
       scheduleAsync: (callback) => callback(),
@@ -74,15 +81,28 @@ describe("SummaryAggregator", () => {
           id: "message-1",
           sessionID: "session-1",
           role: "assistant",
-          tokens: { input: 42, output: 7, reasoning: 0, cache: { read: 3, write: 1 } },
+          tokens: {
+            input: 42,
+            output: 7,
+            reasoning: 0,
+            cache: { read: 3, write: 1 },
+          },
           time: { created: Date.now(), completed: Date.now() },
         },
       }),
     );
 
     expect(onTypingStart).toHaveBeenCalledWith("session-1");
-    expect(onPartial).toHaveBeenLastCalledWith("session-1", "message-1", "Hello world");
-    expect(onComplete).toHaveBeenCalledWith("session-1", "message-1", "Hello world");
+    expect(onPartial).toHaveBeenLastCalledWith(
+      "session-1",
+      "message-1",
+      "Hello world",
+    );
+    expect(onComplete).toHaveBeenCalledWith(
+      "session-1",
+      "message-1",
+      "Hello world",
+    );
     expect(onTokenUpdate).toHaveBeenCalledWith({
       sessionId: "session-1",
       messageId: "message-1",
@@ -96,6 +116,37 @@ describe("SummaryAggregator", () => {
       isCompleted: true,
     });
     expect(onTypingStop).toHaveBeenCalledWith("session-1", "message_completed");
+  });
+
+  it("emits session idle callback when the current session settles", () => {
+    const onSessionIdle = vi.fn();
+    const onTypingStart = vi.fn();
+    const onTypingStop = vi.fn();
+
+    aggregator.setOnSessionIdle(onSessionIdle);
+    aggregator.setOnTypingStart(onTypingStart);
+    aggregator.setOnTypingStop(onTypingStop);
+    aggregator.setSession("session-1");
+
+    aggregator.processEvent(
+      makeEvent("message.updated", {
+        info: {
+          id: "message-1",
+          sessionID: "session-1",
+          role: "assistant",
+          time: { created: Date.now() },
+        },
+      }),
+    );
+    aggregator.processEvent(
+      makeEvent("session.idle", {
+        sessionID: "session-1",
+      }),
+    );
+
+    expect(onTypingStart).toHaveBeenCalledWith("session-1");
+    expect(onTypingStop).toHaveBeenCalledWith("session-1", "session_idle");
+    expect(onSessionIdle).toHaveBeenCalledWith("session-1");
   });
 
   it("starts optimistic partial streaming on the second unknown text update", () => {
@@ -127,7 +178,11 @@ describe("SummaryAggregator", () => {
     );
 
     expect(onPartial).toHaveBeenCalledTimes(1);
-    expect(onPartial).toHaveBeenCalledWith("session-1", "message-optimistic", "Hello");
+    expect(onPartial).toHaveBeenCalledWith(
+      "session-1",
+      "message-optimistic",
+      "Hello",
+    );
   });
 
   it("streams delta events and ignores unknown delta parts after reasoning begins", () => {
@@ -180,8 +235,18 @@ describe("SummaryAggregator", () => {
     );
 
     expect(onTypingStart).toHaveBeenCalledWith("session-1");
-    expect(onPartial).toHaveBeenNthCalledWith(1, "session-1", "message-delta", "Hel");
-    expect(onPartial).toHaveBeenNthCalledWith(2, "session-1", "message-delta", "Hello");
+    expect(onPartial).toHaveBeenNthCalledWith(
+      1,
+      "session-1",
+      "message-delta",
+      "Hel",
+    );
+    expect(onPartial).toHaveBeenNthCalledWith(
+      2,
+      "session-1",
+      "message-delta",
+      "Hello",
+    );
     expect(onPartial).toHaveBeenCalledTimes(2);
   });
 
@@ -253,7 +318,78 @@ describe("SummaryAggregator", () => {
       }),
     );
     const attachment = onTool.mock.calls[0][0].attachment as { buffer: Buffer };
-    expect(attachment.buffer.toString("utf8")).toContain("Edit File/Path: src/one.ts");
+    expect(attachment.buffer.toString("utf8")).toContain(
+      "Edit File/Path: src/one.ts",
+    );
+  });
+
+  it("emits progress events for running tools, subtasks, and step lifecycle parts", () => {
+    const onTool = vi.fn();
+    aggregator.setOnTool(onTool);
+    aggregator.setSession("session-1");
+
+    aggregator.processEvent(
+      makeEvent("message.part.updated", {
+        part: {
+          id: "tool-running",
+          sessionID: "session-1",
+          messageID: "message-1",
+          type: "tool",
+          callID: "call-1",
+          tool: "skill",
+          state: {
+            status: "running",
+            title: "code-walkthrough",
+            metadata: {},
+          },
+        },
+      }),
+    );
+    aggregator.processEvent(
+      makeEvent("message.part.updated", {
+        part: {
+          id: "subtask-1",
+          sessionID: "session-1",
+          messageID: "message-1",
+          type: "subtask",
+          agent: "oracle",
+          description: "Inspect pipeline",
+        },
+      }),
+    );
+    aggregator.processEvent(
+      makeEvent("message.part.updated", {
+        part: {
+          id: "step-1",
+          sessionID: "session-1",
+          messageID: "message-1",
+          type: "step-start",
+          snapshot: "abcdef1234567890",
+        },
+      }),
+    );
+
+    expect(onTool).toHaveBeenCalledWith(
+      expect.objectContaining({
+        tool: "skill",
+        status: "running",
+        title: "code-walkthrough",
+      }),
+    );
+    expect(onTool).toHaveBeenCalledWith(
+      expect.objectContaining({
+        tool: "subtask",
+        status: "started",
+        title: "oracle — Inspect pipeline",
+      }),
+    );
+    expect(onTool).toHaveBeenCalledWith(
+      expect.objectContaining({
+        tool: "step",
+        status: "running",
+        title: expect.stringContaining("Step started"),
+      }),
+    );
   });
 
   it("emits question, permission, session diff, retry, compacted, and error callbacks", () => {
@@ -305,10 +441,17 @@ describe("SummaryAggregator", () => {
     aggregator.processEvent(
       makeEvent("session.status", {
         sessionID: "session-1",
-        status: { type: "retry", attempt: 2, message: "retry later", next: 1234 },
+        status: {
+          type: "retry",
+          attempt: 2,
+          message: "retry later",
+          next: 1234,
+        },
       }),
     );
-    aggregator.processEvent(makeEvent("session.compacted", { sessionID: "session-1" }));
+    aggregator.processEvent(
+      makeEvent("session.compacted", { sessionID: "session-1" }),
+    );
     aggregator.processEvent(
       makeEvent("session.error", {
         sessionID: "session-1",
@@ -330,7 +473,10 @@ describe("SummaryAggregator", () => {
     });
     expect(onPermission).toHaveBeenCalledWith({
       sessionId: "session-1",
-      request: expect.objectContaining({ id: "permission-1", permission: "bash" }),
+      request: expect.objectContaining({
+        id: "permission-1",
+        permission: "bash",
+      }),
     });
     expect(onSessionDiff).toHaveBeenCalledWith({
       sessionId: "session-1",
@@ -342,7 +488,10 @@ describe("SummaryAggregator", () => {
       message: "retry later",
       next: 1234,
     });
-    expect(onSessionCompacted).toHaveBeenCalledWith("session-1", "/workspace/repo");
+    expect(onSessionCompacted).toHaveBeenCalledWith(
+      "session-1",
+      "/workspace/repo",
+    );
     expect(onSessionError).toHaveBeenCalledWith("session-1", "failure");
   });
 
@@ -404,15 +553,17 @@ describe("SummaryAggregator", () => {
 
   it("counts additions and deletions from diff text deterministically", () => {
     expect(
-      countDiffChangesFromText([
-        "--- a/src/file.ts",
-        "+++ b/src/file.ts",
-        "@@ -1,2 +1,3 @@",
-        " unchanged",
-        "-old",
-        "+new",
-        "+extra",
-      ].join("\n")),
+      countDiffChangesFromText(
+        [
+          "--- a/src/file.ts",
+          "+++ b/src/file.ts",
+          "@@ -1,2 +1,3 @@",
+          " unchanged",
+          "-old",
+          "+new",
+          "+extra",
+        ].join("\n"),
+      ),
     ).toEqual({ additions: 2, deletions: 1 });
   });
 });

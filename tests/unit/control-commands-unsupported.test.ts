@@ -59,6 +59,23 @@ function createMockOpenCodeClient() {
       list: vi.fn().mockResolvedValue({ data: [] }),
       status: vi.fn().mockResolvedValue({ data: {} }),
       abort: vi.fn().mockResolvedValue({ data: true }),
+      messages: vi.fn().mockResolvedValue({ data: [] }),
+    },
+    app: {
+      agents: vi.fn().mockResolvedValue({ data: [] }),
+    },
+    config: {
+      providers: vi
+        .fn()
+        .mockResolvedValue({ data: { providers: [], default: {} } }),
+    },
+    project: {
+      list: vi.fn().mockResolvedValue({ data: [] }),
+    },
+    global: {
+      health: vi.fn().mockResolvedValue({
+        data: { healthy: true, version: "1.3.17" },
+      }),
     },
   };
 }
@@ -80,7 +97,9 @@ function createMockInteractionManager() {
   };
 }
 
-function createRouter(overrides?: Partial<ControlRouterOptions>): ControlRouter {
+function createRouter(
+  overrides?: Partial<ControlRouterOptions>,
+): ControlRouter {
   const settings = createMockSettings();
   const sessionManager = createMockSessionManager();
   const renderer = createMockRenderer();
@@ -121,7 +140,11 @@ describe("ControlRouter — unsupported commands", () => {
     const settings = createMockSettings();
     const sessionManager = createMockSessionManager();
     const openCodeClient = createMockOpenCodeClient();
-    const router = createRouter({ settingsManager: settings, sessionManager, openCodeClient });
+    const router = createRouter({
+      settingsManager: settings,
+      sessionManager,
+      openCodeClient,
+    });
 
     await router.handleCommand("chat-1", "/foo");
     await router.handleCommand("chat-1", "/baz");
@@ -175,10 +198,56 @@ describe("ControlRouter — unsupported commands", () => {
 
   it("parseCommand returns null for commands outside bounded set", () => {
     const router = createRouter();
-    const extraCommands = ["/login", "/logout", "/config", "/debug", "/restart", "/version"];
+    const extraCommands = [
+      "/login",
+      "/logout",
+      "/config",
+      "/debug",
+      "/restart",
+      "/version",
+    ];
 
     for (const cmd of extraCommands) {
       expect(router.parseCommand(cmd)).toBeNull();
     }
+  });
+
+  it("parseCommand normalizes /models to /model", () => {
+    const router = createRouter();
+
+    expect(router.parseCommand("/models")).toEqual({ command: "/model" });
+    expect(router.parseCommand("/models gpt-5.4")).toEqual({
+      command: "/model",
+      args: "gpt-5.4",
+    });
+  });
+
+  it("parseCommand accepts slash commands with leading mention wrappers", () => {
+    const router = createRouter();
+
+    expect(router.parseCommand("@_user_1 /history")).toEqual({
+      command: "/history",
+    });
+    expect(
+      router.parseCommand('<at user_id="ou_bot">OpenCode Bot</at> /history 20'),
+    ).toEqual({ command: "/history", args: "20" });
+    expect(router.parseCommand("@OpenCode Bot/history")).toEqual({
+      command: "/history",
+    });
+    expect(router.parseCommand("\u200b/history")).toEqual({
+      command: "/history",
+    });
+  });
+
+  it("parseCommand accepts /projects with and without args", () => {
+    const router = createRouter();
+
+    expect(router.parseCommand("/projects")).toEqual({
+      command: "/projects",
+    });
+    expect(router.parseCommand("/projects project-1")).toEqual({
+      command: "/projects",
+      args: "project-1",
+    });
   });
 });

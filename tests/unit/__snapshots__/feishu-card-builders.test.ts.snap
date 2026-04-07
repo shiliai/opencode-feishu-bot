@@ -1,5 +1,34 @@
 // Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
 
+exports[`Feishu Card Builders > buildCompleteCard 1`] = `
+{
+  "elements": [
+    {
+      "content": "<details><summary>💭 Reasoning (1.5s)</summary>
+
+I finished the task.
+
+</details>
+
+🔧 Progress
+- ⚙️ npm install · done
+
+Task complete.
+
+<font size="1" color="grey">⏱️ 2.5s · ↑ 100 ↓ 50 · 💭 20 · cache 10/5</font>",
+      "tag": "markdown",
+    },
+  ],
+  "header": {
+    "template": "green",
+    "title": {
+      "content": "Agent Working",
+      "tag": "plain_text",
+    },
+  },
+}
+`;
+
 exports[`Feishu Card Builders > buildControlCard - no cancel 1`] = `
 {
   "elements": [
@@ -245,6 +274,26 @@ exports[`Feishu Card Builders > buildStatusCard - ongoing 1`] = `
     "template": "blue",
     "title": {
       "content": "Status",
+      "tag": "plain_text",
+    },
+  },
+}
+`;
+
+exports[`Feishu Card Builders > buildThinkingCard 1`] = `
+{
+  "elements": [
+    {
+      "content": "<font size="1" color="grey">💭 Thinking...</font>
+
+Setting up context...",
+      "tag": "markdown",
+    },
+  ],
+  "header": {
+    "template": "blue",
+    "title": {
+      "content": "Agent Working",
       "tag": "plain_text",
     },
   },

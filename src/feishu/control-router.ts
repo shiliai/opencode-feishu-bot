@@ -1,16 +1,40 @@
-import type { Logger } from "../utils/logger.js";
-import type { SettingsManager, SessionInfo } from "../settings/manager.js";
-import type { SessionManager } from "../session/manager.js";
+import { DEFAULT_CONTROL_CATALOG_CACHE_TTL_MS } from "../config.js";
 import type { FeishuRenderer } from "../feishu/renderer.js";
 import type { InteractionManager } from "../interaction/manager.js";
-import { buildHelpCard, buildSessionListCard, buildModelPickerCard, buildAgentPickerCard, buildStatusCard } from "./control-cards.js";
-import type { SessionSummary } from "./control-cards.js";
+import type { SessionManager } from "../session/manager.js";
+import type {
+  ModelInfo,
+  ProjectInfo,
+  SessionInfo,
+  SettingsManager,
+} from "../settings/manager.js";
+import type { Logger } from "../utils/logger.js";
+import { buildConfirmCard } from "./cards.js";
+import type { FeishuClients } from "./client.js";
+import type { ProjectSummary, SessionSummary } from "./control-cards.js";
+import {
+  buildAgentPickerCard,
+  buildHelpCard,
+  buildHistoryCard,
+  buildModelPickerCard,
+  buildProjectPickerCard,
+  buildSessionListCard,
+  buildStatusCard,
+} from "./control-cards.js";
+import {
+  ControlCatalogAdapter,
+  type ControlCatalogProvider,
+  type OpenCodeControlCatalogClient,
+} from "./control-catalog.js";
+import { MessageReader } from "./message-reader.js";
 
 export type ControlCommand =
   | "/help"
   | "/new"
+  | "/projects"
   | "/sessions"
   | "/session"
+  | "/history"
   | "/model"
   | "/agent"
   | "/status"
@@ -25,29 +49,150 @@ export interface ControlCommandResult {
 const SUPPORTED_COMMANDS = new Set<string>([
   "/help",
   "/new",
+  "/projects",
+  "/project",
   "/sessions",
   "/session",
+  "/history",
   "/model",
+  "/models",
   "/agent",
   "/status",
   "/abort",
 ]);
 
-export interface OpenCodeSessionClient {
-  create(parameters?: Record<string, unknown>): Promise<{ data?: Record<string, unknown> }>;
-  list(parameters?: Record<string, unknown>): Promise<{ data?: unknown }>;
-  status(parameters?: Record<string, unknown>): Promise<{ data?: unknown }>;
-  abort(parameters?: Record<string, unknown>): Promise<{ data?: unknown }>;
+const DEFAULT_HISTORY_COUNT = 10;
+
+const ZERO_WIDTH_CHARACTER_PATTERN = /[\u200B-\u200D\uFEFF]/g;
+
+function normalizeCommandInput(text: string): string {
+  const normalized = text
+    .replace(/\r\n/g, "\n")
+    .replace(ZERO_WIDTH_CHARACTER_PATTERN, "")
+    .trim();
+  if (!normalized) {
+    return "";
+  }
+
+  const withoutXmlMention = normalized.replace(
+    /^(?:<at\b[^>]*>[^<]*<\/at>\s*)+/i,
+    "",
+  );
+  const withoutPlaceholderMention = withoutXmlMention.replace(
+    /^(?:@_user_\d+\s*)+/i,
+    "",
+  );
+
+  if (withoutPlaceholderMention.startsWith("/")) {
+    return withoutPlaceholderMention;
+  }
+
+  const slashIndex = withoutPlaceholderMention.indexOf("/");
+  if (slashIndex <= 0) {
+    return withoutPlaceholderMention;
+  }
+
+  const prefix = withoutPlaceholderMention.slice(0, slashIndex).trim();
+  if (prefix.startsWith("@")) {
+    return withoutPlaceholderMention.slice(slashIndex).trimStart();
+  }
+
+  return withoutPlaceholderMention;
 }
 
+function resolveDirectoryScope(
+  currentProject: ProjectInfo | undefined,
+  currentSession: SessionInfo | undefined,
+): string {
+  if (currentProject?.worktree) {
+    return currentProject.worktree;
+  }
+
+  if (currentSession?.directory) {
+    return currentSession.directory;
+  }
+
+  return process.cwd();
+}
+
+export interface OpenCodeSessionClient {
+  create(
+    parameters?: Record<string, unknown>,
+  ): Promise<{ data?: Record<string, unknown>; error?: unknown }>;
+  get(parameters: {
+    sessionID: string;
+    directory?: string;
+  }): Promise<{ data?: unknown; error?: unknown }>;
+  list(parameters?: {
+    directory?: string;
+    limit?: number;
+    roots?: boolean;
+  }): Promise<{ data?: unknown; error?: unknown }>;
+  status(parameters?: Record<string, unknown>): Promise<{ data?: unknown }>;
+  abort(parameters?: Record<string, unknown>): Promise<{ data?: unknown }>;
+  messages(parameters: {
+    sessionID: string;
+    directory?: string;
+    limit?: number;
+  }): Promise<{ data?: unknown; error?: unknown }>;
+}
+
+export interface OpenCodeGlobalClient {
+  health(): Promise<{ data?: unknown; error?: unknown }>;
+}
+
+export interface OpenCodeProjectClient {
+  list(parameters?: {
+    directory?: string;
+    workspace?: string;
+  }): Promise<{ data?: unknown; error?: unknown }>;
+}
+
+export interface OpenCodeControlClient extends OpenCodeControlCatalogClient {
+  session: OpenCodeSessionClient;
+  project: OpenCodeProjectClient;
+  global: OpenCodeGlobalClient;
+}
+
+export type ControlRouterSettingsStore = Pick<
+  SettingsManager,
+  | "getCurrentProject"
+  | "setCurrentProject"
+  | "getCurrentSession"
+  | "setCurrentSession"
+  | "getCurrentAgent"
+  | "setCurrentAgent"
+  | "getCurrentModel"
+  | "setCurrentModel"
+>;
+
+export type ControlRouterSessionStore = Pick<
+  SessionManager,
+  "getCurrentSession" | "setCurrentSession" | "clearSession"
+>;
+
+export type ControlRouterRenderer = Pick<
+  FeishuRenderer,
+  "sendCard" | "sendText"
+>;
+
+export type ControlRouterInteractionStore = Pick<
+  InteractionManager,
+  "clearBusy" | "isBusy"
+>;
+
 export interface ControlRouterOptions {
-  settingsManager: SettingsManager;
-  sessionManager: SessionManager;
-  renderer: FeishuRenderer;
-  openCodeClient: {
-    session: OpenCodeSessionClient;
-  };
-  interactionManager: InteractionManager;
+  settingsManager: ControlRouterSettingsStore;
+  sessionManager: ControlRouterSessionStore;
+  renderer: ControlRouterRenderer;
+  openCodeClient: OpenCodeControlClient;
+  feishuClient?: FeishuClients["client"];
+  catalogAdapter?: ControlCatalogProvider;
+  catalogCacheTtlMs?: number;
+  catalogModelStatePath?: string;
+  messageReader?: MessageReader;
+  interactionManager: ControlRouterInteractionStore;
+  cardActionsEnabled?: boolean;
   logger?: Logger;
 }
 
@@ -59,39 +204,140 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+function getTrimmedString(value: unknown): string | null {
+  return typeof value === "string" && value.trim().length > 0
+    ? value.trim()
+    : null;
+}
+
+type CardActionToastType = "info" | "success" | "warning" | "error";
+
+export interface CardActionResponse {
+  toast?: {
+    type: CardActionToastType;
+    content: string;
+  };
+}
+
+function getCardActionPayload(
+  event: Record<string, unknown>,
+): Record<string, unknown> {
+  return isRecord(event.event) ? event.event : event;
+}
+
+function getCardActionValue(
+  event: Record<string, unknown>,
+): Record<string, unknown> | null {
+  const payload = getCardActionPayload(event);
+  const actionRecord = isRecord(payload.action) ? payload.action : null;
+  return actionRecord && isRecord(actionRecord.value)
+    ? actionRecord.value
+    : null;
+}
+
+function getCardActionReceiveId(event: Record<string, unknown>): string {
+  const payload = getCardActionPayload(event);
+  const context = isRecord(payload.context) ? payload.context : null;
+
+  return typeof payload.open_chat_id === "string"
+    ? payload.open_chat_id
+    : typeof context?.open_chat_id === "string"
+      ? context.open_chat_id
+      : "";
+}
+
+function buildCardActionToast(
+  content: string | undefined,
+  type: CardActionToastType,
+): CardActionResponse {
+  if (!content) {
+    return {};
+  }
+
+  return {
+    toast: {
+      type,
+      content,
+    },
+  };
+}
+
 export class ControlRouter {
-  private readonly settings: SettingsManager;
-  private readonly sessionManager: SessionManager;
-  private readonly renderer: FeishuRenderer;
+  private readonly settings: ControlRouterSettingsStore;
+  private readonly sessionManager: ControlRouterSessionStore;
+  private readonly renderer: ControlRouterRenderer;
   private readonly openCodeSession: OpenCodeSessionClient;
-  private readonly interactionManager: InteractionManager;
+  private readonly openCodeProject: OpenCodeProjectClient;
+  private readonly openCodeGlobal: OpenCodeGlobalClient;
+  private readonly interactionManager: ControlRouterInteractionStore;
+  private readonly cardActionsEnabled: boolean;
   private readonly logger: Logger;
+  private readonly catalogAdapter: ControlCatalogProvider;
+  private readonly messageReader: MessageReader | null;
 
   constructor(options: ControlRouterOptions) {
     this.settings = options.settingsManager;
     this.sessionManager = options.sessionManager;
     this.renderer = options.renderer;
     this.openCodeSession = options.openCodeClient.session;
+    this.openCodeProject = options.openCodeClient.project;
+    this.openCodeGlobal = options.openCodeClient.global;
     this.interactionManager = options.interactionManager;
+    this.cardActionsEnabled = options.cardActionsEnabled ?? true;
     this.logger = options.logger ?? createNoopLogger();
+    this.messageReader =
+      options.messageReader ??
+      (options.feishuClient
+        ? new MessageReader({
+            client: options.feishuClient,
+            logger: this.logger,
+          })
+        : null);
+    this.catalogAdapter =
+      options.catalogAdapter ??
+      new ControlCatalogAdapter({
+        settingsManager: this.settings,
+        openCodeClient: options.openCodeClient,
+        cacheTtlMs:
+          options.catalogCacheTtlMs ?? DEFAULT_CONTROL_CATALOG_CACHE_TTL_MS,
+        modelStatePath: options.catalogModelStatePath,
+        logger: this.logger,
+      });
   }
 
-  parseCommand(text: string): { command: ControlCommand; args?: string } | null {
-    const trimmed = text.trim();
-    if (!trimmed.startsWith("/")) {
+  parseCommand(
+    text: string,
+  ): { command: ControlCommand; args?: string } | null {
+    const normalizedInput = normalizeCommandInput(text);
+    if (!normalizedInput.startsWith("/")) {
       return null;
     }
 
-    const normalized = trimmed.toLowerCase();
-    const spaceIndex = normalized.indexOf(" ");
-    const commandPart = spaceIndex === -1 ? normalized : normalized.slice(0, spaceIndex);
-    const args = spaceIndex === -1 ? undefined : text.trim().slice(spaceIndex + 1).trim();
+    const whitespaceIndex = normalizedInput.search(/\s/);
+    const commandRaw =
+      whitespaceIndex === -1
+        ? normalizedInput
+        : normalizedInput.slice(0, whitespaceIndex);
+    const commandPart = commandRaw.toLowerCase();
+    const normalizedCommandPart =
+      commandPart === "/models"
+        ? "/model"
+        : commandPart === "/project"
+          ? "/projects"
+          : commandPart;
+    const args =
+      whitespaceIndex === -1
+        ? undefined
+        : normalizedInput.slice(whitespaceIndex).trim();
 
     if (!SUPPORTED_COMMANDS.has(commandPart)) {
       return null;
     }
 
-    return { command: commandPart as ControlCommand, args: args || undefined };
+    return {
+      command: normalizedCommandPart as ControlCommand,
+      args: args || undefined,
+    };
   }
 
   async handleCommand(
@@ -110,10 +356,14 @@ export class ControlRouter {
         return this.handleHelp(receiveId);
       case "/new":
         return this.handleNew(receiveId);
+      case "/projects":
+        return this.handleProjects(receiveId, args);
       case "/sessions":
         return this.handleSessions(receiveId);
       case "/session":
         return this.handleSession(receiveId, args);
+      case "/history":
+        return this.handleHistory(receiveId, args);
       case "/model":
         return this.handleModel(receiveId, args);
       case "/agent":
@@ -125,41 +375,151 @@ export class ControlRouter {
     }
   }
 
-  async handleCardAction(event: Record<string, unknown>): Promise<Record<string, never>> {
-    const actionRecord = isRecord(event.action) ? event.action : null;
-    const value = actionRecord && isRecord(actionRecord.value) ? actionRecord.value : null;
+  async handleCardAction(
+    event: Record<string, unknown>,
+  ): Promise<CardActionResponse> {
+    const value = getCardActionValue(event);
     const action = typeof value?.action === "string" ? value.action : null;
 
-    switch (action) {
-      case "select_session": {
-        const sessionId = typeof value?.sessionId === "string" ? value.sessionId : null;
-        if (sessionId) {
-          await this.handleSession("", sessionId);
-        }
-        break;
-      }
-      case "select_model": {
-        const modelName = typeof value?.modelName === "string" ? value.modelName : null;
-        if (modelName) {
-          await this.handleModel("", modelName);
-        }
-        break;
-      }
-      case "select_agent": {
-        const agentName = typeof value?.agentName === "string" ? value.agentName : null;
-        if (agentName) {
-          await this.handleAgent("", agentName);
-        }
-        break;
-      }
-      case "control_cancel":
-        this.interactionManager.clearBusy();
-        break;
-      default:
-        break;
+    if (!action) {
+      return {};
     }
 
-    return {};
+    try {
+      switch (action) {
+        case "select_session": {
+          const sessionId =
+            typeof value?.sessionId === "string" ? value.sessionId : null;
+          if (!sessionId) {
+            return {};
+          }
+
+          const result = await this.handleSession(
+            getCardActionReceiveId(event),
+            sessionId,
+          );
+          return buildCardActionToast(
+            result.message,
+            result.success ? "success" : "error",
+          );
+        }
+        case "select_model": {
+          const modelName =
+            typeof value?.modelName === "string" ? value.modelName : null;
+          if (!modelName) {
+            return {};
+          }
+
+          const result = await this.handleModel(
+            getCardActionReceiveId(event),
+            modelName,
+          );
+          return buildCardActionToast(
+            result.message,
+            result.success ? "success" : "error",
+          );
+        }
+        case "select_agent": {
+          const agentName =
+            typeof value?.agentName === "string" ? value.agentName : null;
+          if (!agentName) {
+            return {};
+          }
+
+          const result = await this.handleAgent(
+            getCardActionReceiveId(event),
+            agentName,
+          );
+          return buildCardActionToast(
+            result.message,
+            result.success ? "success" : "error",
+          );
+        }
+        case "select_project": {
+          const projectId =
+            typeof value?.projectId === "string" ? value.projectId : null;
+          if (!projectId) {
+            return {};
+          }
+
+          const result = await this.handleProjects(
+            getCardActionReceiveId(event),
+            projectId,
+          );
+          return buildCardActionToast(
+            result.message,
+            result.success ? "success" : "error",
+          );
+        }
+        case "control_cancel":
+          this.interactionManager.clearBusy();
+          return buildCardActionToast("Operation cancelled", "info");
+        case "confirm_write": {
+          const operationId =
+            typeof value?.operationId === "string" ? value.operationId : null;
+          if (operationId !== "create_new_session") {
+            return {};
+          }
+
+          const receiveId = getCardActionReceiveId(event);
+          try {
+            const result = await this.executeCreateSession();
+            if (receiveId && result.message) {
+              await this.renderer.sendText(receiveId, result.message);
+            }
+
+            return buildCardActionToast(
+              result.message,
+              result.success ? "success" : "error",
+            );
+          } catch (error) {
+            this.logger.error(
+              "[ControlRouter] Failed to create session from card action",
+              error,
+            );
+            if (receiveId) {
+              try {
+                await this.renderer.sendText(
+                  receiveId,
+                  "Failed to create session. Please try again.",
+                );
+              } catch (sendError) {
+                this.logger.error(
+                  "[ControlRouter] Failed to send session creation error message",
+                  sendError,
+                );
+              }
+            }
+
+            return buildCardActionToast(
+              "Failed to create session. Please try again.",
+              "error",
+            );
+          }
+        }
+        case "reject_write": {
+          const receiveId = getCardActionReceiveId(event);
+          if (receiveId) {
+            await this.renderer.sendText(receiveId, "Operation cancelled");
+          }
+          return buildCardActionToast("Operation cancelled", "info");
+        }
+        default:
+          return {};
+      }
+    } catch (error) {
+      this.logger.error(
+        "[ControlRouter] Failed to handle control card action",
+        {
+          action,
+          error,
+        },
+      );
+      return buildCardActionToast(
+        "Failed to apply selection. Please try again.",
+        "error",
+      );
+    }
   }
 
   private async handleHelp(receiveId: string): Promise<ControlCommandResult> {
@@ -168,36 +528,126 @@ export class ControlRouter {
     return { success: true, cardMessageId: messageId ?? undefined };
   }
 
-  private async handleNew(_receiveId: string): Promise<ControlCommandResult> {
+  private async handleNew(receiveId: string): Promise<ControlCommandResult> {
+    if (!this.cardActionsEnabled) {
+      this.logger.warn(
+        "[ControlRouter] Card callbacks are disabled; /new will create a session immediately",
+      );
+      const result = await this.executeCreateSession();
+      if (result.message) {
+        await this.renderer.sendText(receiveId, result.message);
+      }
+      return result;
+    }
+
+    const card = buildConfirmCard({
+      operationDescription:
+        "This will create a new OpenCode session and reset the current session. Continue?",
+      pendingOperationId: "create_new_session",
+    });
     try {
-      const result = await this.openCodeSession.create({});
-      const sessionData = result.data;
-      if (!sessionData || typeof sessionData !== "object" || !("id" in sessionData)) {
+      const messageId = await this.renderer.sendCard(receiveId, card);
+      if (!messageId) {
+        this.logger.error(
+          "[ControlRouter] Failed to send /new confirmation card: empty message id",
+        );
+        await this.renderer.sendText(
+          receiveId,
+          "Failed to send confirmation card. Please try again.",
+        );
+        return {
+          success: false,
+          message: "Failed to send confirmation card",
+        };
+      }
+
+      return {
+        success: true,
+        cardMessageId: messageId,
+        message: "Confirmation required",
+      };
+    } catch (error) {
+      this.logger.error(
+        "[ControlRouter] Failed to send /new confirmation card",
+        error,
+      );
+      try {
+        await this.renderer.sendText(
+          receiveId,
+          "Failed to send confirmation card. Please try again.",
+        );
+      } catch (sendError) {
+        this.logger.error(
+          "[ControlRouter] Failed to send /new fallback error message",
+          sendError,
+        );
+      }
+      return {
+        success: false,
+        message: "Failed to send confirmation card",
+      };
+    }
+  }
+
+  private async executeCreateSession(): Promise<ControlCommandResult> {
+    try {
+      const directory = resolveDirectoryScope(
+        this.settings.getCurrentProject(),
+        this.sessionManager.getCurrentSession() ?? undefined,
+      );
+      const result = await this.openCodeSession.create({ directory });
+      if (result.error) {
+        throw result.error;
+      }
+
+      const sessionInfo = this.parseSessionInfo(result.data, directory);
+      if (!sessionInfo) {
         return { success: false, message: "Failed to create session" };
       }
 
-      const sessionId = String(sessionData.id);
-      const sessionInfo: SessionInfo = {
-        id: sessionId,
-        title: "New session",
-        directory: process.cwd(),
+      this.sessionManager.setCurrentSession(sessionInfo);
+      this.logger.info(
+        `[ControlRouter] Created new session: ${sessionInfo.id}`,
+      );
+
+      const message =
+        sessionInfo.title !== sessionInfo.id
+          ? `New session selected: ${sessionInfo.title} (${sessionInfo.id})`
+          : `New session selected: ${sessionInfo.id}`;
+
+      return {
+        success: true,
+        message,
       };
-      this.settings.setCurrentSession(sessionInfo);
-      this.logger.info(`[ControlRouter] Created new session: ${sessionId}`);
-      return { success: true, message: `Session created: ${sessionId}` };
     } catch (error) {
       this.logger.error("[ControlRouter] Failed to create session", error);
       return { success: false, message: "Failed to create session" };
     }
   }
 
-  private async handleSessions(receiveId: string): Promise<ControlCommandResult> {
+  private async handleSessions(
+    receiveId: string,
+  ): Promise<ControlCommandResult> {
     try {
-      const result = await this.openCodeSession.list({});
+      const directory = resolveDirectoryScope(
+        this.settings.getCurrentProject(),
+        this.settings.getCurrentSession(),
+      );
+      const result = await this.openCodeSession.list({
+        directory,
+        roots: true,
+      });
+      if (result.error) {
+        throw result.error;
+      }
       const sessions = Array.isArray(result.data) ? result.data : [];
       const summaries: SessionSummary[] = sessions.map((s: unknown) => {
         const record = s as Record<string, unknown>;
-        return { id: String(record.id ?? ""), title: record.title ? String(record.title) : undefined, ...record };
+        return {
+          id: String(record.id ?? ""),
+          title: record.title ? String(record.title) : undefined,
+          ...record,
+        };
       });
       const card = buildSessionListCard(summaries);
       const messageId = await this.renderer.sendCard(receiveId, card);
@@ -219,23 +669,236 @@ export class ControlRouter {
 
     // Switch to the specified session
     const sessionId = args.trim();
-    const currentSession = this.sessionManager.getCurrentSession();
-    if (currentSession) {
-      this.sessionManager.setCurrentSession({
-        ...currentSession,
-        id: sessionId,
-        title: currentSession.title,
-        directory: currentSession.directory,
+    try {
+      const directory = resolveDirectoryScope(
+        this.settings.getCurrentProject(),
+        this.sessionManager.getCurrentSession() ?? undefined,
+      );
+      const result = await this.openCodeSession.get({
+        sessionID: sessionId,
+        directory,
       });
-    } else {
-      this.sessionManager.setCurrentSession({
-        id: sessionId,
-        title: sessionId,
-        directory: process.cwd(),
+      if (result.error) {
+        throw result.error;
+      }
+
+      const sessionInfo = this.parseSessionInfo(result.data, directory);
+      if (!sessionInfo) {
+        const message = `Unknown session: ${sessionId}`;
+        if (receiveId) {
+          await this.renderer.sendText(receiveId, message);
+        }
+        return { success: false, message };
+      }
+
+      this.sessionManager.setCurrentSession(sessionInfo);
+      this.logger.info(
+        `[ControlRouter] Switched to session: ${sessionInfo.id}`,
+      );
+
+      const message =
+        sessionInfo.title !== sessionInfo.id
+          ? `Session selected: ${sessionInfo.title} (${sessionInfo.id})`
+          : `Session selected: ${sessionInfo.id}`;
+      if (receiveId) {
+        await this.renderer.sendText(receiveId, message);
+      }
+      return { success: true, message };
+    } catch (error) {
+      this.logger.error("[ControlRouter] Failed to select session", error);
+      const message = "Failed to switch session";
+      if (receiveId) {
+        await this.renderer.sendText(receiveId, message);
+      }
+      return { success: false, message };
+    }
+  }
+
+  private parseProjects(data: unknown): ProjectSummary[] {
+    if (!Array.isArray(data)) {
+      return [];
+    }
+
+    const projects: ProjectSummary[] = [];
+    for (const candidate of data) {
+      if (!isRecord(candidate)) {
+        continue;
+      }
+
+      const id = typeof candidate.id === "string" ? candidate.id.trim() : "";
+      const worktree =
+        typeof candidate.worktree === "string" ? candidate.worktree.trim() : "";
+      const name =
+        typeof candidate.name === "string" ? candidate.name.trim() : undefined;
+
+      if (!id || !worktree) {
+        continue;
+      }
+
+      projects.push({
+        id,
+        worktree,
+        name: name && name.length > 0 ? name : undefined,
       });
     }
-    this.logger.info(`[ControlRouter] Switched to session: ${sessionId}`);
-    return { success: true, message: `Switched to session: ${sessionId}` };
+
+    return projects;
+  }
+
+  private async listProjects(): Promise<ProjectSummary[]> {
+    const result = await this.openCodeProject.list();
+    if (result.error) {
+      throw result.error;
+    }
+
+    return this.parseProjects(result.data);
+  }
+
+  private async selectProject(
+    projectId: string,
+  ): Promise<ProjectSummary | null> {
+    const projects = await this.listProjects();
+    const selectedProject = projects.find(
+      (project) => project.id === projectId,
+    );
+    if (!selectedProject) {
+      return null;
+    }
+
+    this.settings.setCurrentProject({
+      id: selectedProject.id,
+      worktree: selectedProject.worktree,
+      name: selectedProject.name,
+    });
+    this.sessionManager.clearSession();
+
+    return selectedProject;
+  }
+
+  private async handleProjects(
+    receiveId: string,
+    args?: string,
+  ): Promise<ControlCommandResult> {
+    const requestedProjectId = args?.trim();
+    if (requestedProjectId) {
+      try {
+        const selectedProject = await this.selectProject(requestedProjectId);
+        if (!selectedProject) {
+          const message = `Unknown project: ${requestedProjectId}`;
+          if (receiveId) {
+            await this.renderer.sendText(receiveId, message);
+          }
+          return { success: false, message };
+        }
+
+        const projectLabel = selectedProject.name ?? selectedProject.worktree;
+        const message =
+          `Project selected: ${projectLabel}\n\n` +
+          "Active session cleared. Use /sessions or /new for this project.";
+        this.logger.info(
+          `[ControlRouter] Switched to project: ${selectedProject.id}`,
+        );
+        if (receiveId) {
+          await this.renderer.sendText(receiveId, message);
+        }
+
+        return { success: true, message };
+      } catch (error) {
+        this.logger.error("[ControlRouter] Failed to select project", error);
+        const message = "Failed to switch project";
+        if (receiveId) {
+          await this.renderer.sendText(receiveId, message);
+        }
+        return { success: false, message };
+      }
+    }
+
+    try {
+      const projects = await this.listProjects();
+      if (projects.length === 0) {
+        const message = "No projects available.";
+        if (receiveId) {
+          await this.renderer.sendText(receiveId, message);
+        }
+        return { success: true, message };
+      }
+
+      if (!this.cardActionsEnabled) {
+        const listedProjects = projects.slice(0, 20);
+        const lines = listedProjects.map((project) => {
+          const label = project.name ?? project.worktree;
+          return `- ${project.id} — ${label}`;
+        });
+        const hiddenCount = Math.max(
+          0,
+          projects.length - listedProjects.length,
+        );
+        const hiddenNotice =
+          hiddenCount > 0 ? `\n…and ${hiddenCount} more projects.` : "";
+        const message = `Projects:\n${lines.join("\n")}${hiddenNotice}\n\nUse /projects <id> to select a project.`;
+        if (receiveId) {
+          await this.renderer.sendText(receiveId, message);
+        }
+        return { success: true, message: `Listed ${projects.length} projects` };
+      }
+
+      const currentProject = this.settings.getCurrentProject();
+      const card = buildProjectPickerCard(projects, currentProject?.id);
+      const messageId = await this.renderer.sendCard(receiveId, card);
+      return { success: true, cardMessageId: messageId ?? undefined };
+    } catch (error) {
+      this.logger.error("[ControlRouter] Failed to list projects", error);
+      const message = "Failed to list projects";
+      if (receiveId) {
+        await this.renderer.sendText(receiveId, message);
+      }
+      return { success: false, message };
+    }
+  }
+
+  private parseHistoryCount(args?: string): number {
+    if (!args) {
+      return DEFAULT_HISTORY_COUNT;
+    }
+
+    const firstToken = args.trim().split(/\s+/, 1)[0];
+    const parsedCount = Number.parseInt(firstToken, 10);
+    if (!Number.isFinite(parsedCount) || parsedCount <= 0) {
+      return DEFAULT_HISTORY_COUNT;
+    }
+
+    return parsedCount;
+  }
+
+  private async handleHistory(
+    receiveId: string,
+    args?: string,
+  ): Promise<ControlCommandResult> {
+    if (!this.messageReader) {
+      await this.renderer.sendText(receiveId, "Message history is unavailable");
+      return { success: false, message: "Message history is unavailable" };
+    }
+
+    try {
+      const count = this.parseHistoryCount(args);
+      const messages = await this.messageReader.getChatMessages({
+        chatId: receiveId,
+        count,
+      });
+
+      if (messages.length === 0) {
+        await this.renderer.sendText(receiveId, "No recent messages found");
+        return { success: true, message: "No recent messages found" };
+      }
+
+      const card = buildHistoryCard(messages);
+      const messageId = await this.renderer.sendCard(receiveId, card);
+      return { success: true, cardMessageId: messageId ?? undefined };
+    } catch (error) {
+      this.logger.error("[ControlRouter] Failed to read chat history", error);
+      await this.renderer.sendText(receiveId, "Failed to read recent messages");
+      return { success: false, message: "Failed to read recent messages" };
+    }
   }
 
   private async handleModel(
@@ -244,19 +907,66 @@ export class ControlRouter {
   ): Promise<ControlCommandResult> {
     if (!args) {
       // Show model picker card
-      const models = this.getAvailableModels();
+      const models = await this.catalogAdapter.getAvailableModels();
+      if (models.length === 0) {
+        this.logger.warn(
+          "[ControlRouter] Model catalog is empty while handling /model",
+        );
+      }
       const card = buildModelPickerCard(models);
       const messageId = await this.renderer.sendCard(receiveId, card);
       return { success: true, cardMessageId: messageId ?? undefined };
     }
 
     const modelName = args.trim();
-    this.settings.setCurrentModel({
-      providerID: modelName,
-      modelID: modelName,
-    });
-    this.logger.info(`[ControlRouter] Switched to model: ${modelName}`);
-    return { success: true, message: `Model switched to: ${modelName}` };
+    const selectedModel = await this.resolveModelSelection(modelName);
+    if (!selectedModel) {
+      const message =
+        "Unknown model. Use provider/model (for example openai/gpt-4o) or a unique bare model name from the catalog.";
+      if (receiveId) {
+        await this.renderer.sendText(receiveId, message);
+      }
+      return {
+        success: false,
+        message,
+      };
+    }
+
+    const selectedModelName = `${selectedModel.providerID}/${selectedModel.modelID}`;
+    this.settings.setCurrentModel(selectedModel);
+    this.logger.info(`[ControlRouter] Switched to model: ${selectedModelName}`);
+    const message = `Model selected: ${selectedModelName}`;
+    if (receiveId) {
+      await this.renderer.sendText(receiveId, message);
+    }
+    return {
+      success: true,
+      message,
+    };
+  }
+
+  private async resolveAgentSelection(
+    agentName: string,
+  ): Promise<string | null> {
+    const requestedAgent = agentName.trim();
+    if (!requestedAgent) {
+      return null;
+    }
+
+    const availableAgents = await this.catalogAdapter.getAvailableAgents();
+    const exactMatch = availableAgents.find(
+      (candidate) => candidate === requestedAgent,
+    );
+    if (exactMatch) {
+      return exactMatch;
+    }
+
+    const caseInsensitiveMatches = availableAgents.filter(
+      (candidate) => candidate.toLowerCase() === requestedAgent.toLowerCase(),
+    );
+    return caseInsensitiveMatches.length === 1
+      ? caseInsensitiveMatches[0]
+      : null;
   }
 
   private async handleAgent(
@@ -265,33 +975,142 @@ export class ControlRouter {
   ): Promise<ControlCommandResult> {
     if (!args) {
       // Show agent picker card
-      const agents = this.getAvailableAgents();
+      const agents = await this.catalogAdapter.getAvailableAgents();
       const card = buildAgentPickerCard(agents);
       const messageId = await this.renderer.sendCard(receiveId, card);
       return { success: true, cardMessageId: messageId ?? undefined };
     }
 
-    const agentName = args.trim();
-    this.settings.setCurrentAgent(agentName);
-    this.logger.info(`[ControlRouter] Switched to agent: ${agentName}`);
-    return { success: true, message: `Agent switched to: ${agentName}` };
+    const selectedAgent = await this.resolveAgentSelection(args);
+    if (!selectedAgent) {
+      const message =
+        "Unknown agent. Use /agent to pick an available agent from the current catalog.";
+      if (receiveId) {
+        await this.renderer.sendText(receiveId, message);
+      }
+      return {
+        success: false,
+        message,
+      };
+    }
+
+    this.settings.setCurrentAgent(selectedAgent);
+    this.logger.info(`[ControlRouter] Switched to agent: ${selectedAgent}`);
+    const message = `Agent selected: ${selectedAgent}`;
+    if (receiveId) {
+      await this.renderer.sendText(receiveId, message);
+    }
+    return { success: true, message };
   }
 
   private async handleStatus(receiveId: string): Promise<ControlCommandResult> {
-    const currentSession = this.sessionManager.getCurrentSession();
-    const currentModel = this.settings.getCurrentModel();
-    const currentAgent = this.settings.getCurrentAgent();
+    const currentProject = this.settings.getCurrentProject();
+    const currentSession = this.sessionManager.getCurrentSession() ?? undefined;
+    const fallbackModel = this.settings.getCurrentModel();
+    const fallbackAgent = this.settings.getCurrentAgent();
+    const directory = resolveDirectoryScope(currentProject, currentSession);
 
-    const modelDisplay = currentModel
-      ? `${currentModel.providerID}/${currentModel.modelID}`
-      : null;
+    let healthDisplay: string | null = null;
+    let versionDisplay: string | null = null;
+    try {
+      const healthResponse = await this.openCodeGlobal.health();
+      if (healthResponse.error) {
+        throw healthResponse.error;
+      }
 
-    const state = this.interactionManager.isBusy() ? "busy" : "idle";
+      const data = isRecord(healthResponse.data) ? healthResponse.data : null;
+      if (data) {
+        if (typeof data.healthy === "boolean") {
+          healthDisplay = data.healthy ? "healthy" : "unhealthy";
+        }
+        versionDisplay = getTrimmedString(data.version);
+      }
+    } catch (error) {
+      this.logger.warn(
+        "[ControlRouter] Failed to fetch OpenCode health for /status",
+        error,
+      );
+    }
+
+    let latestModelDisplay: string | null = null;
+    let latestAgentDisplay: string | null = null;
+
+    if (currentSession) {
+      try {
+        const messagesResponse = await this.openCodeSession.messages({
+          sessionID: currentSession.id,
+          directory,
+          limit: 1,
+        });
+        if (messagesResponse.error) {
+          throw messagesResponse.error;
+        }
+
+        const messages = Array.isArray(messagesResponse.data)
+          ? messagesResponse.data
+          : [];
+        const latestMessage = messages[0];
+        const info =
+          isRecord(latestMessage) && isRecord(latestMessage.info)
+            ? latestMessage.info
+            : null;
+        const providerID = info ? getTrimmedString(info.providerID) : null;
+        const modelID = info ? getTrimmedString(info.modelID) : null;
+        const agentName = info ? getTrimmedString(info.agent) : null;
+
+        if (providerID && modelID) {
+          latestModelDisplay = `${providerID}/${modelID}`;
+        }
+        if (agentName) {
+          latestAgentDisplay = agentName;
+        }
+      } catch (error) {
+        this.logger.warn(
+          `[ControlRouter] Failed to fetch latest OpenCode session message for /status: session=${currentSession.id}`,
+          error,
+        );
+      }
+    }
+
+    const modelDisplay = fallbackModel
+      ? `${fallbackModel.providerID}/${fallbackModel.modelID}`
+      : latestModelDisplay;
+    const agentDisplay = fallbackAgent ?? latestAgentDisplay;
+
+    let state = this.interactionManager.isBusy() ? "busy" : "idle";
+    try {
+      const statusResponse = await this.openCodeSession.status({ directory });
+      const statusMap = isRecord(statusResponse.data)
+        ? statusResponse.data
+        : null;
+      const sessionStatus =
+        currentSession && statusMap ? statusMap[currentSession.id] : undefined;
+      const statusRecord = isRecord(sessionStatus) ? sessionStatus : null;
+      const serverState = statusRecord
+        ? getTrimmedString(statusRecord.type)
+        : null;
+      if (serverState) {
+        state = serverState;
+      }
+    } catch (error) {
+      this.logger.warn(
+        `[ControlRouter] Failed to fetch OpenCode session status for /status: directory=${directory}`,
+        error,
+      );
+    }
+
+    const projectDisplay =
+      currentProject?.name ?? currentProject?.worktree ?? null;
 
     const card = buildStatusCard({
+      health: healthDisplay,
+      version: versionDisplay,
+      project: projectDisplay,
+      directory,
       session: currentSession?.id ?? null,
       model: modelDisplay,
-      agent: currentAgent ?? null,
+      sessionTitle: currentSession?.title ?? null,
+      agent: agentDisplay,
       state,
     });
     const messageId = await this.renderer.sendCard(receiveId, card);
@@ -308,26 +1127,66 @@ export class ControlRouter {
       await this.openCodeSession.abort({ sessionID: currentSession.id });
       this.interactionManager.clearBusy();
       this.logger.info(`[ControlRouter] Aborted session: ${currentSession.id}`);
-      return { success: true, message: `Session aborted: ${currentSession.id}` };
+      return {
+        success: true,
+        message: `Session aborted: ${currentSession.id}`,
+      };
     } catch (error) {
       this.logger.error("[ControlRouter] Failed to abort session", error);
       return { success: false, message: "Failed to abort session" };
     }
   }
 
-  private getAvailableModels(): string[] {
-    const currentModel = this.settings.getCurrentModel();
-    if (currentModel) {
-      return [`${currentModel.providerID}/${currentModel.modelID}`];
+  private parseModelSelection(modelName: string): ModelInfo | null {
+    const separator = modelName.indexOf("/");
+    if (separator <= 0 || separator >= modelName.length - 1) {
+      return null;
     }
-    return [];
+
+    return {
+      providerID: modelName.slice(0, separator),
+      modelID: modelName.slice(separator + 1),
+    };
   }
 
-  private getAvailableAgents(): string[] {
-    const currentAgent = this.settings.getCurrentAgent();
-    if (currentAgent) {
-      return [currentAgent];
+  private async resolveModelSelection(
+    modelName: string,
+  ): Promise<ModelInfo | null> {
+    const explicitModel = this.parseModelSelection(modelName);
+    if (explicitModel) {
+      return explicitModel;
     }
-    return [];
+
+    const availableModels = await this.catalogAdapter.getAvailableModels();
+    const suffixMatches = availableModels.filter((candidate) => {
+      const separator = candidate.indexOf("/");
+      return separator > 0 && candidate.slice(separator + 1) === modelName;
+    });
+
+    if (suffixMatches.length !== 1) {
+      return null;
+    }
+
+    return this.parseModelSelection(suffixMatches[0]);
+  }
+
+  private parseSessionInfo(
+    data: unknown,
+    fallbackDirectory: string,
+  ): SessionInfo | null {
+    if (!isRecord(data)) {
+      return null;
+    }
+
+    const id = getTrimmedString(data.id);
+    if (!id) {
+      return null;
+    }
+
+    return {
+      id,
+      title: getTrimmedString(data.title) ?? id,
+      directory: getTrimmedString(data.directory) ?? fallbackDirectory,
+    };
   }
 }
