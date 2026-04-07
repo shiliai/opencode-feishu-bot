@@ -141,7 +141,10 @@ describe("ControlRouter — selection cards (no args)", () => {
     const result = await router.handleCommand("chat-1", "/session");
 
     expect(result.success).toBe(true);
-    expect(openCodeClient.session.list).toHaveBeenCalledTimes(1);
+    expect(openCodeClient.session.list).toHaveBeenCalledWith({
+      directory: process.cwd(),
+      roots: true,
+    });
     expect(renderer.sendCard).toHaveBeenCalledTimes(1);
 
     const sentCard = renderer.sendCard.mock.calls[0][1];
@@ -238,8 +241,8 @@ describe("Selection card builders", () => {
       { id: "sess-2", title: "Second session" },
     ]);
 
-    expect(card.header.title.content).toBe("Sessions");
-    const actionEl = card.elements.find(
+    expect(card.header?.title?.content).toBe("Sessions");
+    const actionEl = card.elements?.find(
       (el: { tag: string }) => el.tag === "action",
     );
     expect(actionEl).toBeDefined();
@@ -259,17 +262,17 @@ describe("Selection card builders", () => {
 
   it("buildSessionListCard handles empty sessions", () => {
     const card = buildSessionListCard([]);
-    const markdownEl = card.elements.find(
+    const markdownEl = card.elements?.find(
       (el: { tag: string }) => el.tag === "markdown",
-    );
-    expect(markdownEl.content).toContain("No recent sessions found");
+    ) as { content?: string } | undefined;
+    expect(markdownEl?.content ?? "").toContain("No recent sessions found");
   });
 
   it("buildModelPickerCard renders models as buttons", () => {
     const card = buildModelPickerCard(["openai/gpt-4", "anthropic/claude-3"]);
 
-    expect(card.header.title.content).toBe("Model Picker");
-    const actionEl = card.elements.find(
+    expect(card.header?.title?.content).toBe("Model Picker");
+    const actionEl = card.elements?.find(
       (el: { tag: string }) => el.tag === "action",
     );
     const actions = (
@@ -285,8 +288,8 @@ describe("Selection card builders", () => {
   it("buildAgentPickerCard renders agents as buttons", () => {
     const card = buildAgentPickerCard(["build", "oracle"]);
 
-    expect(card.header.title.content).toBe("Agent Picker");
-    const actionEl = card.elements.find(
+    expect(card.header?.title?.content).toBe("Agent Picker");
+    const actionEl = card.elements?.find(
       (el: { tag: string }) => el.tag === "action",
     );
     const actions = (

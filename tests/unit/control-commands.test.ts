@@ -172,6 +172,21 @@ describe("ControlRouter — command dispatch", () => {
     });
   });
 
+  it("/new sends fallback text when confirmation card send fails", async () => {
+    const renderer = createMockRenderer();
+    renderer.sendCard.mockRejectedValueOnce(new Error("card send failed"));
+    const router = createRouter({ renderer });
+
+    const result = await router.handleCommand("chat-1", "/new");
+
+    expect(result.success).toBe(false);
+    expect(result.message).toContain("Failed to send confirmation card");
+    expect(renderer.sendText).toHaveBeenCalledWith(
+      "chat-1",
+      "Failed to send confirmation card. Please try again.",
+    );
+  });
+
   it("/sessions lists sessions as a card", async () => {
     const renderer = createMockRenderer();
     const openCodeClient = createMockOpenCodeClient();
@@ -180,7 +195,10 @@ describe("ControlRouter — command dispatch", () => {
     const result = await router.handleCommand("chat-1", "/sessions");
 
     expect(result.success).toBe(true);
-    expect(openCodeClient.session.list).toHaveBeenCalledWith({});
+    expect(openCodeClient.session.list).toHaveBeenCalledWith({
+      directory: process.cwd(),
+      roots: true,
+    });
     expect(renderer.sendCard).toHaveBeenCalledTimes(1);
     const sentCard = renderer.sendCard.mock.calls[0][1];
     expect(sentCard.header.title.content).toBe("Sessions");

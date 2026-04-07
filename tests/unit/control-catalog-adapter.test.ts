@@ -164,6 +164,45 @@ describe("ControlCatalogAdapter", () => {
     expect(openCodeClient.config.providers).toHaveBeenCalledTimes(2);
   });
 
+  it("falls back to stale model cache when providers API returns error field", async () => {
+    const settingsManager = createMockSettingsManager();
+    const openCodeClient = createMockOpenCodeClient();
+    openCodeClient.config.providers
+      .mockResolvedValueOnce({
+        data: {
+          providers: [
+            {
+              id: "openai",
+              models: {
+                "gpt-4o": {},
+              },
+            },
+          ],
+          default: {},
+        },
+      })
+      .mockResolvedValueOnce({
+        data: undefined,
+        error: new Error("providers unavailable"),
+      });
+
+    let now = 100;
+    const adapter = new ControlCatalogAdapter({
+      settingsManager: settingsManager as never,
+      openCodeClient: openCodeClient as never,
+      cacheTtlMs: 500,
+      now: () => now,
+    });
+
+    const first = await adapter.getAvailableModels();
+    now = 1_000;
+    const second = await adapter.getAvailableModels();
+
+    expect(first).toEqual(["openai/gpt-4o"]);
+    expect(second).toEqual(["openai/gpt-4o"]);
+    expect(openCodeClient.config.providers).toHaveBeenCalledTimes(2);
+  });
+
   it("keeps cache scoped to the resolved directory", async () => {
     const settingsManager = createMockSettingsManager();
     let currentDirectory = "/workspace/project-a";

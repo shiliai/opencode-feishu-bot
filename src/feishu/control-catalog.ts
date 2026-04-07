@@ -10,14 +10,14 @@ export interface OpenCodeAppCatalogClient {
   agents(parameters?: {
     directory?: string;
     workspace?: string;
-  }): Promise<{ data?: unknown }>;
+  }): Promise<{ data?: unknown; error?: unknown }>;
 }
 
 export interface OpenCodeConfigCatalogClient {
   providers(parameters?: {
     directory?: string;
     workspace?: string;
-  }): Promise<{ data?: unknown }>;
+  }): Promise<{ data?: unknown; error?: unknown }>;
 }
 
 export interface OpenCodeControlCatalogClient {
@@ -70,6 +70,14 @@ function deduplicate(values: string[]): string[] {
   }
 
   return output;
+}
+
+function extractClientError(response: unknown): unknown {
+  if (!isRecord(response)) {
+    return undefined;
+  }
+
+  return response.error;
 }
 
 function normalizeModelIdentifier(candidate: unknown): string | null {
@@ -268,8 +276,19 @@ export class ControlCatalogAdapter implements ControlCatalogProvider {
 
   private async fetchModels(directory: string): Promise<string[]> {
     const response = await this.openCodeClient.config.providers({ directory });
+    const responseError = extractClientError(response);
+    if (responseError !== undefined && responseError !== null) {
+      throw responseError;
+    }
+
+    if (response.data === undefined || response.data === null) {
+      throw new Error("providers() returned no data");
+    }
 
     const providers = this.extractProviders(response.data);
+    this.logger.debug(
+      `[ControlCatalogAdapter] Loaded ${providers.length} provider entries for directory=${directory}`,
+    );
     const models: string[] = [];
 
     for (const provider of providers) {
@@ -353,7 +372,16 @@ export class ControlCatalogAdapter implements ControlCatalogProvider {
 
   private async fetchAgents(directory: string): Promise<string[]> {
     const response = await this.openCodeClient.app.agents({ directory });
+    const responseError = extractClientError(response);
+    if (responseError !== undefined && responseError !== null) {
+      throw responseError;
+    }
+
     const data = response.data;
+    if (data === undefined || data === null) {
+      throw new Error("agents() returned no data");
+    }
+
     if (!Array.isArray(data)) {
       return [];
     }

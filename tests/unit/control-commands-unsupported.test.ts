@@ -202,4 +202,21 @@ describe("ControlRouter — unsupported commands", () => {
       expect(router.parseCommand(cmd)).toBeNull();
     }
   });
+
+  it("parseCommand accepts slash commands with leading mention wrappers", () => {
+    const router = createRouter();
+
+    expect(router.parseCommand("@_user_1 /history")).toEqual({
+      command: "/history",
+    });
+    expect(
+      router.parseCommand('<at user_id="ou_bot">OpenCode Bot</at> /history 20'),
+    ).toEqual({ command: "/history", args: "20" });
+    expect(router.parseCommand("@OpenCode Bot/history")).toEqual({
+      command: "/history",
+    });
+    expect(router.parseCommand("\u200b/history")).toEqual({
+      command: "/history",
+    });
+  });
 });
