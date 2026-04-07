@@ -97,6 +97,10 @@ function verifyToken(
     }
 
     if (typeof parsed.encrypt === "string") {
+      // When an encrypted payload arrives, token verification is skipped —
+      // the payload is authenticated by the signature check in verifySignature(),
+      // which requires encryptKey to be configured. If encryptKey is absent
+      // here, reject immediately (no bypass possible).
       return Boolean(options.encryptKey?.trim());
     }
 

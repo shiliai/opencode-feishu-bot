@@ -80,7 +80,7 @@ The bridge currently supports these slash commands in Feishu chat:
 - `/new` now requires explicit confirmation from the card button before a new session is created.
 - When Feishu card callbacks are not configured, `/new` falls back to immediate session creation to avoid callback error `200340`.
 - `/history` reads recent messages from the current chat and renders them as a history card.
-- If no model/agent has been set yet, `/status` shows `Model: none` / `Agent: none`.
+- If no model/agent has been set yet, `/status` shows `Model: OpenCode default` / `Agent: OpenCode default`.
 - During busy periods, control commands such as `/status`, `/help`, and `/abort` are still allowed.
 - In group chats, normal prompt messages require `@bot` mention behavior configured by Feishu permissions and bridge settings.
 

@@ -32,10 +32,11 @@ function getRawMessage(
 }
 
 function getCardActionQueueKey(event: Record<string, unknown>): string {
-  const context = isRecord(event.context) ? event.context : null;
+  const payload = isRecord(event.event) ? event.event : event;
+  const context = isRecord(payload.context) ? payload.context : null;
   const openMessageId =
-    typeof event.open_message_id === "string"
-      ? event.open_message_id
+    typeof payload.open_message_id === "string"
+      ? payload.open_message_id
       : typeof context?.open_message_id === "string"
         ? context.open_message_id
         : null;
