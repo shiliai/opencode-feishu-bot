@@ -1,6 +1,9 @@
 import type { Event } from "@opencode-ai/sdk/v2";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { ResponsePipelineController } from "../../src/feishu/response-pipeline.js";
+import {
+  type SessionMessageFetcher,
+  ResponsePipelineController,
+} from "../../src/feishu/response-pipeline.js";
 import {
   StatusStore,
   type ResponsePipelineTurnContext,
@@ -106,6 +109,14 @@ function createHarness() {
     clearBusy: vi.fn((): void => undefined),
   } satisfies InteractionManager;
 
+  const fetchLastAssistantMessage = vi
+    .fn<SessionMessageFetcher["fetchLastAssistantMessage"]>()
+    .mockResolvedValue(undefined);
+
+  const sessionMessageFetcher = {
+    fetchLastAssistantMessage,
+  } satisfies SessionMessageFetcher;
+
   const info = vi.fn();
   const warn = vi.fn();
   const error = vi.fn();
@@ -137,6 +148,7 @@ function createHarness() {
   const controller = new ResponsePipelineController({
     eventSubscriber,
     summaryAggregator,
+    sessionMessageFetcher,
     renderer,
     settingsManager,
     interactionManager,
@@ -167,6 +179,7 @@ function createHarness() {
     eventSubscriber,
     settingsManager,
     interactionManager,
+    sessionMessageFetcher,
     logger,
     setTimeoutFn: setTimeoutSpy,
     clearTimeoutFn,
@@ -494,5 +507,176 @@ describe("ResponsePipelineController", () => {
     expect(firstState?.subscriptionAbortController?.signal.aborted).toBe(true);
     expect(secondState?.subscriptionAbortController?.signal.aborted).toBe(true);
     expect(harness.clearTimeoutFn).toHaveBeenCalledTimes(1);
+  });
+
+  describe("session idle API message fetch", () => {
+    it("prefers API-fetched message text over event-based text when session goes idle", async () => {
+      const harness = createHarness();
+      const context = makeTurnContext();
+
+      harness.sessionMessageFetcher.fetchLastAssistantMessage.mockResolvedValue(
+        {
+          info: {
+            id: "api-msg-2",
+            sessionID: context.sessionId,
+            role: "assistant",
+          },
+          parts: [
+            { type: "text", text: "API fetched final summary" },
+            { type: "tool" },
+            { type: "text", text: " with more content" },
+          ],
+        },
+      );
+
+      harness.controller.startTurn(context);
+      harness.callbacks.onTypingStart?.(context.sessionId);
+      await drainSession(harness.controller, context.sessionId);
+
+      harness.callbacks.onComplete?.(
+        context.sessionId,
+        "assistant-msg-1",
+        "Event-based stale text",
+      );
+      await drainSession(harness.controller, context.sessionId);
+
+      harness.callbacks.onSessionIdle?.(context.sessionId);
+      await drainSession(harness.controller, context.sessionId);
+
+      expect(
+        harness.sessionMessageFetcher.fetchLastAssistantMessage,
+      ).toHaveBeenCalledWith(context.sessionId, context.directory);
+
+      expect(harness.renderer.updateCompleteCard).toHaveBeenCalledWith(
+        "status-card-1",
+        "OpenCode reply",
+        "API fetched final summary with more content",
+        expect.objectContaining({ template: "green" }),
+      );
+    });
+
+    it("falls back to event-based text when API returns undefined", async () => {
+      const harness = createHarness();
+      const context = makeTurnContext();
+
+      harness.sessionMessageFetcher.fetchLastAssistantMessage.mockResolvedValue(
+        undefined,
+      );
+
+      harness.controller.startTurn(context);
+
+      harness.callbacks.onComplete?.(
+        context.sessionId,
+        "assistant-msg-1",
+        "Event fallback text",
+      );
+      await drainSession(harness.controller, context.sessionId);
+
+      harness.callbacks.onSessionIdle?.(context.sessionId);
+      await drainSession(harness.controller, context.sessionId);
+
+      expect(harness.renderer.renderCompleteCard).toHaveBeenCalledWith(
+        context.receiveId,
+        "OpenCode reply",
+        "Event fallback text",
+        expect.objectContaining({ template: "green" }),
+      );
+    });
+
+    it("falls back to event-based text when API returns empty text", async () => {
+      const harness = createHarness();
+      const context = makeTurnContext();
+
+      harness.sessionMessageFetcher.fetchLastAssistantMessage.mockResolvedValue(
+        {
+          info: {
+            id: "api-msg-1",
+            sessionID: context.sessionId,
+            role: "assistant",
+          },
+          parts: [{ type: "tool" }],
+        },
+      );
+
+      harness.controller.startTurn(context);
+
+      harness.callbacks.onComplete?.(
+        context.sessionId,
+        "assistant-msg-1",
+        "Event text wins",
+      );
+      await drainSession(harness.controller, context.sessionId);
+
+      harness.callbacks.onSessionIdle?.(context.sessionId);
+      await drainSession(harness.controller, context.sessionId);
+
+      expect(harness.renderer.renderCompleteCard).toHaveBeenCalledWith(
+        context.receiveId,
+        "OpenCode reply",
+        "Event text wins",
+        expect.objectContaining({ template: "green" }),
+      );
+    });
+
+    it("falls back to event-based text when API call throws", async () => {
+      const harness = createHarness();
+      const context = makeTurnContext();
+
+      harness.sessionMessageFetcher.fetchLastAssistantMessage.mockRejectedValue(
+        new Error("API timeout"),
+      );
+
+      harness.controller.startTurn(context);
+
+      harness.callbacks.onComplete?.(
+        context.sessionId,
+        "assistant-msg-1",
+        "Resilient event text",
+      );
+      await drainSession(harness.controller, context.sessionId);
+
+      harness.callbacks.onSessionIdle?.(context.sessionId);
+      await drainSession(harness.controller, context.sessionId);
+
+      expect(harness.renderer.renderCompleteCard).toHaveBeenCalledWith(
+        context.receiveId,
+        "OpenCode reply",
+        "Resilient event text",
+        expect.objectContaining({ template: "green" }),
+      );
+    });
+
+    it("falls back to partial text when neither API nor onComplete provides content", async () => {
+      const harness = createHarness();
+      const context = makeTurnContext();
+
+      harness.sessionMessageFetcher.fetchLastAssistantMessage.mockResolvedValue(
+        undefined,
+      );
+
+      harness.controller.startTurn(context);
+      harness.callbacks.onTypingStart?.(context.sessionId);
+      await drainSession(harness.controller, context.sessionId);
+
+      harness.callbacks.onPartial?.(
+        context.sessionId,
+        "assistant-msg-1",
+        "Partial draft text",
+      );
+
+      harness.callbacks.onSessionIdle?.(context.sessionId);
+      await drainSession(harness.controller, context.sessionId);
+
+      expect(
+        harness.sessionMessageFetcher.fetchLastAssistantMessage,
+      ).toHaveBeenCalledWith(context.sessionId, context.directory);
+
+      expect(harness.renderer.updateCompleteCard).toHaveBeenCalledWith(
+        "status-card-1",
+        "OpenCode reply",
+        "Partial draft text",
+        expect.objectContaining({ template: "green" }),
+      );
+    });
   });
 });

@@ -35,6 +35,7 @@ import { statusStore } from "../feishu/status-store.js";
 import { startFeishuWsClient } from "../feishu/ws-client.js";
 import { interactionManager } from "../interaction/manager.js";
 import { createOpenCodeClient } from "../opencode/client.js";
+import { createSessionMessageFetcher } from "../opencode/message-fetcher.js";
 import { createOpenCodePromptClient } from "../opencode/prompt-client.js";
 import { permissionManager } from "../permission/manager.js";
 import { questionManager } from "../question/manager.js";
@@ -212,8 +213,12 @@ export async function startFeishuApp(): Promise<void> {
   });
 
   // Step 7: Create ResponsePipelineController
+  const sessionMessageFetcher = createSessionMessageFetcher(
+    createOpenCodeClient(config.opencode),
+  );
   const pipelineController = new ResponsePipelineController({
     summaryAggregator,
+    sessionMessageFetcher,
     renderer,
     imageResolver,
     settingsManager: managers.settings,
