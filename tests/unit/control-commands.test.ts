@@ -10,12 +10,20 @@ const { getModelContextLimitMock, scanWorkdirSubdirsMock } = vi.hoisted(() => ({
   scanWorkdirSubdirsMock: vi.fn(),
 }));
 
+const { handleUpdateCommandMock } = vi.hoisted(() => ({
+  handleUpdateCommandMock: vi.fn(),
+}));
+
 vi.mock("../../src/model/context-limit.js", () => ({
   getModelContextLimit: getModelContextLimitMock,
 }));
 
 vi.mock("../../src/feishu/workdir-scanner.js", () => ({
   scanWorkdirSubdirs: scanWorkdirSubdirsMock,
+}));
+
+vi.mock("../../src/feishu/handlers/update-handler.js", () => ({
+  handleUpdateCommand: handleUpdateCommandMock,
 }));
 
 function createMockSettings() {
@@ -173,6 +181,12 @@ beforeEach(() => {
   getModelContextLimitMock.mockResolvedValue(400_000);
   scanWorkdirSubdirsMock.mockReset();
   scanWorkdirSubdirsMock.mockResolvedValue([]);
+  handleUpdateCommandMock.mockReset();
+  handleUpdateCommandMock.mockResolvedValue({
+    success: true,
+    message: "Already up to date (v0.1.0). No updates available.",
+    needsRestart: false,
+  });
 });
 
 describe("ControlRouter — command dispatch", () => {
@@ -327,8 +341,10 @@ describe("ControlRouter — command dispatch", () => {
       actionEl as { actions: Array<{ value: Record<string, unknown> }> }
     ).actions;
     expect(actions[0].value).toEqual({
-      action: "select_project",
-      projectId: "project-1",
+      action: "selection_pick",
+      command: "project",
+      context: undefined,
+      value: "project-1",
     });
   });
 
@@ -376,19 +392,70 @@ describe("ControlRouter — command dispatch", () => {
     ).actions;
     expect(actions.map((action) => action.value)).toEqual([
       {
-        action: "select_project",
-        projectId: "project-1",
+        action: "selection_pick",
+        command: "project",
+        context: undefined,
+        value: "project-1",
       },
       {
-        action: "discover_project",
-        directory: "/workspace/project-3",
+        action: "selection_pick",
+        command: "project",
+        context: undefined,
+        value: "/workspace/project-3",
       },
       {
-        action: "select_project",
-        projectId: "project-2",
+        action: "selection_pick",
+        command: "project",
+        context: undefined,
+        value: "project-2",
       },
     ]);
-    expect(actions[1].text.content).toContain("✨");
+    const markdownContent = sentCard.elements
+      .filter((el: { tag: string }) => el.tag === "markdown")
+      .map((el: { content: string }) => el.content)
+      .join("\n");
+    expect(markdownContent).toContain("✨ New");
+  });
+
+  it("/task and /tasklist require task infrastructure", async () => {
+    const renderer = createMockRenderer();
+    const router = createRouter({ renderer });
+
+    const taskResult = await router.handleCommand("chat-1", "/task");
+    expect(taskResult.success).toBe(false);
+    expect(taskResult.message).toContain("not available");
+
+    const tasklistResult = await router.handleCommand("chat-1", "/tasklist");
+    expect(tasklistResult.success).toBe(false);
+    expect(tasklistResult.message).toContain("not available");
+  });
+
+  it("/update delegates to the update handler and sends the result text", async () => {
+    const renderer = createMockRenderer();
+    const logger = {
+      debug: vi.fn(),
+      info: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+    };
+    handleUpdateCommandMock.mockResolvedValueOnce({
+      success: true,
+      message: "Update successful: v0.1.0 → v0.1.1",
+      needsRestart: true,
+    });
+    const router = createRouter({ renderer, logger });
+
+    const result = await router.handleCommand("chat-1", "/update");
+
+    expect(handleUpdateCommandMock).toHaveBeenCalledWith(logger);
+    expect(renderer.sendText).toHaveBeenCalledWith(
+      "chat-1",
+      "Update successful: v0.1.0 → v0.1.1",
+    );
+    expect(result).toEqual({
+      success: true,
+      message: "Update successful: v0.1.0 → v0.1.1",
+    });
   });
 
   it("/project alias renders the same picker as /projects", async () => {

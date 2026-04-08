@@ -23,7 +23,9 @@ import {
   buildAgentPickerCard,
   buildHelpCard,
   buildHistoryCard,
+  buildModelListCard,
   buildModelPickerCard,
+  buildModelProviderCard,
   buildProjectPickerCard,
   buildSessionListCard,
   buildStatusCard,
@@ -35,6 +37,10 @@ import {
   type OpenCodeControlCatalogClient,
 } from "./control-catalog.js";
 import { MessageReader } from "./message-reader.js";
+import {
+  parseSelectionAction,
+  type SelectionAction,
+} from "./selection-card/index.js";
 import type { StatusStore } from "./status-store.js";
 import { scanWorkdirSubdirs, type WorkdirEntry } from "./workdir-scanner.js";
 
@@ -47,6 +53,9 @@ export type ControlCommand =
   | "/history"
   | "/model"
   | "/agent"
+  | "/task"
+  | "/tasklist"
+  | "/update"
   | "/status"
   | "/version"
   | "/abort";
@@ -68,6 +77,9 @@ const SUPPORTED_COMMANDS = new Set<string>([
   "/model",
   "/models",
   "/agent",
+  "/task",
+  "/tasklist",
+  "/update",
   "/status",
   "/version",
   "/abort",
@@ -427,6 +439,12 @@ export class ControlRouter {
         return this.handleModel(receiveId, args);
       case "/agent":
         return this.handleAgent(receiveId, args);
+      case "/task":
+        return this.handleTask(receiveId, args);
+      case "/tasklist":
+        return this.handleTasklist(receiveId);
+      case "/update":
+        return this.handleUpdate(receiveId);
       case "/status":
         return this.handleStatus(receiveId);
       case "/version":
@@ -440,13 +458,22 @@ export class ControlRouter {
     event: Record<string, unknown>,
   ): Promise<CardActionResponse> {
     const value = getCardActionValue(event);
+    if (!value) {
+      return {};
+    }
+
+    const selectionAction = parseSelectionAction(value);
     const action = typeof value?.action === "string" ? value.action : null;
 
-    if (!action) {
+    if (!selectionAction && !action) {
       return {};
     }
 
     try {
+      if (selectionAction) {
+        return await this.handleSelectionAction(selectionAction, event);
+      }
+
       switch (action) {
         case "select_session": {
           const sessionId =
@@ -598,6 +625,279 @@ export class ControlRouter {
     }
   }
 
+  private async handleSelectionAction(
+    action: SelectionAction,
+    event: Record<string, unknown>,
+  ): Promise<CardActionResponse> {
+    const receiveId = getCardActionReceiveId(event);
+
+    switch (action.action) {
+      case "selection_pick": {
+        switch (action.command) {
+          case "model": {
+            const level =
+              typeof action.context?.level === "string"
+                ? action.context.level
+                : "provider";
+
+            if (level === "provider") {
+              const result = await this.handleModelPickerPage(receiveId, 0, {
+                level: "model",
+                provider: action.value,
+              });
+              return buildCardActionToast(
+                result.message,
+                result.success ? "success" : "error",
+              );
+            }
+
+            const fullModelName =
+              level === "flat"
+                ? action.value
+                : (() => {
+                    const provider =
+                      typeof action.context?.provider === "string"
+                        ? action.context.provider
+                        : "";
+                    return provider
+                      ? `${provider}/${action.value}`
+                      : action.value;
+                  })();
+
+            const result = await this.handleModel(receiveId, fullModelName);
+            return buildCardActionToast(
+              result.message,
+              result.success ? "success" : "error",
+            );
+          }
+          case "session": {
+            const result = await this.handleSession(receiveId, action.value);
+            return buildCardActionToast(
+              result.message,
+              result.success ? "success" : "error",
+            );
+          }
+          case "project": {
+            const result = isAbsolute(action.value)
+              ? await this.discoverProject(receiveId, action.value)
+              : await this.handleProjects(receiveId, action.value);
+            return buildCardActionToast(
+              result.message,
+              result.success ? "success" : "error",
+            );
+          }
+          case "agent": {
+            const result = await this.handleAgent(receiveId, action.value);
+            return buildCardActionToast(
+              result.message,
+              result.success ? "success" : "error",
+            );
+          }
+          default:
+            return {};
+        }
+      }
+      case "selection_cancel":
+        return {};
+      case "selection_back":
+      case "selection_page": {
+        const page = action.action === "selection_page" ? action.page : 0;
+
+        if (action.command === "model") {
+          const result = await this.handleModelPickerPage(
+            receiveId,
+            page,
+            action.action === "selection_back"
+              ? { level: "provider" }
+              : action.context,
+          );
+          return buildCardActionToast(
+            result.message,
+            result.success ? "success" : "error",
+          );
+        }
+
+        if (action.command === "session") {
+          const result = await this.handleSessionPickerPage(receiveId, page);
+          return buildCardActionToast(
+            result.message,
+            result.success ? "success" : "error",
+          );
+        }
+
+        if (action.command === "project") {
+          const result = await this.handleProjectPickerPage(receiveId, page);
+          return buildCardActionToast(
+            result.message,
+            result.success ? "success" : "error",
+          );
+        }
+
+        return {};
+      }
+    }
+  }
+
+  private async handleSessionPickerPage(
+    receiveId: string,
+    page: number,
+  ): Promise<ControlCommandResult> {
+    if (!receiveId) {
+      return { success: false, message: "Unable to reopen session picker" };
+    }
+
+    const sessions = await this.listSessionSummaries();
+    const card = buildSessionListCard(sessions, page);
+    const messageId = await this.renderer.sendCard(receiveId, card);
+    return { success: true, cardMessageId: messageId ?? undefined };
+  }
+
+  private async sendSessionPreview(
+    receiveId: string,
+    sessionId: string,
+    directory: string,
+  ): Promise<void> {
+    const { loadSessionPreview, formatSessionPreview } =
+      await import("../session/session-history.js");
+    const previewMessages = await loadSessionPreview(
+      this.openCodeSession,
+      sessionId,
+      directory,
+      6,
+      this.logger,
+    );
+    if (previewMessages.length === 0) {
+      return;
+    }
+
+    const previewContent = formatSessionPreview(previewMessages);
+    const card: import("@larksuiteoapi/node-sdk").InteractiveCard = {
+      header: {
+        title: { tag: "plain_text", content: "📋 Session Preview" },
+        template: "blue",
+      },
+      elements: [{ tag: "markdown", content: previewContent }],
+    };
+    await this.renderer.sendCard(receiveId, card);
+  }
+
+  private getCurrentProjectPickerId(
+    projectEntries: ProjectPickerEntry[],
+  ): string | undefined {
+    const currentProject = this.settings.getCurrentProject();
+    if (!currentProject) {
+      return undefined;
+    }
+
+    return (
+      projectEntries.find(
+        (project) =>
+          project.id &&
+          resolve(project.worktree) === resolve(currentProject.worktree),
+      )?.id ?? currentProject.id
+    );
+  }
+
+  private async handleProjectPickerPage(
+    receiveId: string,
+    page: number,
+  ): Promise<ControlCommandResult> {
+    if (!receiveId) {
+      return { success: false, message: "Unable to reopen project picker" };
+    }
+
+    const projectEntries = await this.listProjectPickerEntries();
+    const card = buildProjectPickerCard(
+      projectEntries,
+      this.getCurrentProjectPickerId(projectEntries),
+      page,
+    );
+    const messageId = await this.renderer.sendCard(receiveId, card);
+    return { success: true, cardMessageId: messageId ?? undefined };
+  }
+
+  private async handleModelPickerPage(
+    receiveId: string,
+    page: number,
+    context?: Record<string, unknown>,
+  ): Promise<ControlCommandResult> {
+    if (!receiveId) {
+      return { success: false, message: "Unable to reopen model picker" };
+    }
+
+    const level =
+      typeof context?.level === "string" ? context.level : "provider";
+    const models = await this.catalogAdapter.getAvailableModels();
+
+    if (level === "provider") {
+      const providers = this.groupModelsByProvider(models);
+      const card = buildModelProviderCard(providers, page);
+      const messageId = await this.renderer.sendCard(receiveId, card);
+      return { success: true, cardMessageId: messageId ?? undefined };
+    }
+
+    if (level === "flat") {
+      const card = buildModelPickerCard(models, page);
+      const messageId = await this.renderer.sendCard(receiveId, card);
+      return { success: true, cardMessageId: messageId ?? undefined };
+    }
+
+    const providerName =
+      typeof context?.provider === "string" ? context.provider : "";
+    if (!providerName) {
+      const providers = this.groupModelsByProvider(models);
+      const card = buildModelProviderCard(providers, page);
+      const messageId = await this.renderer.sendCard(receiveId, card);
+      return { success: true, cardMessageId: messageId ?? undefined };
+    }
+
+    const card = buildModelListCard(
+      providerName,
+      this.getProviderModels(models, providerName),
+      page,
+    );
+    const messageId = await this.renderer.sendCard(receiveId, card);
+    return { success: true, cardMessageId: messageId ?? undefined };
+  }
+
+  private async listSessionSummaries(): Promise<SessionSummary[]> {
+    const directory = resolveDirectoryScope(
+      this.settings.getCurrentProject(),
+      this.settings.getCurrentSession(),
+    );
+    const result = await this.openCodeSession.list({
+      directory,
+      roots: true,
+    });
+    if (result.error) {
+      throw result.error;
+    }
+
+    const sessions = Array.isArray(result.data) ? result.data : [];
+    const summaries: SessionSummary[] = [];
+
+    for (const candidate of sessions) {
+      if (!isRecord(candidate)) {
+        continue;
+      }
+
+      const id = getTrimmedString(candidate.id);
+      if (!id) {
+        continue;
+      }
+
+      summaries.push({
+        ...candidate,
+        id,
+        title: getTrimmedString(candidate.title) ?? undefined,
+        createdAt: getTrimmedString(candidate.createdAt) ?? undefined,
+        messageCount: getNumber(candidate.messageCount) ?? undefined,
+      });
+    }
+
+    return summaries;
+  }
+
   private async handleHelp(receiveId: string): Promise<ControlCommandResult> {
     const card = buildHelpCard();
     const messageId = await this.renderer.sendCard(receiveId, card);
@@ -605,6 +905,13 @@ export class ControlRouter {
   }
 
   private async handleNew(receiveId: string): Promise<ControlCommandResult> {
+    if (this.interactionManager.isBusy()) {
+      const message =
+        "A session is currently active. Use /abort first or wait for it to finish.";
+      await this.renderer.sendText(receiveId, message);
+      return { success: false, message };
+    }
+
     if (!this.cardActionsEnabled) {
       this.logger.warn(
         "[ControlRouter] Card callbacks are disabled; /new will create a session immediately",
@@ -705,26 +1012,7 @@ export class ControlRouter {
     receiveId: string,
   ): Promise<ControlCommandResult> {
     try {
-      const directory = resolveDirectoryScope(
-        this.settings.getCurrentProject(),
-        this.settings.getCurrentSession(),
-      );
-      const result = await this.openCodeSession.list({
-        directory,
-        roots: true,
-      });
-      if (result.error) {
-        throw result.error;
-      }
-      const sessions = Array.isArray(result.data) ? result.data : [];
-      const summaries: SessionSummary[] = sessions.map((s: unknown) => {
-        const record = s as Record<string, unknown>;
-        return {
-          id: String(record.id ?? ""),
-          title: record.title ? String(record.title) : undefined,
-          ...record,
-        };
-      });
+      const summaries = await this.listSessionSummaries();
       const card = buildSessionListCard(summaries);
       const messageId = await this.renderer.sendCard(receiveId, card);
       return { success: true, cardMessageId: messageId ?? undefined };
@@ -772,10 +1060,43 @@ export class ControlRouter {
         `[ControlRouter] Switched to session: ${sessionInfo.id}`,
       );
 
-      const message =
+      const { loadContextFromHistory } =
+        await import("../session/session-history.js");
+      const historyContext = await loadContextFromHistory(
+        this.openCodeSession,
+        sessionId,
+        directory,
+        this.logger,
+      );
+
+      const titlePart =
         sessionInfo.title !== sessionInfo.id
-          ? `Session selected: ${sessionInfo.title} (${sessionInfo.id})`
-          : `Session selected: ${sessionInfo.id}`;
+          ? `${sessionInfo.title} (${sessionInfo.id})`
+          : sessionInfo.id;
+      const contextParts: string[] = [
+        `📝 Messages: ${historyContext.messageCount}`,
+      ];
+      if (historyContext.maxTokensUsed > 0) {
+        const tk =
+          historyContext.maxTokensUsed >= 1000
+            ? `${(historyContext.maxTokensUsed / 1000).toFixed(1)}k`
+            : `${historyContext.maxTokensUsed}`;
+        contextParts.push(`📊 Context: ${tk} tokens`);
+      }
+      if (historyContext.totalCost > 0) {
+        contextParts.push(`💰 Cost: $${historyContext.totalCost.toFixed(4)}`);
+      }
+      const message = `Session selected: ${titlePart}\n${contextParts.join(" · ")}`;
+
+      this.sendSessionPreview(receiveId, sessionId, directory).catch(
+        (err: unknown) => {
+          this.logger.warn(
+            "[ControlRouter] Failed to send session preview",
+            err,
+          );
+        },
+      );
+
       if (receiveId) {
         await this.renderer.sendText(receiveId, message);
       }
@@ -1066,15 +1387,10 @@ export class ControlRouter {
         };
       }
 
-      const currentProject = this.settings.getCurrentProject();
-      const currentProjectId = currentProject
-        ? (projectEntries.find(
-            (project) =>
-              project.id &&
-              resolve(project.worktree) === resolve(currentProject.worktree),
-          )?.id ?? currentProject.id)
-        : undefined;
-      const card = buildProjectPickerCard(projectEntries, currentProjectId);
+      const card = buildProjectPickerCard(
+        projectEntries,
+        this.getCurrentProjectPickerId(projectEntries),
+      );
       const messageId = await this.renderer.sendCard(receiveId, card);
       return { success: true, cardMessageId: messageId ?? undefined };
     } catch (error) {
@@ -1137,14 +1453,13 @@ export class ControlRouter {
     args?: string,
   ): Promise<ControlCommandResult> {
     if (!args) {
-      // Show model picker card
       const models = await this.catalogAdapter.getAvailableModels();
       if (models.length === 0) {
         this.logger.warn(
           "[ControlRouter] Model catalog is empty while handling /model",
         );
       }
-      const card = buildModelPickerCard(models);
+      const card = buildModelProviderCard(this.groupModelsByProvider(models));
       const messageId = await this.renderer.sendCard(receiveId, card);
       return { success: true, cardMessageId: messageId ?? undefined };
     }
@@ -1174,6 +1489,32 @@ export class ControlRouter {
       success: true,
       message,
     };
+  }
+
+  private getProviderModels(models: string[], providerName: string): string[] {
+    if (!providerName) {
+      return [];
+    }
+
+    return models
+      .filter((model) => model.startsWith(`${providerName}/`))
+      .map((model) => model.slice(providerName.length + 1));
+  }
+
+  private groupModelsByProvider(
+    models: string[],
+  ): Array<{ name: string; modelCount: number }> {
+    const providerMap = new Map<string, number>();
+
+    for (const model of models) {
+      const separator = model.indexOf("/");
+      const provider = separator > 0 ? model.slice(0, separator) : "other";
+      providerMap.set(provider, (providerMap.get(provider) ?? 0) + 1);
+    }
+
+    return Array.from(providerMap.entries())
+      .map(([name, modelCount]) => ({ name, modelCount }))
+      .sort((a, b) => a.name.localeCompare(b.name));
   }
 
   private async resolveAgentSelection(
@@ -1405,6 +1746,180 @@ export class ControlRouter {
       success: true,
       cardMessageId: messageIds[0] ?? undefined,
     };
+  }
+
+  private async handleUpdate(receiveId: string): Promise<ControlCommandResult> {
+    const { handleUpdateCommand } =
+      await import("./handlers/update-handler.js");
+    const result = await handleUpdateCommand(this.logger);
+
+    if (receiveId) {
+      await this.renderer.sendText(receiveId, result.message);
+    }
+
+    return {
+      success: result.success,
+      message: result.message,
+    };
+  }
+
+  private taskStore:
+    | import("../scheduled-task/store.js").InMemoryTaskStore
+    | null = null;
+  private taskRuntime:
+    | import("../scheduled-task/runtime.js").ScheduledTaskRuntime
+    | null = null;
+
+  setTaskInfrastructure(
+    store: import("../scheduled-task/store.js").InMemoryTaskStore,
+    runtime: import("../scheduled-task/runtime.js").ScheduledTaskRuntime,
+  ): void {
+    this.taskStore = store;
+    this.taskRuntime = runtime;
+  }
+
+  private async handleTask(
+    receiveId: string,
+    args?: string,
+  ): Promise<ControlCommandResult> {
+    if (!this.taskStore || !this.taskRuntime) {
+      const message = "Scheduled tasks not available";
+      await this.renderer.sendText(receiveId, message);
+      return { success: false, message };
+    }
+
+    if (!args) {
+      const message =
+        "Usage: /task <schedule> <prompt>\nExample: /task every 30m, Check the build status";
+      await this.renderer.sendText(receiveId, message);
+      return { success: false, message };
+    }
+
+    const separatorIdx = args.indexOf(",");
+    let scheduleText: string;
+    let prompt: string;
+
+    if (separatorIdx > 0) {
+      scheduleText = args.slice(0, separatorIdx).trim();
+      prompt = args.slice(separatorIdx + 1).trim();
+    } else {
+      const match = args.match(
+        /^((?:every|daily|hourly|weekly|weekdays|at)\s+[\d\w\s]+?)[,\s]+(.+)/i,
+      );
+      if (match) {
+        scheduleText = match[1].trim();
+        prompt = match[2].trim();
+      } else {
+        scheduleText = args.trim();
+        prompt = args.trim();
+      }
+    }
+
+    return this.createScheduledTask(receiveId, scheduleText, prompt);
+  }
+
+  private async createScheduledTask(
+    receiveId: string,
+    scheduleText: string,
+    prompt: string,
+  ): Promise<ControlCommandResult> {
+    const TASK_LIMIT = 10;
+    const currentTasks = this.taskStore!.listTasks();
+    if (currentTasks.length >= TASK_LIMIT) {
+      const message = `Task limit reached (${TASK_LIMIT}). Remove tasks with /tasklist first.`;
+      await this.renderer.sendText(receiveId, message);
+      return { success: false, message };
+    }
+
+    const { parseSchedule } =
+      await import("../scheduled-task/schedule-parser.js");
+    const { validateCronMinGap } =
+      await import("../scheduled-task/next-run.js");
+
+    const parsed = parseSchedule(scheduleText);
+
+    if (
+      parsed.kind === "cron" &&
+      parsed.cron &&
+      !validateCronMinGap(parsed.cron)
+    ) {
+      const message = "Schedule interval too short. Minimum is 5 minutes.";
+      await this.renderer.sendText(receiveId, message);
+      return { success: false, message };
+    }
+
+    const project = this.settings.getCurrentProject();
+    const model = this.settings.getCurrentModel();
+
+    if (!project) {
+      const message = "No project selected. Use /projects first.";
+      await this.renderer.sendText(receiveId, message);
+      return { success: false, message };
+    }
+
+    const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    const taskId = `task_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    const task: import("../scheduled-task/types.js").ScheduledTask = {
+      id: taskId,
+      projectId: project.id,
+      projectWorktree: project.worktree,
+      model: model ?? { providerID: "openai", modelID: "gpt-4o" },
+      kind: parsed.kind,
+      cron: parsed.cron,
+      runAt: parsed.runAt,
+      scheduleText,
+      scheduleSummary: parsed.summary,
+      timezone,
+      prompt,
+      createdAt: new Date().toISOString(),
+      nextRunAt: parsed.nextRunAt,
+      lastRunAt: null,
+      runCount: 0,
+      lastStatus: null,
+      lastError: null,
+    };
+
+    this.taskStore!.addTask(task);
+    this.taskRuntime!.scheduleTask(taskId);
+
+    const nextRunStr = parsed.nextRunAt
+      ? new Date(parsed.nextRunAt).toLocaleString()
+      : "N/A";
+    const message = `Task created: ${parsed.summary}\nPrompt: ${prompt}\nNext run: ${nextRunStr}`;
+    await this.renderer.sendText(receiveId, message);
+    return { success: true, message };
+  }
+
+  private async handleTasklist(
+    receiveId: string,
+  ): Promise<ControlCommandResult> {
+    if (!this.taskStore) {
+      const message = "Scheduled tasks not available";
+      await this.renderer.sendText(receiveId, message);
+      return { success: false, message };
+    }
+
+    const tasks = this.taskStore.listTasks();
+
+    if (tasks.length === 0) {
+      const message = "No scheduled tasks. Use /task to create one.";
+      await this.renderer.sendText(receiveId, message);
+      return { success: true, message };
+    }
+
+    const { formatTaskListItem } = await import("../scheduled-task/display.js");
+    const lines = tasks.map((task) => formatTaskListItem(task));
+    const content = lines.join("\n\n");
+
+    const card: import("@larksuiteoapi/node-sdk").InteractiveCard = {
+      header: {
+        title: { tag: "plain_text", content: "📅 Scheduled Tasks" },
+        template: "blue",
+      },
+      elements: [{ tag: "markdown", content }],
+    };
+    const messageId = await this.renderer.sendCard(receiveId, card);
+    return { success: true, cardMessageId: messageId ?? undefined };
   }
 
   private async handleAbort(_receiveId: string): Promise<ControlCommandResult> {

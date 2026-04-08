@@ -47,7 +47,9 @@ describe("projects picker integration", () => {
       header: { title: { content: string } };
       elements: Array<{
         tag: string;
-        actions?: Array<{ value: { projectId?: string } }>;
+        actions?: Array<{
+          value: { action?: string; command?: string; value?: string };
+        }>;
       }>;
     };
     expect(sentCard.header.title.content).toBe("Projects");
@@ -56,10 +58,12 @@ describe("projects picker integration", () => {
       (element) => element.tag === "action",
     );
     const projectIds = (actionEl?.actions ?? []).map(
-      (action) => action.value.projectId,
+      (action) => action.value.value,
     );
     expect(projectIds).toContain("project-1");
     expect(projectIds).toContain("project-2");
+    expect(actionEl?.actions?.[0]?.value.action).toBe("selection_pick");
+    expect(actionEl?.actions?.[0]?.value.command).toBe("project");
   });
 
   it("selecting project updates /sessions directory scope", async () => {

@@ -50,7 +50,14 @@ describe("model and agent picker integration", () => {
       header: { title: { content: string } };
       elements: Array<{
         tag: string;
-        actions?: Array<{ value: { modelName?: string } }>;
+        actions?: Array<{
+          value: {
+            action?: string;
+            command?: string;
+            context?: Record<string, unknown>;
+            value?: string;
+          };
+        }>;
       }>;
     };
     expect(sentCard.header.title.content).toBe("Model Picker");
@@ -58,11 +65,12 @@ describe("model and agent picker integration", () => {
     const actionEl = sentCard.elements.find(
       (element) => element.tag === "action",
     );
-    const modelNames = (actionEl?.actions ?? []).map(
-      (action) => action.value.modelName,
-    );
-    expect(modelNames).toContain("openai/gpt-4o");
-    expect(modelNames).toContain("openai/gpt-4.1");
+    expect(actionEl?.actions?.[0]?.value).toEqual({
+      action: "selection_pick",
+      command: "model",
+      context: { level: "provider" },
+      value: "openai",
+    });
   });
 
   it("renders /agent picker from live agent catalog", async () => {
@@ -94,7 +102,9 @@ describe("model and agent picker integration", () => {
       header: { title: { content: string } };
       elements: Array<{
         tag: string;
-        actions?: Array<{ value: { agentName?: string } }>;
+        actions?: Array<{
+          value: { action?: string; command?: string; value?: string };
+        }>;
       }>;
     };
     expect(sentCard.header.title.content).toBe("Agent Picker");
@@ -103,10 +113,12 @@ describe("model and agent picker integration", () => {
       (element) => element.tag === "action",
     );
     const agentNames = (actionEl?.actions ?? []).map(
-      (action) => action.value.agentName,
+      (action) => action.value.value,
     );
     expect(agentNames).toContain("build");
     expect(agentNames).toContain("oracle");
+    expect(actionEl?.actions?.[0]?.value.action).toBe("selection_pick");
+    expect(actionEl?.actions?.[0]?.value.command).toBe("agent");
   });
 
   it("applies picker card selections and reflects them in /status", async () => {
