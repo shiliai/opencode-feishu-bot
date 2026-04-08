@@ -1,6 +1,7 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { Readable } from "node:stream";
 import { vi } from "vitest";
 import type { Event } from "@opencode-ai/sdk/v2";
 import { EventDeduplicator } from "../../../src/feishu/event-deduplicator.js";
@@ -79,7 +80,7 @@ interface MockOpenCodeClients {
 
 interface MockFeishuFileClient extends FeishuFileClient {
   im: {
-    resource: {
+    messageResource: {
       get: ReturnType<typeof vi.fn>;
     };
     file: {
@@ -198,10 +199,28 @@ function createOpenCodeClients(): MockOpenCodeClients {
 function createFeishuFileClient(): MockFeishuFileClient {
   return {
     im: {
-      resource: {
+      messageResource: {
         get: vi
           .fn()
-          .mockResolvedValue({ data: Buffer.from("downloaded fixture") }),
+          .mockImplementation(
+            async (payload?: { params?: { type?: "file" | "image" } }) => {
+              if (payload?.params?.type === "image") {
+                return {
+                  getReadableStream: () =>
+                    Readable.from([
+                      Buffer.from([137, 80, 78, 71, 13, 10, 26, 10, 0]),
+                    ]),
+                  headers: { "content-type": "application/octet-stream" },
+                };
+              }
+
+              return {
+                getReadableStream: () =>
+                  Readable.from([Buffer.from("downloaded fixture")]),
+                headers: { "content-type": "text/markdown" },
+              };
+            },
+          ),
       },
       file: {
         create: vi
@@ -413,11 +432,11 @@ export async function createBridgeHarness(): Promise<BridgeHarness> {
     fileHandler,
     botOpenId: "bot-open-id-1",
     logger,
-    onPromptDispatched: async (result, storedFile) => {
-      if (storedFile) {
-        downloadedFiles.push(storedFile);
+    onPromptDispatched: async (result, storedFiles) => {
+      if (storedFiles && storedFiles.length > 0) {
+        downloadedFiles.push(...storedFiles);
         const files = inboundFilesBySession.get(result.sessionId) ?? [];
-        files.push(storedFile);
+        files.push(...storedFiles);
         inboundFilesBySession.set(result.sessionId, files);
       }
     },

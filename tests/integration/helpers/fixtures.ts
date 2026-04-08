@@ -75,6 +75,36 @@ export function createFileMessageEvent(options: {
   };
 }
 
+export function createImageMessageEvent(options: {
+  eventId?: string;
+  messageId?: string;
+  chatId?: string;
+  imageKey?: string;
+}): FeishuMessageReceiveEvent {
+  return {
+    header: {
+      event_id: options.eventId ?? "evt-image-1",
+      event_type: "im.message.receive_v1",
+    },
+    event: {
+      sender: {
+        sender_id: {
+          open_id: "user-open-1",
+        },
+      },
+      message: {
+        message_id: options.messageId ?? "msg-image-1",
+        chat_id: options.chatId ?? "chat-1",
+        chat_type: "p2p",
+        message_type: "image",
+        content: JSON.stringify({
+          image_key: options.imageKey ?? "img-key-1",
+        }),
+      },
+    },
+  };
+}
+
 export function createAssistantTextEvents(options: {
   sessionId: string;
   messageId?: string;
