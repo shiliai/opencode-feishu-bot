@@ -460,6 +460,10 @@ export class ResponsePipelineController {
     const state = this.statusStore.startTurn(context);
     state.subscriptionAbortController = abortController;
 
+    this.logger.info(
+      `[ResponsePipeline] Starting turn: session=${context.sessionId}, directory=${context.directory}, receiveId=${context.receiveId}, sourceMessageId=${context.sourceMessageId}`,
+    );
+
     this.scheduleAsync(() => {
       void this.runEventSubscription(context, abortController);
     });
@@ -661,6 +665,10 @@ export class ResponsePipelineController {
     const completionText =
       state.latestCompletedText ?? state.lastPartialText ?? "";
 
+    this.logger.info(
+      `[ResponsePipeline] Session idle reached finalization: session=${sessionId}, completionChars=${completionText.length}, hasStatusCard=${Boolean(state.statusCardMessageId)}, cardUpdatesBroken=${state.cardUpdatesBroken}`,
+    );
+
     try {
       await this.flushPendingPartialUpdate(sessionId);
       await this.sendFinalReply(state, completionText, getFinalReplyTitle());
@@ -678,6 +686,10 @@ export class ResponsePipelineController {
     state.pendingCompletion = true;
     state.cardUpdatesBroken = true;
     this.clearScheduledStatusUpdate(state);
+
+    this.logger.info(
+      `[ResponsePipeline] Handling session error: session=${sessionId}, message=${message}`,
+    );
 
     try {
       await this.sendFinalReply(state, message, getErrorReplyTitle());
@@ -846,6 +858,9 @@ export class ResponsePipelineController {
             template: completeTemplate,
           },
         );
+        this.logger.info(
+          `[ResponsePipeline] Final reply delivered via complete-card update: session=${state.sessionId}, statusCardMessageId=${state.statusCardMessageId}`,
+        );
       } else {
         const messageId = await this.renderer.renderCompleteCard(
           state.receiveId,
@@ -864,6 +879,9 @@ export class ResponsePipelineController {
           state.statusCardMessageId = messageId;
           this.settingsManager.setStatusMessageId(messageId);
         }
+        this.logger.info(
+          `[ResponsePipeline] Final reply delivered via complete-card render: session=${state.sessionId}, statusCardMessageId=${messageId ?? "unknown"}`,
+        );
       }
       state.finalReplySent = true;
       return;
@@ -886,6 +904,9 @@ export class ResponsePipelineController {
       await this.renderer.replyPost(state.sourceMessageId, title, paragraphs, {
         uuid,
       });
+      this.logger.info(
+        `[ResponsePipeline] Final reply delivered via threaded post reply: session=${state.sessionId}, sourceMessageId=${state.sourceMessageId}`,
+      );
       state.finalReplySent = true;
       return;
     } catch (error) {
@@ -896,6 +917,9 @@ export class ResponsePipelineController {
     }
 
     await this.renderer.sendPost(state.receiveId, title, paragraphs);
+    this.logger.info(
+      `[ResponsePipeline] Final reply delivered via non-threaded post: session=${state.sessionId}, receiveId=${state.receiveId}`,
+    );
     state.finalReplySent = true;
   }
 
@@ -904,6 +928,10 @@ export class ResponsePipelineController {
     if (!state) {
       return;
     }
+
+    this.logger.info(
+      `[ResponsePipeline] Finishing turn: session=${sessionId}, finalReplySent=${state.finalReplySent}, cardUpdatesBroken=${state.cardUpdatesBroken}, elapsedMs=${Math.max(0, Date.now() - state.turnStartTime)}`,
+    );
 
     this.disposeTurnResources(state);
     this.settingsManager.clearStatusMessageId();
@@ -916,8 +944,9 @@ export class ResponsePipelineController {
   }
 
   private getStatusCardContent(state: StatusTurnState): string {
-    const resolveImagesFn = this.imageResolver
-      ? (text: string) => this.imageResolver!.resolveImages(text)
+    const imageResolver = this.imageResolver;
+    const resolveImagesFn = imageResolver
+      ? (text: string) => imageResolver.resolveImages(text)
       : undefined;
     return (
       buildStreamingStatusContent(state, resolveImagesFn) ||
