@@ -3,6 +3,7 @@ export {
   createOpenCodeClient,
   opencodeClient,
 } from "./client.js";
+export { createSessionMessageFetcher } from "./message-fetcher.js";
 export {
   FATAL_NO_STREAM_ERROR,
   OpenCodeEventSubscriber,

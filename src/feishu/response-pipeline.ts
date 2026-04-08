@@ -57,9 +57,29 @@ interface ResponsePipelineInteractionManager {
   clearBusy(): void;
 }
 
+export interface SessionMessageEntry {
+  info: {
+    id: string;
+    sessionID: string;
+    role: string;
+  };
+  parts: Array<{
+    type: string;
+    text?: string;
+  }>;
+}
+
+export interface SessionMessageFetcher {
+  fetchLastAssistantMessage(
+    sessionId: string,
+    directory: string,
+  ): Promise<SessionMessageEntry | undefined>;
+}
+
 export interface ResponsePipelineControllerOptions {
   eventSubscriber?: ResponsePipelineEventSubscriber;
   summaryAggregator?: ResponsePipelineSummaryAggregator;
+  sessionMessageFetcher?: SessionMessageFetcher;
   renderer: ResponsePipelineRenderer;
   imageResolver?: ImageResolverLike;
   settingsManager: ResponsePipelineSettingsManager;
@@ -124,6 +144,13 @@ function hashString(value: string): string {
 
 function normalizeText(text: string): string {
   return text.replace(/\r\n/g, "\n").trim();
+}
+
+function extractTextFromMessageEntry(entry: SessionMessageEntry): string {
+  return entry.parts
+    .filter((part) => part.type === "text" && typeof part.text === "string")
+    .map((part) => part.text ?? "")
+    .join("");
 }
 
 function toPostParagraphs(text: string): string[][] {
@@ -374,6 +401,7 @@ export function isRetryableStatusCardUpdateError(error: unknown): boolean {
 export class ResponsePipelineController {
   private readonly eventSubscriber: ResponsePipelineEventSubscriber;
   private readonly summaryAggregator: ResponsePipelineSummaryAggregator;
+  private readonly sessionMessageFetcher?: SessionMessageFetcher;
   private readonly renderer: ResponsePipelineRenderer;
   private readonly imageResolver?: ImageResolverLike;
   private readonly settingsManager: ResponsePipelineSettingsManager;
@@ -390,6 +418,7 @@ export class ResponsePipelineController {
     this.eventSubscriber = options.eventSubscriber ?? openCodeEventSubscriber;
     this.summaryAggregator =
       options.summaryAggregator ?? defaultSummaryAggregator;
+    this.sessionMessageFetcher = options.sessionMessageFetcher;
     this.renderer = options.renderer;
     this.imageResolver = options.imageResolver;
     this.settingsManager = options.settingsManager;
@@ -662,8 +691,34 @@ export class ResponsePipelineController {
     }
 
     state.pendingCompletion = true;
-    const completionText =
+    const eventBasedText =
       state.latestCompletedText ?? state.lastPartialText ?? "";
+
+    let completionText = eventBasedText;
+
+    if (this.sessionMessageFetcher) {
+      try {
+        const lastMessage =
+          await this.sessionMessageFetcher.fetchLastAssistantMessage(
+            sessionId,
+            state.directory,
+          );
+        if (lastMessage) {
+          const apiText = extractTextFromMessageEntry(lastMessage);
+          if (apiText.trim()) {
+            completionText = apiText;
+            this.logger.info(
+              `[ResponsePipeline] Session idle: using API-fetched message text (${apiText.length} chars) over event-based text (${eventBasedText.length} chars): session=${sessionId}`,
+            );
+          }
+        }
+      } catch (error) {
+        this.logger.warn(
+          `[ResponsePipeline] Failed to fetch last assistant message from API, falling back to event-based text: session=${sessionId}`,
+          error,
+        );
+      }
+    }
 
     this.logger.info(
       `[ResponsePipeline] Session idle reached finalization: session=${sessionId}, completionChars=${completionText.length}, hasStatusCard=${Boolean(state.statusCardMessageId)}, cardUpdatesBroken=${state.cardUpdatesBroken}`,
