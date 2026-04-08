@@ -49,11 +49,16 @@ function createImageMessageEvent(imageKey: string): FeishuMessageReceiveEvent {
   };
 }
 
-function createMockClient(): FeishuFileClient {
+function createMockClient(
+  downloadResponse: {
+    data?: unknown;
+    getReadableStream?: () => AsyncIterable<unknown>;
+  } = { data: Buffer.from("file content") },
+): FeishuFileClient {
   return {
     im: {
-      resource: {
-        get: vi.fn().mockResolvedValue({ data: Buffer.from("file content") }),
+      messageResource: {
+        get: vi.fn().mockResolvedValue(downloadResponse),
       },
       file: {
         create: vi
@@ -135,7 +140,7 @@ describe("File policy rejection", () => {
     const event = createFileMessageEvent("fk_zip", "archive.zip", 5000);
     await handler.handleInboundFile(event, "chat-001");
 
-    expect(client.im.resource.get).not.toHaveBeenCalled();
+    expect(client.im.messageResource.get).not.toHaveBeenCalled();
     expect(fileStore.getActiveTempDirs()).toHaveLength(0);
   });
 
@@ -153,7 +158,7 @@ describe("File policy rejection", () => {
     const event = createFileMessageEvent("fk_huge", "data.json", 99999);
     await handler.handleInboundFile(event, "chat-001");
 
-    expect(client.im.resource.get).not.toHaveBeenCalled();
+    expect(client.im.messageResource.get).not.toHaveBeenCalled();
     expect(fileStore.getActiveTempDirs()).toHaveLength(0);
   });
 
@@ -244,5 +249,29 @@ describe("File policy rejection", () => {
     expect(result).not.toBeNull();
     expect(result!.fileName).toBe("image.png");
     expect(replySender.sendText).not.toHaveBeenCalled();
+  });
+
+  it("rejects oversized image after download", async () => {
+    client = createMockClient({ data: Buffer.alloc(150) });
+    const handler = new FileHandler({
+      fileStore,
+      client,
+      replySender,
+      filePolicy: {
+        maxFileSizeBytes: 100,
+        allowedExtensions: DEFAULT_FILE_POLICY.allowedExtensions,
+      },
+    });
+
+    const event = createImageMessageEvent("img_key_large");
+    const result = await handler.handleInboundFile(event, "chat-001");
+
+    expect(result).toBeNull();
+    expect(client.im.messageResource.get).toHaveBeenCalledOnce();
+    expect(fileStore.getActiveTempDirs()).toHaveLength(0);
+    expect(replySender.sendText).toHaveBeenCalledWith(
+      "chat-001",
+      expect.stringContaining("File upload rejected: File too large"),
+    );
   });
 });

@@ -1,10 +1,10 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
+import { Readable } from "node:stream";
 import { FileStore } from "../../src/feishu/file-store.js";
 import {
   FileHandler,
-  DEFAULT_FILE_POLICY,
   type FeishuFileClient,
   type FileReplySender,
 } from "../../src/feishu/file-handler.js";
@@ -50,11 +50,30 @@ function createTextMessageEvent(): FeishuMessageReceiveEvent {
   };
 }
 
-function createMockClient(fileData: Buffer): FeishuFileClient {
+function createImageMessageEvent(imageKey: string): FeishuMessageReceiveEvent {
+  return {
+    header: { event_id: "evt-img-001", event_type: "im.message.receive_v1" },
+    event: {
+      message: {
+        message_id: "msg-img-001",
+        chat_id: "chat-001",
+        chat_type: "group",
+        message_type: "image",
+        content: JSON.stringify({ image_key: imageKey }),
+      },
+      sender: { sender_id: { open_id: "ou_001" } },
+    },
+  };
+}
+
+function createMockClient(downloadResponse: {
+  data?: unknown;
+  getReadableStream?: () => AsyncIterable<unknown>;
+}): FeishuFileClient {
   return {
     im: {
-      resource: {
-        get: vi.fn().mockResolvedValue({ data: fileData }),
+      messageResource: {
+        get: vi.fn().mockResolvedValue(downloadResponse),
       },
       file: {
         create: vi
@@ -76,12 +95,13 @@ const mockReplySender: FileReplySender = {
 
 describe("FileHandler ingress", () => {
   let fileStore: FileStore;
+  let client: FeishuFileClient;
   let handler: FileHandler;
   const sampleContent = Buffer.from("hello from feishu file");
 
   beforeEach(() => {
     fileStore = new FileStore();
-    const client = createMockClient(sampleContent);
+    client = createMockClient({ data: sampleContent });
     handler = new FileHandler({
       fileStore,
       client,
@@ -106,6 +126,10 @@ describe("FileHandler ingress", () => {
     expect(result!.fileName).toBe("example.ts");
     expect(result!.fileSize).toBe(sampleContent.length);
     expect(existsSync(result!.localPath)).toBe(true);
+    expect(client.im.messageResource.get).toHaveBeenCalledWith({
+      params: { type: "file" },
+      path: { message_id: "msg-file-001", file_key: "file_key_abc" },
+    });
 
     const diskContent = await readFile(result!.localPath);
     expect(diskContent).toEqual(sampleContent);
@@ -154,6 +178,7 @@ describe("FileHandler ingress", () => {
     const parsed = handler.parseFileMessage(event);
 
     expect(parsed).toEqual({
+      messageId: "msg-file-001",
       fileKey: "fk_123",
       fileName: "report.pdf",
       fileSize: 1024,
@@ -172,5 +197,34 @@ describe("FileHandler ingress", () => {
     await handler.cleanup(result!);
 
     expect(existsSync(pathBefore)).toBe(false);
+  });
+
+  it("downloads image payloads when the SDK returns an ArrayBuffer", async () => {
+    const imageBytes = Uint8Array.from([137, 80, 78, 71, 13, 10, 26, 10, 0]);
+    client = createMockClient({
+      getReadableStream: () => Readable.from([Buffer.from(imageBytes)]),
+    });
+    handler = new FileHandler({
+      fileStore,
+      client,
+      replySender: mockReplySender,
+    });
+
+    const result = await handler.handleInboundFile(
+      createImageMessageEvent("img_key_abc"),
+      "chat-001",
+    );
+
+    expect(result).not.toBeNull();
+    expect(result!.fileName).toBe("image.png");
+    expect(result!.fileSize).toBe(imageBytes.length);
+    expect(result!.mimeType).toBe("image/png");
+    expect(client.im.messageResource.get).toHaveBeenCalledWith({
+      params: { type: "image" },
+      path: { message_id: "msg-img-001", file_key: "img_key_abc" },
+    });
+
+    const diskContent = await readFile(result!.localPath);
+    expect(diskContent).toEqual(Buffer.from(imageBytes));
   });
 });

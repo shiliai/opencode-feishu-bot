@@ -12,6 +12,7 @@ export interface StoredFile {
   localPath: string;
   fileName: string;
   fileSize: number;
+  mimeType?: string;
 }
 
 export class FileStore {
@@ -40,6 +41,7 @@ export class FileStore {
     tempDir: string,
     fileName: string,
     data: Buffer | string,
+    mimeType?: string,
   ): Promise<StoredFile> {
     const localPath = join(tempDir, fileName);
     await writeFile(localPath, data);
@@ -49,7 +51,7 @@ export class FileStore {
     this.logger.debug(
       `[FileStore] Stored file: ${localPath} (${fileSize} bytes)`,
     );
-    return { localPath, fileName, fileSize };
+    return { localPath, fileName, fileSize, mimeType };
   }
 
   async readFile(localPath: string): Promise<Buffer> {
