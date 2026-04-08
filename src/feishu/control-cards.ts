@@ -3,6 +3,7 @@ import type {
   InteractiveCardActionItem,
   InteractiveCardElement,
 } from "@larksuiteoapi/node-sdk";
+import { getConfig } from "../config.js";
 import { plainText } from "./cards.js";
 import type { ChatMessage } from "./message-reader.js";
 
@@ -16,6 +17,13 @@ export interface ProjectSummary {
   id: string;
   worktree: string;
   name?: string;
+}
+
+export interface ProjectPickerEntry {
+  id?: string;
+  worktree: string;
+  name?: string;
+  isNew?: boolean;
 }
 
 const COMMAND_HELP: Array<{ command: string; description: string }> = [
@@ -70,7 +78,7 @@ function buildActionRows(
   return rows;
 }
 
-function getPathLeaf(pathValue: string): string {
+export function getPathLeaf(pathValue: string): string {
   const normalized = pathValue.replace(/[\\/]+$/g, "");
   if (!normalized) {
     return pathValue;
@@ -113,6 +121,18 @@ function buildHistoryPreview(content: string): string {
   return `${normalized.slice(0, HISTORY_PREVIEW_LIMIT - 1)}…`;
 }
 
+function formatTokenCount(count: number): string {
+  if (count >= 1_000_000) {
+    return `${(count / 1_000_000).toFixed(1)}M`;
+  }
+
+  if (count >= 1_000) {
+    return `${Math.round(count / 1_000)}K`;
+  }
+
+  return count.toString();
+}
+
 export function buildHelpCard(): InteractiveCard {
   const commandLines = COMMAND_HELP.map(
     (c) => `**${c.command}** — ${c.description}`,
@@ -121,7 +141,7 @@ export function buildHelpCard(): InteractiveCard {
 
   return {
     header: {
-      title: plainText("OpenCode Commands"),
+      title: plainText(`${getConfig().assistantName} Commands`),
       template: "blue",
     },
     elements: [
@@ -270,21 +290,21 @@ export function buildAgentPickerCard(agents: string[]): InteractiveCard {
 }
 
 export function buildProjectPickerCard(
-  projects: ProjectSummary[],
+  entries: ProjectPickerEntry[],
   currentProjectId?: string,
 ): InteractiveCard {
   const elements: InteractiveCardElement[] = [];
 
-  if (projects.length === 0) {
+  if (entries.length === 0) {
     elements.push({
       tag: "markdown",
       content: "No projects available.",
     });
   } else {
-    const visibleProjects = projects.slice(0, MAX_PROJECT_CHOICES);
+    const visibleProjects = entries.slice(0, MAX_PROJECT_CHOICES);
     const currentProject =
       currentProjectId &&
-      projects.find((project) => project.id === currentProjectId);
+      entries.find((entry) => entry.id === currentProjectId);
     const currentLabel = currentProject
       ? (currentProject.name ?? currentProject.worktree)
       : (currentProjectId ?? "none");
@@ -295,13 +315,24 @@ export function buildProjectPickerCard(
     });
 
     const buttons: InteractiveCardActionItem[] = visibleProjects.map(
-      (project, index) => {
-        const labelRoot = project.name?.trim().length
-          ? project.name.trim()
-          : getPathLeaf(project.worktree);
+      (entry, index) => {
+        const labelRoot = entry.name?.trim().length
+          ? entry.name.trim()
+          : getPathLeaf(entry.worktree);
+        if (entry.isNew || !entry.id) {
+          return {
+            tag: "button",
+            text: plainText(truncateLabel(`${index + 1}. ✨ ${labelRoot}`)),
+            value: {
+              action: "discover_project",
+              directory: entry.worktree,
+            },
+          };
+        }
+
         const indexedLabel = `${index + 1}. ${labelRoot}`;
         const label =
-          project.id === currentProjectId
+          entry.id === currentProjectId
             ? `[Current] ${indexedLabel}`
             : indexedLabel;
         return {
@@ -309,7 +340,7 @@ export function buildProjectPickerCard(
           text: plainText(truncateLabel(label)),
           value: {
             action: "select_project",
-            projectId: project.id,
+            projectId: entry.id,
           },
         };
       },
@@ -317,10 +348,10 @@ export function buildProjectPickerCard(
 
     elements.push(...buildActionRows(buttons));
 
-    if (projects.length > visibleProjects.length) {
+    if (entries.length > visibleProjects.length) {
       elements.push({
         tag: "markdown",
-        content: `Showing ${visibleProjects.length} of ${projects.length} projects. Use /projects <id> to select any specific project.`,
+        content: `Showing ${visibleProjects.length} of ${entries.length} projects. Use /projects <id> to select any specific known project.`,
       });
     }
   }
@@ -378,7 +409,10 @@ export function buildStatusCard(status: {
   model: string | null;
   agent: string | null;
   state: string;
+  contextUsed?: number | null;
+  contextLimit?: number | null;
 }): InteractiveCard {
+  const assistantName = getConfig().assistantName;
   const lines: string[] = [];
   if (status.health) {
     lines.push(`**Server**: ${status.health}`);
@@ -396,13 +430,23 @@ export function buildStatusCard(status: {
   if (status.sessionTitle) {
     lines.push(`**Session Title**: ${status.sessionTitle}`);
   }
-  lines.push(`**Model**: ${status.model ?? "OpenCode default"}`);
-  lines.push(`**Agent**: ${status.agent ?? "OpenCode default"}`);
+  lines.push(`**Model**: ${status.model ?? `${assistantName} default`}`);
+  lines.push(`**Agent**: ${status.agent ?? `${assistantName} default`}`);
   lines.push(`**State**: ${status.state}`);
+  if (status.contextUsed != null) {
+    const used = formatTokenCount(status.contextUsed);
+    const limitStr = status.contextLimit
+      ? formatTokenCount(status.contextLimit)
+      : "unknown";
+    const pct = status.contextLimit
+      ? Math.round((status.contextUsed / status.contextLimit) * 100)
+      : 0;
+    lines.push(`**Context**: ${used}/${limitStr} (${pct}%)`);
+  }
 
   return {
     header: {
-      title: plainText("OpenCode Status"),
+      title: plainText(`${assistantName} Status`),
       template: "blue",
     },
     elements: [

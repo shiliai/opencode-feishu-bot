@@ -1,6 +1,22 @@
-import { describe, expect, it, vi } from "vitest";
-import { ControlRouter } from "../../src/feishu/control-router.js";
-import type { ControlRouterOptions } from "../../src/feishu/control-router.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  ControlRouter,
+  type ControlRouterOptions,
+} from "../../src/feishu/control-router.js";
+import { StatusStore } from "../../src/feishu/status-store.js";
+
+const { getModelContextLimitMock, scanWorkdirSubdirsMock } = vi.hoisted(() => ({
+  getModelContextLimitMock: vi.fn(),
+  scanWorkdirSubdirsMock: vi.fn(),
+}));
+
+vi.mock("../../src/model/context-limit.js", () => ({
+  getModelContextLimit: getModelContextLimitMock,
+}));
+
+vi.mock("../../src/feishu/workdir-scanner.js", () => ({
+  scanWorkdirSubdirs: scanWorkdirSubdirsMock,
+}));
 
 function createMockSettings() {
   return {
@@ -152,6 +168,13 @@ function createRouter(
   });
 }
 
+beforeEach(() => {
+  getModelContextLimitMock.mockReset();
+  getModelContextLimitMock.mockResolvedValue(400_000);
+  scanWorkdirSubdirsMock.mockReset();
+  scanWorkdirSubdirsMock.mockResolvedValue([]);
+});
+
 describe("ControlRouter — command dispatch", () => {
   it("/help renders help card", async () => {
     const renderer = createMockRenderer();
@@ -293,9 +316,79 @@ describe("ControlRouter — command dispatch", () => {
 
     expect(result.success).toBe(true);
     expect(openCodeClient.project.list).toHaveBeenCalledTimes(1);
+    expect(scanWorkdirSubdirsMock).not.toHaveBeenCalled();
     expect(renderer.sendCard).toHaveBeenCalledTimes(1);
     const sentCard = renderer.sendCard.mock.calls[0][1];
     expect(sentCard.header.title.content).toBe("Projects");
+    const actionEl = sentCard.elements.find(
+      (el: { tag: string }) => el.tag === "action",
+    );
+    const actions = (
+      actionEl as { actions: Array<{ value: Record<string, unknown> }> }
+    ).actions;
+    expect(actions[0].value).toEqual({
+      action: "select_project",
+      projectId: "project-1",
+    });
+  });
+
+  it("/projects with workdir configured shows merged known and new entries", async () => {
+    const renderer = createMockRenderer();
+    const openCodeClient = createMockOpenCodeClient();
+    const logger = {
+      debug: vi.fn(),
+      info: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+    };
+    scanWorkdirSubdirsMock.mockResolvedValue([
+      {
+        name: "project-1",
+        absolutePath: "/workspace/project-1",
+      },
+      {
+        name: "project-3",
+        absolutePath: "/workspace/project-3",
+      },
+    ]);
+    const router = createRouter({
+      renderer,
+      openCodeClient,
+      workdir: "/workspace",
+      logger,
+    });
+
+    const result = await router.handleCommand("chat-1", "/projects");
+
+    expect(result.success).toBe(true);
+    expect(scanWorkdirSubdirsMock).toHaveBeenCalledWith("/workspace", logger);
+    const sentCard = renderer.sendCard.mock.calls[0][1];
+    const actionEl = sentCard.elements.find(
+      (el: { tag: string }) => el.tag === "action",
+    );
+    const actions = (
+      actionEl as {
+        actions: Array<{
+          text: { content: string };
+          value: Record<string, unknown>;
+        }>;
+      }
+    ).actions;
+    expect(actions.map((action) => action.value)).toEqual([
+      {
+        action: "select_project",
+        projectId: "project-1",
+      },
+      {
+        action: "discover_project",
+        directory: "/workspace/project-3",
+      },
+      {
+        action: "select_project",
+        projectId: "project-2",
+      },
+    ]);
+    expect(actions[1].text.content).toContain("✨");
   });
 
   it("/project alias renders the same picker as /projects", async () => {
@@ -355,6 +448,58 @@ describe("ControlRouter — command dispatch", () => {
     expect(renderer.sendText).toHaveBeenCalledWith(
       "chat-1",
       expect.stringContaining("Use /projects <id>"),
+    );
+  });
+
+  it("discover_project card action triggers auto-discovery and stores the directory", async () => {
+    const renderer = createMockRenderer();
+    const settings = createMockSettings();
+    const sessionManager = createMockSessionManager();
+    const openCodeClient = createMockOpenCodeClient();
+    openCodeClient.session.create.mockResolvedValue({
+      data: {
+        id: "new-session-3",
+        title: "Project Three Session",
+        directory: "/workspace/project-3",
+      },
+      error: undefined,
+    });
+    const router = createRouter({
+      settingsManager: settings,
+      sessionManager,
+      renderer,
+      openCodeClient,
+    });
+
+    const result = await router.handleCardAction({
+      open_chat_id: "chat-1",
+      action: {
+        value: {
+          action: "discover_project",
+          directory: "/workspace/project-3",
+        },
+      },
+    });
+
+    expect(result).toEqual({
+      toast: {
+        type: "success",
+        content:
+          "Project discovered: project-3\n\nActive session cleared. Use /sessions or /new for this project.",
+      },
+    });
+    expect(openCodeClient.session.create).toHaveBeenCalledWith({
+      directory: "/workspace/project-3",
+    });
+    expect(settings.setCurrentProject).toHaveBeenCalledWith({
+      id: "discovered",
+      worktree: "/workspace/project-3",
+      name: "project-3",
+    });
+    expect(sessionManager.clearSession).toHaveBeenCalledTimes(1);
+    expect(renderer.sendText).toHaveBeenCalledWith(
+      "chat-1",
+      expect.stringContaining("Project discovered: project-3"),
     );
   });
 
@@ -542,10 +687,27 @@ describe("ControlRouter — command dispatch", () => {
       title: "Test",
       directory: "/workspace",
     });
+    const statusStore = new StatusStore();
+    statusStore.startTurn({
+      sessionId: "sess-1",
+      directory: "/workspace",
+      receiveId: "chat-1",
+      sourceMessageId: "source-1",
+    });
+    statusStore.update("sess-1", (state) => {
+      state.latestTokens = {
+        input: 120_000,
+        output: 0,
+        reasoning: 0,
+        cacheRead: 31_000,
+        cacheWrite: 0,
+      };
+    });
     const router = createRouter({
       renderer,
       settingsManager: settings,
       sessionManager,
+      statusStore,
     });
 
     const result = await router.handleCommand("chat-1", "/status");
@@ -554,6 +716,10 @@ describe("ControlRouter — command dispatch", () => {
     expect(renderer.sendCard).toHaveBeenCalledTimes(1);
     const sentCard = renderer.sendCard.mock.calls[0][1];
     expect(sentCard.header.title.content).toBe("OpenCode Status");
+    const markdownEl = sentCard.elements.find(
+      (el: { tag: string }) => el.tag === "markdown",
+    );
+    expect(markdownEl.content).toContain("**Context**: 151K/400K (38%)");
   });
 
   it("/status prefers current model and agent from the OpenCode session API", async () => {
@@ -577,9 +743,16 @@ describe("ControlRouter — command dispatch", () => {
       data: [
         {
           info: {
+            role: "assistant",
             providerID: "relay-gpt-sub",
             modelID: "gpt-5.4",
             agent: "oracle",
+            tokens: {
+              input: 120_000,
+              cache: {
+                read: 31_000,
+              },
+            },
           },
         },
       ],
@@ -599,8 +772,12 @@ describe("ControlRouter — command dispatch", () => {
     expect(openCodeClient.session.messages).toHaveBeenCalledWith({
       sessionID: "sess-1",
       directory: "/workspace/project-1",
-      limit: 1,
+      limit: 50,
     });
+    expect(getModelContextLimitMock).toHaveBeenCalledWith(
+      "relay-gpt-sub",
+      "gpt-5.4",
+    );
     const sentCard = renderer.sendCard.mock.calls[0][1];
     const markdownEl = sentCard.elements.find(
       (el: { tag: string }) => el.tag === "markdown",
@@ -611,6 +788,7 @@ describe("ControlRouter — command dispatch", () => {
     expect(markdownEl.content).toContain("**Scope**: /workspace/project-1");
     expect(markdownEl.content).toContain("**Model**: relay-gpt-sub/gpt-5.4");
     expect(markdownEl.content).toContain("**Agent**: oracle");
+    expect(markdownEl.content).toContain("**Context**: 151K/400K (38%)");
   });
 
   it("/status preserves explicitly selected model and agent overrides", async () => {

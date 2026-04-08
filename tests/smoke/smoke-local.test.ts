@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const CONFIG_KEYS = [
   "FEISHU_APP_ID",
@@ -9,6 +9,7 @@ const CONFIG_KEYS = [
   "FEISHU_CARD_CALLBACK_ENCRYPT_KEY",
   "OPENCODE_API_BASE_URL",
   "OPENCODE_API_KEY",
+  "OPENCODE_WORKDIR",
   "SERVICE_PORT",
   "SERVICE_HOST",
   "LOG_LEVEL",
@@ -131,10 +132,12 @@ describe("smoke:local — healthz and graceful shutdown", () => {
     await startFeishuApp();
 
     const port = getActualServicePort();
-    expect(port).not.toBeNull();
-    expect(port!).toBeGreaterThan(0);
+    if (port == null) {
+      throw new Error("Expected startFeishuApp to expose a service port");
+    }
+    expect(port).toBeGreaterThan(0);
 
-    const response = await fetchHealthz(port!);
+    const response = await fetchHealthz(port);
     expect(response.statusCode).toBe(200);
 
     const parsed = JSON.parse(response.body);

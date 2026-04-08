@@ -178,9 +178,11 @@ export async function startFeishuApp(): Promise<void> {
     catalogModelStatePath: config.controlCatalog.modelStatePath,
     messageReader,
     interactionManager: managers.interaction,
+    statusStore,
     cardActionsEnabled:
       config.connectionType === "ws" ||
       Boolean(config.cardCallback && feishuClients.cardActionHandler),
+    workdir: config.workdir,
     logger,
   });
 

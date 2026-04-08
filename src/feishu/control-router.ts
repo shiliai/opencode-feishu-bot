@@ -1,6 +1,8 @@
+import { resolve } from "node:path";
 import { DEFAULT_CONTROL_CATALOG_CACHE_TTL_MS } from "../config.js";
 import type { FeishuRenderer } from "../feishu/renderer.js";
 import type { InteractionManager } from "../interaction/manager.js";
+import { getModelContextLimit } from "../model/context-limit.js";
 import type { SessionManager } from "../session/manager.js";
 import type {
   ModelInfo,
@@ -12,7 +14,11 @@ import type { Logger } from "../utils/logger.js";
 import { APP_VERSION } from "../version.js";
 import { buildConfirmCard } from "./cards.js";
 import type { FeishuClients } from "./client.js";
-import type { ProjectSummary, SessionSummary } from "./control-cards.js";
+import type {
+  ProjectPickerEntry,
+  ProjectSummary,
+  SessionSummary,
+} from "./control-cards.js";
 import {
   buildAgentPickerCard,
   buildHelpCard,
@@ -21,6 +27,7 @@ import {
   buildProjectPickerCard,
   buildSessionListCard,
   buildStatusCard,
+  getPathLeaf,
 } from "./control-cards.js";
 import {
   ControlCatalogAdapter,
@@ -28,6 +35,8 @@ import {
   type OpenCodeControlCatalogClient,
 } from "./control-catalog.js";
 import { MessageReader } from "./message-reader.js";
+import type { StatusStore } from "./status-store.js";
+import { scanWorkdirSubdirs, type WorkdirEntry } from "./workdir-scanner.js";
 
 export type ControlCommand =
   | "/help"
@@ -65,6 +74,7 @@ const SUPPORTED_COMMANDS = new Set<string>([
 ]);
 
 const DEFAULT_HISTORY_COUNT = 10;
+const STATUS_CONTEXT_HISTORY_LIMIT = 50;
 
 const ZERO_WIDTH_CHARACTER_PATTERN = /[\u200B-\u200D\uFEFF]/g;
 
@@ -195,7 +205,9 @@ export interface ControlRouterOptions {
   catalogModelStatePath?: string;
   messageReader?: MessageReader;
   interactionManager: ControlRouterInteractionStore;
+  statusStore?: StatusStore;
   cardActionsEnabled?: boolean;
+  workdir?: string | null;
   logger?: Logger;
 }
 
@@ -211,6 +223,31 @@ function getTrimmedString(value: unknown): string | null {
   return typeof value === "string" && value.trim().length > 0
     ? value.trim()
     : null;
+}
+
+function getNumber(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function getMessageContextUsed(message: unknown): number | null {
+  if (!isRecord(message) || !isRecord(message.info)) {
+    return null;
+  }
+
+  const info = message.info;
+  if (getTrimmedString(info.role) !== "assistant" || info.summary === true) {
+    return null;
+  }
+
+  const tokens = isRecord(info.tokens) ? info.tokens : null;
+  if (!tokens) {
+    return null;
+  }
+
+  const input = getNumber(tokens.input) ?? 0;
+  const cache = isRecord(tokens.cache) ? tokens.cache : null;
+  const cacheRead = getNumber(cache?.read) ?? 0;
+  return input + cacheRead;
 }
 
 type CardActionToastType = "info" | "success" | "warning" | "error";
@@ -273,7 +310,9 @@ export class ControlRouter {
   private readonly openCodeProject: OpenCodeProjectClient;
   private readonly openCodeGlobal: OpenCodeGlobalClient;
   private readonly interactionManager: ControlRouterInteractionStore;
+  private readonly statusStore: StatusStore | null;
   private readonly cardActionsEnabled: boolean;
+  private readonly workdir: string | null;
   private readonly logger: Logger;
   private readonly catalogAdapter: ControlCatalogProvider;
   private readonly messageReader: MessageReader | null;
@@ -286,7 +325,9 @@ export class ControlRouter {
     this.openCodeProject = options.openCodeClient.project;
     this.openCodeGlobal = options.openCodeClient.global;
     this.interactionManager = options.interactionManager;
+    this.statusStore = options.statusStore ?? null;
     this.cardActionsEnabled = options.cardActionsEnabled ?? true;
+    this.workdir = options.workdir ?? null;
     this.logger = options.logger ?? createNoopLogger();
     this.messageReader =
       options.messageReader ??
@@ -450,6 +491,21 @@ export class ControlRouter {
           const result = await this.handleProjects(
             getCardActionReceiveId(event),
             projectId,
+          );
+          return buildCardActionToast(
+            result.message,
+            result.success ? "success" : "error",
+          );
+        }
+        case "discover_project": {
+          const directory = getTrimmedString(value?.directory);
+          if (!directory) {
+            return {};
+          }
+
+          const result = await this.discoverProject(
+            getCardActionReceiveId(event),
+            directory,
           );
           return buildCardActionToast(
             result.message,
@@ -759,6 +815,97 @@ export class ControlRouter {
     return this.parseProjects(result.data);
   }
 
+  private mergeProjectEntries(
+    projects: ProjectSummary[],
+    workdirEntries: WorkdirEntry[],
+  ): ProjectPickerEntry[] {
+    const entries: ProjectPickerEntry[] = [];
+    const matchedProjectIds = new Set<string>();
+    const projectsByWorktree = new Map<string, ProjectSummary>();
+
+    for (const project of projects) {
+      projectsByWorktree.set(resolve(project.worktree), project);
+    }
+
+    for (const workdirEntry of workdirEntries) {
+      const matchedProject = projectsByWorktree.get(
+        resolve(workdirEntry.absolutePath),
+      );
+      if (matchedProject) {
+        entries.push(matchedProject);
+        matchedProjectIds.add(matchedProject.id);
+        continue;
+      }
+
+      entries.push({
+        worktree: workdirEntry.absolutePath,
+        name: workdirEntry.name,
+        isNew: true,
+      });
+    }
+
+    for (const project of projects) {
+      if (matchedProjectIds.has(project.id)) {
+        continue;
+      }
+
+      entries.push(project);
+    }
+
+    return entries;
+  }
+
+  private async listProjectPickerEntries(): Promise<ProjectPickerEntry[]> {
+    const projects = await this.listProjects();
+    if (!this.workdir) {
+      return projects;
+    }
+
+    const workdirEntries = await scanWorkdirSubdirs(this.workdir, this.logger);
+    return this.mergeProjectEntries(projects, workdirEntries);
+  }
+
+  private async discoverProject(
+    receiveId: string,
+    directory: string,
+  ): Promise<ControlCommandResult> {
+    try {
+      const result = await this.openCodeSession.create({ directory });
+      if (result.error) {
+        throw result.error;
+      }
+
+      const sessionInfo = this.parseSessionInfo(result.data, directory);
+      const discoveredDirectory = sessionInfo?.directory ?? directory;
+      const projectName = getPathLeaf(discoveredDirectory);
+      this.settings.setCurrentProject({
+        id: "discovered",
+        worktree: discoveredDirectory,
+        name: projectName,
+      });
+      this.sessionManager.clearSession();
+      this.logger.info(
+        `[ControlRouter] Discovered project via session.create: ${discoveredDirectory}`,
+      );
+
+      const message =
+        `Project discovered: ${projectName}\n\n` +
+        "Active session cleared. Use /sessions or /new for this project.";
+      if (receiveId) {
+        await this.renderer.sendText(receiveId, message);
+      }
+
+      return { success: true, message };
+    } catch (error) {
+      this.logger.error("[ControlRouter] Failed to discover project", error);
+      const message = "Failed to discover project";
+      if (receiveId) {
+        await this.renderer.sendText(receiveId, message);
+      }
+      return { success: false, message };
+    }
+  }
+
   private async selectProject(
     projectId: string,
   ): Promise<ProjectSummary | null> {
@@ -819,8 +966,8 @@ export class ControlRouter {
     }
 
     try {
-      const projects = await this.listProjects();
-      if (projects.length === 0) {
+      const projectEntries = await this.listProjectPickerEntries();
+      if (projectEntries.length === 0) {
         const message = "No projects available.";
         if (receiveId) {
           await this.renderer.sendText(receiveId, message);
@@ -829,26 +976,43 @@ export class ControlRouter {
       }
 
       if (!this.cardActionsEnabled) {
-        const listedProjects = projects.slice(0, 20);
+        const listedProjects = projectEntries.slice(0, 20);
         const lines = listedProjects.map((project) => {
+          if (project.isNew || !project.id) {
+            return `- [new] ${project.name ?? getPathLeaf(project.worktree)} — ${project.worktree}`;
+          }
+
           const label = project.name ?? project.worktree;
           return `- ${project.id} — ${label}`;
         });
         const hiddenCount = Math.max(
           0,
-          projects.length - listedProjects.length,
+          projectEntries.length - listedProjects.length,
         );
         const hiddenNotice =
           hiddenCount > 0 ? `\n…and ${hiddenCount} more projects.` : "";
-        const message = `Projects:\n${lines.join("\n")}${hiddenNotice}\n\nUse /projects <id> to select a project.`;
+        const selectionHelp = projectEntries.some((project) => project.isNew)
+          ? "Use /projects <id> to select a known project. New workdir directories require the interactive picker to discover."
+          : "Use /projects <id> to select a project.";
+        const message = `Projects:\n${lines.join("\n")}${hiddenNotice}\n\n${selectionHelp}`;
         if (receiveId) {
           await this.renderer.sendText(receiveId, message);
         }
-        return { success: true, message: `Listed ${projects.length} projects` };
+        return {
+          success: true,
+          message: `Listed ${projectEntries.length} projects`,
+        };
       }
 
       const currentProject = this.settings.getCurrentProject();
-      const card = buildProjectPickerCard(projects, currentProject?.id);
+      const currentProjectId = currentProject
+        ? (projectEntries.find(
+            (project) =>
+              project.id &&
+              resolve(project.worktree) === resolve(currentProject.worktree),
+          )?.id ?? currentProject.id)
+        : undefined;
+      const card = buildProjectPickerCard(projectEntries, currentProjectId);
       const messageId = await this.renderer.sendCard(receiveId, card);
       return { success: true, cardMessageId: messageId ?? undefined };
     } catch (error) {
@@ -1014,6 +1178,9 @@ export class ControlRouter {
     const fallbackModel = this.settings.getCurrentModel();
     const fallbackAgent = this.settings.getCurrentAgent();
     const directory = resolveDirectoryScope(currentProject, currentSession);
+    const turnState = currentSession
+      ? this.statusStore?.get(currentSession.id)
+      : undefined;
 
     let healthDisplay: string | null = null;
     let versionDisplay: string | null = null;
@@ -1039,13 +1206,16 @@ export class ControlRouter {
 
     let latestModelDisplay: string | null = null;
     let latestAgentDisplay: string | null = null;
+    let latestProviderID: string | null = null;
+    let latestModelID: string | null = null;
+    let contextUsed: number | null = null;
 
     if (currentSession) {
       try {
         const messagesResponse = await this.openCodeSession.messages({
           sessionID: currentSession.id,
           directory,
-          limit: 1,
+          limit: STATUS_CONTEXT_HISTORY_LIMIT,
         });
         if (messagesResponse.error) {
           throw messagesResponse.error;
@@ -1059,15 +1229,27 @@ export class ControlRouter {
           isRecord(latestMessage) && isRecord(latestMessage.info)
             ? latestMessage.info
             : null;
-        const providerID = info ? getTrimmedString(info.providerID) : null;
-        const modelID = info ? getTrimmedString(info.modelID) : null;
+        latestProviderID = info ? getTrimmedString(info.providerID) : null;
+        latestModelID = info ? getTrimmedString(info.modelID) : null;
         const agentName = info ? getTrimmedString(info.agent) : null;
 
-        if (providerID && modelID) {
-          latestModelDisplay = `${providerID}/${modelID}`;
+        if (latestProviderID && latestModelID) {
+          latestModelDisplay = `${latestProviderID}/${latestModelID}`;
         }
         if (agentName) {
           latestAgentDisplay = agentName;
+        }
+
+        for (const message of messages) {
+          const messageContextUsed = getMessageContextUsed(message);
+          if (messageContextUsed == null) {
+            continue;
+          }
+
+          contextUsed =
+            contextUsed == null
+              ? messageContextUsed
+              : Math.max(contextUsed, messageContextUsed);
         }
       } catch (error) {
         this.logger.warn(
@@ -1077,10 +1259,36 @@ export class ControlRouter {
       }
     }
 
+    if (turnState?.latestTokens) {
+      const turnContextUsed =
+        turnState.latestTokens.input + turnState.latestTokens.cacheRead;
+      contextUsed =
+        contextUsed == null
+          ? turnContextUsed
+          : Math.max(contextUsed, turnContextUsed);
+    }
+
     const modelDisplay = fallbackModel
       ? `${fallbackModel.providerID}/${fallbackModel.modelID}`
       : latestModelDisplay;
     const agentDisplay = fallbackAgent ?? latestAgentDisplay;
+    const contextProviderID = fallbackModel?.providerID ?? latestProviderID;
+    const contextModelID = fallbackModel?.modelID ?? latestModelID;
+    let contextLimit: number | null = null;
+
+    if (contextUsed != null) {
+      try {
+        contextLimit = await getModelContextLimit(
+          contextProviderID,
+          contextModelID,
+        );
+      } catch (error) {
+        this.logger.warn(
+          `[ControlRouter] Failed to fetch model context limit for /status: provider=${contextProviderID ?? "unknown"} model=${contextModelID ?? "unknown"}`,
+          error,
+        );
+      }
+    }
 
     let state = this.interactionManager.isBusy() ? "busy" : "idle";
     try {
@@ -1117,6 +1325,8 @@ export class ControlRouter {
       sessionTitle: currentSession?.title ?? null,
       agent: agentDisplay,
       state,
+      contextUsed,
+      contextLimit,
     });
     const messageId = await this.renderer.sendCard(receiveId, card);
     return { success: true, cardMessageId: messageId ?? undefined };

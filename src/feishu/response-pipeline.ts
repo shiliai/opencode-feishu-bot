@@ -76,14 +76,18 @@ export interface ResponsePipelineControllerSnapshot {
   activeSessions: string[];
 }
 
-const ACTIVE_STATUS_CARD_TITLE = "OpenCode is working";
+function getAssistantName(): string {
+  return getConfig().assistantName;
+}
+
+const getActiveStatusCardTitle = () => `${getAssistantName()} is working`;
 const ACTIVE_STATUS_CARD_TEMPLATE = "blue" as const;
 const ACTIVE_STATUS_CARD_FALLBACK_TEXT = "Thinking…";
 const FINAL_REPLY_FALLBACK_TEXT = "Done.";
-const FINAL_REPLY_TITLE = "OpenCode reply";
-const ERROR_REPLY_TITLE = "OpenCode error";
-const STREAM_ENDED_MESSAGE =
-  "OpenCode stream ended before a final reply was delivered.";
+const getFinalReplyTitle = () => `${getAssistantName()} reply`;
+const getErrorReplyTitle = () => `${getAssistantName()} error`;
+const STREAM_ENDED_MESSAGE = () =>
+  `${getAssistantName()} stream ended before a final reply was delivered.`;
 const RETRYABLE_UPDATE_KEYWORDS = [
   "rate limit",
   "too many requests",
@@ -589,7 +593,7 @@ export class ResponsePipelineController {
     try {
       const messageId = await this.renderer.renderStatusCard(
         state.receiveId,
-        ACTIVE_STATUS_CARD_TITLE,
+        getActiveStatusCardTitle(),
         initialContent,
         false,
         ACTIVE_STATUS_CARD_TEMPLATE,
@@ -659,7 +663,7 @@ export class ResponsePipelineController {
 
     try {
       await this.flushPendingPartialUpdate(sessionId);
-      await this.sendFinalReply(state, completionText, FINAL_REPLY_TITLE);
+      await this.sendFinalReply(state, completionText, getFinalReplyTitle());
     } finally {
       this.finishTurn(sessionId);
     }
@@ -676,7 +680,7 @@ export class ResponsePipelineController {
     this.clearScheduledStatusUpdate(state);
 
     try {
-      await this.sendFinalReply(state, message, ERROR_REPLY_TITLE);
+      await this.sendFinalReply(state, message, getErrorReplyTitle());
     } finally {
       this.finishTurn(sessionId);
     }
@@ -701,7 +705,7 @@ export class ResponsePipelineController {
           error,
         );
         await this.enqueueSessionTask(context.sessionId, () =>
-          this.handleSessionError(context.sessionId, STREAM_ENDED_MESSAGE),
+          this.handleSessionError(context.sessionId, STREAM_ENDED_MESSAGE()),
         );
       }
       return;
@@ -709,7 +713,7 @@ export class ResponsePipelineController {
 
     if (!abortController.signal.aborted) {
       await this.enqueueSessionTask(context.sessionId, () =>
-        this.handleSessionError(context.sessionId, STREAM_ENDED_MESSAGE),
+        this.handleSessionError(context.sessionId, STREAM_ENDED_MESSAGE()),
       );
     }
   }
@@ -784,7 +788,7 @@ export class ResponsePipelineController {
       try {
         await this.renderer.updateStatusCard(
           statusCardMessageId,
-          ACTIVE_STATUS_CARD_TITLE,
+          getActiveStatusCardTitle(),
           content,
           false,
           ACTIVE_STATUS_CARD_TEMPLATE,
@@ -821,7 +825,7 @@ export class ResponsePipelineController {
     const resolvedAnswer = this.imageResolver
       ? await this.imageResolver.resolveImagesAwait(answerContent, 15_000)
       : answerContent;
-    const completeTemplate = title === ERROR_REPLY_TITLE ? "red" : "green";
+    const completeTemplate = title === getErrorReplyTitle() ? "red" : "green";
     const reasoningDurationMs = state.reasoningStartTime
       ? Math.max(0, Date.now() - state.reasoningStartTime)
       : undefined;

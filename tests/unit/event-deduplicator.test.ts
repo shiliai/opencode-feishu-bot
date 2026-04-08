@@ -1,6 +1,6 @@
 import { mkdtemp, readFile, rm } from "node:fs/promises";
-import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   EventDeduplicator,
@@ -81,6 +81,7 @@ describe("EventDeduplicator", () => {
   it("builds a deduplicator from config", () => {
     const config = {
       opencode: { apiUrl: "http://localhost:4096", apiKey: "" },
+      workdir: null,
       feishu: {
         appId: "app-id",
         appSecret: "secret",
@@ -101,6 +102,7 @@ describe("EventDeduplicator", () => {
       },
       service: { port: 3000, host: "0.0.0.0" },
       logLevel: "info",
+      assistantName: "OpenCode",
     } satisfies AppConfig;
 
     const deduplicator = createEventDeduplicator(config);

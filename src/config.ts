@@ -1,6 +1,6 @@
 import "dotenv/config";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { isAbsolute, join, resolve } from "node:path";
 
 export type ConnectionType = "ws" | "webhook";
 
@@ -41,6 +41,7 @@ export interface ServiceConfig {
 
 export interface AppConfig {
   opencode: OpenCodeConfig;
+  workdir: string | null;
   feishu: FeishuConfig;
   connectionType: ConnectionType;
   cardCallback: CardCallbackConfig | null;
@@ -48,6 +49,7 @@ export interface AppConfig {
   controlCatalog: ControlCatalogConfig;
   service: ServiceConfig;
   logLevel: string;
+  assistantName: string;
 }
 
 export const DEFAULT_CONTROL_CATALOG_CACHE_TTL_MS = 600_000;
@@ -66,6 +68,8 @@ export const DEFAULT_FEISHU_EVENT_DEDUP_PERSIST_PATH = join(
 );
 export const DEFAULT_FEISHU_CARD_CALLBACK_VERIFICATION_TOKEN = "";
 export const DEFAULT_FEISHU_CARD_CALLBACK_ENCRYPT_KEY = "";
+
+export const DEFAULT_ASSISTANT_NAME = "OpenCode";
 
 export class ConfigValidationError extends Error {
   constructor(
@@ -114,6 +118,14 @@ export function loadConfig(): AppConfig {
   const connectionType = parseConnectionType(
     getEnvVar("FEISHU_CONNECTION_TYPE", false) || "ws",
   );
+  const workdirRaw = getEnvVar("OPENCODE_WORKDIR", false);
+  if (workdirRaw && !isAbsolute(workdirRaw)) {
+    throw new ConfigValidationError(
+      "OPENCODE_WORKDIR",
+      "OPENCODE_WORKDIR must be an absolute path.",
+    );
+  }
+  const workdir = workdirRaw ? resolve(workdirRaw) : null;
 
   const callbackUrl = getEnvVar("FEISHU_CARD_CALLBACK_URL", false);
   const verificationToken =
@@ -150,6 +162,7 @@ export function loadConfig(): AppConfig {
         getEnvVar("OPENCODE_API_BASE_URL", false) || "http://localhost:4096",
       apiKey: getEnvVar("OPENCODE_API_KEY", false),
     },
+    workdir,
     feishu: {
       appId: getEnvVar("FEISHU_APP_ID"),
       appSecret: getEnvVar("FEISHU_APP_SECRET"),
@@ -192,6 +205,7 @@ export function loadConfig(): AppConfig {
       host: getEnvVar("SERVICE_HOST", false) || "0.0.0.0",
     },
     logLevel: getEnvVar("LOG_LEVEL", false) || "info",
+    assistantName: getEnvVar("ASSISTANT_NAME", false) || DEFAULT_ASSISTANT_NAME,
   };
 }
 
