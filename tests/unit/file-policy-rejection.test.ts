@@ -22,7 +22,27 @@ function createFileMessageEvent(
         chat_id: "chat-001",
         chat_type: "group",
         message_type: "file",
-        content: JSON.stringify({ file_key: fileKey, file_name: fileName, file_size: fileSize }),
+        content: JSON.stringify({
+          file_key: fileKey,
+          file_name: fileName,
+          file_size: fileSize,
+        }),
+      },
+      sender: { sender_id: { open_id: "ou_001" } },
+    },
+  };
+}
+
+function createImageMessageEvent(imageKey: string): FeishuMessageReceiveEvent {
+  return {
+    header: { event_id: "evt-img-001", event_type: "im.message.receive_v1" },
+    event: {
+      message: {
+        message_id: "msg-img-001",
+        chat_id: "chat-001",
+        chat_type: "group",
+        message_type: "image",
+        content: JSON.stringify({ image_key: imageKey }),
       },
       sender: { sender_id: { open_id: "ou_001" } },
     },
@@ -36,7 +56,9 @@ function createMockClient(): FeishuFileClient {
         get: vi.fn().mockResolvedValue({ data: Buffer.from("file content") }),
       },
       file: {
-        create: vi.fn().mockResolvedValue({ data: { file_key: "uploaded-key" } }),
+        create: vi
+          .fn()
+          .mockResolvedValue({ data: { file_key: "uploaded-key" } }),
       },
       message: {
         create: vi.fn().mockResolvedValue({ data: { message_id: "sent-msg" } }),
@@ -75,7 +97,8 @@ describe("File policy rejection", () => {
 
     expect(result).toBeNull();
     expect(replySender.sendText).toHaveBeenCalledOnce();
-    const [sentReceiveId, sentText] = vi.mocked(replySender.sendText).mock.calls[0];
+    const [sentReceiveId, sentText] = vi.mocked(replySender.sendText).mock
+      .calls[0];
     expect(sentReceiveId).toBe("chat-001");
     expect(sentText).toContain("Unsupported file type");
     expect(sentText).toContain(".exe");
@@ -187,7 +210,10 @@ describe("File policy rejection", () => {
   it("custom policy allows additional extensions", async () => {
     const customPolicy: FilePolicy = {
       maxFileSizeBytes: DEFAULT_FILE_POLICY.maxFileSizeBytes,
-      allowedExtensions: new Set([...DEFAULT_FILE_POLICY.allowedExtensions, ".exe"]),
+      allowedExtensions: new Set([
+        ...DEFAULT_FILE_POLICY.allowedExtensions,
+        ".exe",
+      ]),
     };
 
     const handler = new FileHandler({
@@ -202,5 +228,21 @@ describe("File policy rejection", () => {
 
     expect(result).not.toBeNull();
     expect(result!.fileName).toBe("app.exe");
+  });
+
+  it("bypasses extension validation for image messages", async () => {
+    const handler = new FileHandler({
+      fileStore,
+      client,
+      replySender,
+      filePolicy: DEFAULT_FILE_POLICY,
+    });
+
+    const event = createImageMessageEvent("img_key_001");
+    const result = await handler.handleInboundFile(event, "chat-001");
+
+    expect(result).not.toBeNull();
+    expect(result!.fileName).toBe("image.png");
+    expect(replySender.sendText).not.toHaveBeenCalled();
   });
 });

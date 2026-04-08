@@ -23,7 +23,11 @@ function createFileMessageEvent(
         chat_id: "chat-001",
         chat_type: "group",
         message_type: "file",
-        content: JSON.stringify({ file_key: fileKey, file_name: fileName, file_size: fileSize }),
+        content: JSON.stringify({
+          file_key: fileKey,
+          file_name: fileName,
+          file_size: fileSize,
+        }),
       },
       sender: { sender_id: { open_id: "ou_001" } },
     },
@@ -53,10 +57,14 @@ function createMockClient(fileData: Buffer): FeishuFileClient {
         get: vi.fn().mockResolvedValue({ data: fileData }),
       },
       file: {
-        create: vi.fn().mockResolvedValue({ data: { file_key: "uploaded-key" } }),
+        create: vi
+          .fn()
+          .mockResolvedValue({ data: { file_key: "uploaded-key" } }),
       },
       message: {
-        create: vi.fn().mockResolvedValue({ data: { message_id: "sent-msg-001" } }),
+        create: vi
+          .fn()
+          .mockResolvedValue({ data: { message_id: "sent-msg-001" } }),
       },
     },
   };
@@ -86,7 +94,11 @@ describe("FileHandler ingress", () => {
   });
 
   it("downloads a supported file and stores it in temp dir", async () => {
-    const event = createFileMessageEvent("file_key_abc", "example.ts", sampleContent.length);
+    const event = createFileMessageEvent(
+      "file_key_abc",
+      "example.ts",
+      sampleContent.length,
+    );
 
     const result = await handler.handleInboundFile(event, "chat-001");
 
@@ -141,7 +153,12 @@ describe("FileHandler ingress", () => {
 
     const parsed = handler.parseFileMessage(event);
 
-    expect(parsed).toEqual({ fileKey: "fk_123", fileName: "report.pdf", fileSize: 1024 });
+    expect(parsed).toEqual({
+      fileKey: "fk_123",
+      fileName: "report.pdf",
+      fileSize: 1024,
+      messageType: "file",
+    });
   });
 
   it("cleans up temp dir after cleanup is called", async () => {

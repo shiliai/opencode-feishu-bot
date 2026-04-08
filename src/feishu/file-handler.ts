@@ -111,6 +111,7 @@ export interface ParsedFileMessage {
   fileKey: string;
   fileName: string;
   fileSize: number;
+  messageType: "file" | "image";
 }
 
 export interface FileValidationResult {
@@ -191,13 +192,23 @@ export class FileHandler {
       const fileSize = getNumber(parsedContent.file_size);
 
       if (!fileKey || !fileName) return null;
-      return { fileKey, fileName, fileSize: fileSize ?? 0 };
+      return {
+        fileKey,
+        fileName,
+        fileSize: fileSize ?? 0,
+        messageType: "file",
+      };
     }
 
     if (messageType === "image") {
       const imageKey = getString(parsedContent.image_key);
       if (!imageKey) return null;
-      return { fileKey: imageKey, fileName: "image.png", fileSize: 0 };
+      return {
+        fileKey: imageKey,
+        fileName: "image.png",
+        fileSize: 0,
+        messageType: "image",
+      };
     }
 
     return null;
@@ -263,14 +274,17 @@ export class FileHandler {
       return null;
     }
 
-    const validation = this.validateFile(parsed.fileName, parsed.fileSize);
-    if (!validation.valid) {
-      this.logger.info(`[FileHandler] File rejected: ${validation.reason}`);
-      await this.replySender.sendText(
-        receiveId,
-        `⚠️ File upload rejected: ${validation.reason}`,
-      );
-      return null;
+    // Image messages have a synthetic filename; skip extension validation.
+    if (parsed.messageType === "file") {
+      const validation = this.validateFile(parsed.fileName, parsed.fileSize);
+      if (!validation.valid) {
+        this.logger.info(`[FileHandler] File rejected: ${validation.reason}`);
+        await this.replySender.sendText(
+          receiveId,
+          `⚠️ File upload rejected: ${validation.reason}`,
+        );
+        return null;
+      }
     }
 
     try {
