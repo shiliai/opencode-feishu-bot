@@ -165,6 +165,21 @@ describe("ControlRouter — command dispatch", () => {
     expect(sentCard.header.title.content).toBe("OpenCode Commands");
   });
 
+  it("/version sends version as text", async () => {
+    const renderer = createMockRenderer();
+    renderer.sendText.mockResolvedValue(["msg-version-1"]);
+    const router = createRouter({ renderer });
+
+    const result = await router.handleCommand("chat-1", "/version");
+
+    expect(result.success).toBe(true);
+    expect(result.cardMessageId).toBe("msg-version-1");
+    expect(renderer.sendText).toHaveBeenCalledWith(
+      "chat-1",
+      expect.stringMatching(/^opencode-feishu-bridge v/),
+    );
+  });
+
   it("/new sends confirmation card instead of creating session immediately", async () => {
     const renderer = createMockRenderer();
     const openCodeClient = createMockOpenCodeClient();

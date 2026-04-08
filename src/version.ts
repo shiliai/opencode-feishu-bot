@@ -5,9 +5,14 @@ import { dirname, join } from "node:path";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-const pkg = JSON.parse(
-  readFileSync(join(__dirname, "..", "package.json"), "utf-8"),
-);
+function readAppVersion(): string {
+  try {
+    const raw = readFileSync(join(__dirname, "..", "package.json"), "utf-8");
+    const pkg = JSON.parse(raw) as { version?: unknown };
+    return typeof pkg.version === "string" ? pkg.version : "unknown";
+  } catch {
+    return "unknown";
+  }
+}
 
-export const APP_VERSION: string =
-  typeof pkg.version === "string" ? pkg.version : "unknown";
+export const APP_VERSION: string = readAppVersion();
