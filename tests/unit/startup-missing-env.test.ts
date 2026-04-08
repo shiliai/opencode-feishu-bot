@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ConfigValidationError } from "../../src/config.js";
 import type { Logger } from "../../src/utils/logger.js";
 
@@ -11,6 +11,7 @@ const CONFIG_KEYS = [
   "FEISHU_CARD_CALLBACK_ENCRYPT_KEY",
   "OPENCODE_API_BASE_URL",
   "OPENCODE_API_KEY",
+  "OPENCODE_WORKDIR",
   "SERVICE_PORT",
   "SERVICE_HOST",
   "LOG_LEVEL",

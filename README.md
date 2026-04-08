@@ -27,6 +27,8 @@ Common optional settings:
 - `FEISHU_CARD_CALLBACK_ENCRYPT_KEY` — defaults to empty (plaintext payload mode); set this when Feishu encrypted callback payloads are enabled
 - `OPENCODE_API_BASE_URL` — defaults to `http://localhost:4096`
 - `OPENCODE_API_KEY`
+- `OPENCODE_WORKDIR` — optional absolute path; when set, `/projects` scans this directory from the bridge process and lists its immediate subdirectories as candidate projects (auto-discovery). This path must be accessible to the bridge process and must also be a valid path for the OpenCode server when passed to `session.create`.
+- `ASSISTANT_NAME` — customizable name shown in card titles (default `"OpenCode"`)
 - `SERVICE_HOST` — defaults to `0.0.0.0`
 - `SERVICE_PORT` — defaults to `3000`
 - `LOG_LEVEL` — defaults to `info`
@@ -71,17 +73,19 @@ The bridge currently supports these slash commands in Feishu chat:
 | `/model [name]`  | `/model openai/gpt-4o` | Sets current model to `[name]`                                    |
 | `/agent`         | `/agent`               | Opens agent picker card (shows currently available agent entries) |
 | `/agent [name]`  | `/agent build`         | Sets current agent to `[name]`                                    |
-| `/status`        | `/status`              | Shows current Session / Model / Agent / State                     |
+| `/status`        | `/status`              | Shows Session / Model / Agent / Context / State                   |
 | `/version`       | `/version`             | Shows bridge version                                              |
 | `/abort`         | `/abort`               | Aborts the current session and clears busy state                  |
 
 ### Notes on command behavior
 
 - `State` in `/status` is from the interaction manager (`idle` or `busy`).
+- `Context` in `/status` shows the session's peak context token usage vs the model's context window when that limit is known (e.g. `151K/400K (38%)`). If the limit is unavailable, it shows `used/unknown` without a percentage.
 - `/new` now requires explicit confirmation from the card button before a new session is created.
 - When Feishu card callbacks are not configured, `/new` falls back to immediate session creation to avoid callback error `200340`.
 - `/history` reads recent messages from the current chat and renders them as a history card.
-- If no model/agent has been set yet, `/status` shows `Model: OpenCode default` / `Agent: OpenCode default`.
+- If no model/agent has been set yet, `/status` shows `Model: {ASSISTANT_NAME} default` / `Agent: {ASSISTANT_NAME} default` (configurable via `ASSISTANT_NAME` env var).
+- When `OPENCODE_WORKDIR` is set, `/projects` scans immediate subdirectories of that path from the bridge process. Selecting a new directory triggers auto-discovery on the OpenCode server, so the same path must also be meaningful there if the bridge and OpenCode server run on different hosts.
 - During busy periods, control commands such as `/status`, `/help`, and `/abort` are still allowed.
 - In group chats, normal prompt messages require `@bot` mention behavior configured by Feishu permissions and bridge settings.
 
@@ -90,6 +94,7 @@ The bridge currently supports these slash commands in Feishu chat:
 - Streaming status card now includes extracted reasoning lane, tool usage hints, and compact footer metrics.
 - Final replies are markdown-optimized for card/post readability (headings/tables/code blocks).
 - Remote markdown image URLs are resolved to Feishu `img_xxx` keys when possible for better inline rendering.
+- Image messages sent in Feishu chat are accepted and forwarded to the OpenCode session.
 
 ## Manual test checklist (recommended order)
 
@@ -112,6 +117,32 @@ Use this sequence for one-by-one validation:
 15. `/session <id>` then `/status` — verify active session switches.
 16. Send a normal prompt — verify OpenCode reply returns with enriched streaming card UX.
 17. `/abort` — verify abort success and busy state clears.
+
+## systemd user service
+
+Install as a user-level systemd service (no root required):
+
+```bash
+npm run service:install
+```
+
+This auto-detects the Node.js binary path and installation directory, installs the unit file, and enables the service.
+
+Common commands:
+
+```bash
+npm run service:status          # check status
+npm run service:uninstall       # stop and remove service
+journalctl --user -u opencode-feishu-bridge -f   # view logs
+```
+
+For services to persist after logout:
+
+```bash
+sudo loginctl enable-linger $USER
+```
+
+See `systemd/opencode-feishu-bridge.service` for the unit file template.
 
 ## Container image
 

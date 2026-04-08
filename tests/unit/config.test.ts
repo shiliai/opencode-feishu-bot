@@ -1,11 +1,11 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
-  loadConfig,
-  getConfig,
-  resetConfig,
   ConfigValidationError,
   DEFAULT_CONTROL_CATALOG_MODEL_STATE_PATH,
   DEFAULT_FEISHU_EVENT_DEDUP_PERSIST_PATH,
+  getConfig,
+  loadConfig,
+  resetConfig,
 } from "../../src/config.js";
 
 const VALID_ENV = {
@@ -49,6 +49,7 @@ function clearAllConfigKeys(): void {
     ...Object.keys(VALID_ENV),
     ...Object.keys(WEBHOOK_ENV),
     "OPENCODE_API_KEY",
+    "OPENCODE_WORKDIR",
     "THROTTLE_STATUS_CARD_UPDATE_INTERVAL_MS",
     "CONTROL_CATALOG_CACHE_TTL_MS",
     "CONTROL_CATALOG_MODEL_STATE_PATH",
@@ -83,6 +84,7 @@ describe("loadConfig", () => {
     expect(config.connectionType).toBe("ws");
     expect(config.opencode.apiUrl).toBe("http://localhost:4096");
     expect(config.opencode.apiKey).toBe("");
+    expect(config.workdir).toBeNull();
     expect(config.service.port).toBe(3000);
     expect(config.service.host).toBe("0.0.0.0");
     expect(config.logLevel).toBe("info");
@@ -97,27 +99,23 @@ describe("loadConfig", () => {
   it("produces a valid config from webhook environment", () => {
     setEnv(WEBHOOK_ENV);
     const config = loadConfig();
+    const cardCallback = config.cardCallback;
 
     expect(config.connectionType).toBe("webhook");
-    expect(config.cardCallback).not.toBeNull();
-    expect(config.cardCallback!.callbackUrl).toBe(
-      "https://example.com/webhook/card",
-    );
-    expect(config.cardCallback!.verificationToken).toBe(
-      "test-verification-token",
-    );
-    expect(config.cardCallback!.encryptKey).toBe("");
+    expect(cardCallback).not.toBeNull();
+    expect(cardCallback?.callbackUrl).toBe("https://example.com/webhook/card");
+    expect(cardCallback?.verificationToken).toBe("test-verification-token");
+    expect(cardCallback?.encryptKey).toBe("");
   });
 
   it("allows dual ingress card callback settings in ws mode", () => {
     setEnv(DUAL_INGRESS_ENV);
     const config = loadConfig();
+    const cardCallback = config.cardCallback;
 
     expect(config.connectionType).toBe("ws");
-    expect(config.cardCallback).not.toBeNull();
-    expect(config.cardCallback!.callbackUrl).toBe(
-      "https://example.com/webhook/card",
-    );
+    expect(cardCallback).not.toBeNull();
+    expect(cardCallback?.callbackUrl).toBe("https://example.com/webhook/card");
   });
 
   it("defaults connection type to ws when FEISHU_CONNECTION_TYPE is unset", () => {
@@ -165,6 +163,13 @@ describe("loadConfig", () => {
     const config = loadConfig();
 
     expect(config.opencode.apiKey).toBe("test-key");
+  });
+
+  it("reads optional OPENCODE_WORKDIR when absolute", () => {
+    setEnv({ ...VALID_ENV, OPENCODE_WORKDIR: "/tmp/projects" });
+    const config = loadConfig();
+
+    expect(config.workdir).toBe("/tmp/projects");
   });
 
   it("reads optional THROTTLE_STATUS_CARD_UPDATE_INTERVAL_MS", () => {
@@ -249,8 +254,9 @@ describe("loadConfig", () => {
       FEISHU_CARD_CALLBACK_ENCRYPT_KEY: "test-encrypt-key",
     });
     const config = loadConfig();
+    const cardCallback = config.cardCallback;
 
-    expect(config.cardCallback!.encryptKey).toBe("test-encrypt-key");
+    expect(cardCallback?.encryptKey).toBe("test-encrypt-key");
   });
 
   it("normalizes connection type case-insensitively", () => {
@@ -309,6 +315,15 @@ describe("loadConfig - validation errors", () => {
     expect(() => loadConfig()).toThrow(ConfigValidationError);
     expect(() => loadConfig()).toThrow(
       /FEISHU_CARD_CALLBACK_VERIFICATION_TOKEN/,
+    );
+  });
+
+  it("throws for relative OPENCODE_WORKDIR", () => {
+    setEnv({ ...VALID_ENV, OPENCODE_WORKDIR: "./projects" });
+
+    expect(() => loadConfig()).toThrow(ConfigValidationError);
+    expect(() => loadConfig()).toThrow(
+      /OPENCODE_WORKDIR must be an absolute path/,
     );
   });
 });

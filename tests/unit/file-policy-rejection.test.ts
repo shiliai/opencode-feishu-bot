@@ -22,21 +22,48 @@ function createFileMessageEvent(
         chat_id: "chat-001",
         chat_type: "group",
         message_type: "file",
-        content: JSON.stringify({ file_key: fileKey, file_name: fileName, file_size: fileSize }),
+        content: JSON.stringify({
+          file_key: fileKey,
+          file_name: fileName,
+          file_size: fileSize,
+        }),
       },
       sender: { sender_id: { open_id: "ou_001" } },
     },
   };
 }
 
-function createMockClient(): FeishuFileClient {
+function createImageMessageEvent(imageKey: string): FeishuMessageReceiveEvent {
+  return {
+    header: { event_id: "evt-img-001", event_type: "im.message.receive_v1" },
+    event: {
+      message: {
+        message_id: "msg-img-001",
+        chat_id: "chat-001",
+        chat_type: "group",
+        message_type: "image",
+        content: JSON.stringify({ image_key: imageKey }),
+      },
+      sender: { sender_id: { open_id: "ou_001" } },
+    },
+  };
+}
+
+function createMockClient(
+  downloadResponse: {
+    data?: unknown;
+    getReadableStream?: () => AsyncIterable<unknown>;
+  } = { data: Buffer.from("file content") },
+): FeishuFileClient {
   return {
     im: {
-      resource: {
-        get: vi.fn().mockResolvedValue({ data: Buffer.from("file content") }),
+      messageResource: {
+        get: vi.fn().mockResolvedValue(downloadResponse),
       },
       file: {
-        create: vi.fn().mockResolvedValue({ data: { file_key: "uploaded-key" } }),
+        create: vi
+          .fn()
+          .mockResolvedValue({ data: { file_key: "uploaded-key" } }),
       },
       message: {
         create: vi.fn().mockResolvedValue({ data: { message_id: "sent-msg" } }),
@@ -75,7 +102,8 @@ describe("File policy rejection", () => {
 
     expect(result).toBeNull();
     expect(replySender.sendText).toHaveBeenCalledOnce();
-    const [sentReceiveId, sentText] = vi.mocked(replySender.sendText).mock.calls[0];
+    const [sentReceiveId, sentText] = vi.mocked(replySender.sendText).mock
+      .calls[0];
     expect(sentReceiveId).toBe("chat-001");
     expect(sentText).toContain("Unsupported file type");
     expect(sentText).toContain(".exe");
@@ -112,7 +140,7 @@ describe("File policy rejection", () => {
     const event = createFileMessageEvent("fk_zip", "archive.zip", 5000);
     await handler.handleInboundFile(event, "chat-001");
 
-    expect(client.im.resource.get).not.toHaveBeenCalled();
+    expect(client.im.messageResource.get).not.toHaveBeenCalled();
     expect(fileStore.getActiveTempDirs()).toHaveLength(0);
   });
 
@@ -130,7 +158,7 @@ describe("File policy rejection", () => {
     const event = createFileMessageEvent("fk_huge", "data.json", 99999);
     await handler.handleInboundFile(event, "chat-001");
 
-    expect(client.im.resource.get).not.toHaveBeenCalled();
+    expect(client.im.messageResource.get).not.toHaveBeenCalled();
     expect(fileStore.getActiveTempDirs()).toHaveLength(0);
   });
 
@@ -187,7 +215,10 @@ describe("File policy rejection", () => {
   it("custom policy allows additional extensions", async () => {
     const customPolicy: FilePolicy = {
       maxFileSizeBytes: DEFAULT_FILE_POLICY.maxFileSizeBytes,
-      allowedExtensions: new Set([...DEFAULT_FILE_POLICY.allowedExtensions, ".exe"]),
+      allowedExtensions: new Set([
+        ...DEFAULT_FILE_POLICY.allowedExtensions,
+        ".exe",
+      ]),
     };
 
     const handler = new FileHandler({
@@ -202,5 +233,45 @@ describe("File policy rejection", () => {
 
     expect(result).not.toBeNull();
     expect(result!.fileName).toBe("app.exe");
+  });
+
+  it("bypasses extension validation for image messages", async () => {
+    const handler = new FileHandler({
+      fileStore,
+      client,
+      replySender,
+      filePolicy: DEFAULT_FILE_POLICY,
+    });
+
+    const event = createImageMessageEvent("img_key_001");
+    const result = await handler.handleInboundFile(event, "chat-001");
+
+    expect(result).not.toBeNull();
+    expect(result!.fileName).toBe("image.png");
+    expect(replySender.sendText).not.toHaveBeenCalled();
+  });
+
+  it("rejects oversized image after download", async () => {
+    client = createMockClient({ data: Buffer.alloc(150) });
+    const handler = new FileHandler({
+      fileStore,
+      client,
+      replySender,
+      filePolicy: {
+        maxFileSizeBytes: 100,
+        allowedExtensions: DEFAULT_FILE_POLICY.allowedExtensions,
+      },
+    });
+
+    const event = createImageMessageEvent("img_key_large");
+    const result = await handler.handleInboundFile(event, "chat-001");
+
+    expect(result).toBeNull();
+    expect(client.im.messageResource.get).toHaveBeenCalledOnce();
+    expect(fileStore.getActiveTempDirs()).toHaveLength(0);
+    expect(replySender.sendText).toHaveBeenCalledWith(
+      "chat-001",
+      expect.stringContaining("File upload rejected: File too large"),
+    );
   });
 });

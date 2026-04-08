@@ -68,11 +68,42 @@ export interface OpenCodePromptAsyncClient {
   }): Promise<unknown>;
 }
 
+export interface OpenCodeSessionMessagePart {
+  type: string;
+  mime?: string;
+  url?: string;
+}
+
+export interface OpenCodeSessionMessageRecord {
+  info?: {
+    id?: string;
+    role?: string;
+  };
+  parts?: OpenCodeSessionMessagePart[];
+}
+
+interface PoisonedSessionHistoryInspection {
+  offenderCount: number;
+  firstOffender?: {
+    messageId?: string;
+    mime?: string;
+    urlScheme?: string;
+  };
+}
+
+export interface OpenCodeSessionMessagesClient {
+  messages(parameters: { sessionID: string; directory?: string }): Promise<{
+    data: OpenCodeSessionMessageRecord[] | undefined;
+    error: unknown;
+  }>;
+}
+
 export interface PromptIngressDependencies {
   settings: SettingsManager;
   interactionManager: InteractionManager;
   openCodeSession: OpenCodeSessionClient;
   openCodeSessionStatus: OpenCodeSessionStatusClient;
+  openCodeSessionMessages?: OpenCodeSessionMessagesClient;
   openCodePromptAsync: OpenCodePromptAsyncClient;
   messageReader?: MessageReader;
   botOpenId?: string | null;
@@ -82,6 +113,15 @@ export interface PromptIngressDependencies {
 
 const HISTORY_CONTEXT_PREFIX =
   "Recent chat context (oldest to newest, excluding the current message):";
+
+function summarizeMessageTypes(messages: ChatMessage[]): string {
+  const counts = new Map<string, number>();
+  for (const message of messages) {
+    counts.set(message.messageType, (counts.get(message.messageType) ?? 0) + 1);
+  }
+
+  return JSON.stringify(Object.fromEntries(counts));
+}
 
 export async function isOpenCodeSessionBusy(
   client: OpenCodeSessionStatusClient,
@@ -119,6 +159,7 @@ export class PromptIngressHandler {
   private readonly interactionManager: InteractionManager;
   private readonly openCodeSession: OpenCodeSessionClient;
   private readonly openCodeSessionStatus: OpenCodeSessionStatusClient;
+  private readonly openCodeSessionMessages: OpenCodeSessionMessagesClient | null;
   private readonly openCodePromptAsync: OpenCodePromptAsyncClient;
   private readonly messageReader: MessageReader | null;
   private readonly botOpenId: string | null;
@@ -130,6 +171,7 @@ export class PromptIngressHandler {
     this.interactionManager = dependencies.interactionManager;
     this.openCodeSession = dependencies.openCodeSession;
     this.openCodeSessionStatus = dependencies.openCodeSessionStatus;
+    this.openCodeSessionMessages = dependencies.openCodeSessionMessages ?? null;
     this.openCodePromptAsync = dependencies.openCodePromptAsync;
     this.messageReader = dependencies.messageReader ?? null;
     this.botOpenId = dependencies.botOpenId ?? null;
@@ -183,15 +225,23 @@ export class PromptIngressHandler {
       const historyMessages = await this.messageReader.getChatMessages({
         chatId: input.chatId,
       });
+      const filteredHistoryMessages = historyMessages.filter(
+        (message) => message.messageId !== input.messageId,
+      );
       const historyPart = this.createHistoryContextPart(
-        historyMessages.filter(
-          (message) => message.messageId !== input.messageId,
-        ),
+        filteredHistoryMessages,
       );
 
       if (!historyPart) {
+        this.logger.debug(
+          `[PromptIngress] History context empty after filtering: chatId=${input.chatId}, fetched=${historyMessages.length}, included=${filteredHistoryMessages.length}, messageTypes=${summarizeMessageTypes(filteredHistoryMessages)}`,
+        );
         return baseParts;
       }
+
+      this.logger.debug(
+        `[PromptIngress] History context prepared: chatId=${input.chatId}, fetched=${historyMessages.length}, included=${filteredHistoryMessages.length}, messageTypes=${summarizeMessageTypes(filteredHistoryMessages)}, historyChars=${historyPart.text.length}`,
+      );
 
       return [historyPart, ...baseParts];
     } catch (error) {
@@ -200,6 +250,82 @@ export class PromptIngressHandler {
         error,
       );
       return baseParts;
+    }
+  }
+
+  private hasFileParts(input: PromptIngressInput): boolean {
+    return (input.parts ?? []).some((part) => part.type === "file");
+  }
+
+  private isPoisonedHistoryFilePart(
+    message: OpenCodeSessionMessageRecord,
+    part: OpenCodeSessionMessagePart,
+  ): boolean {
+    if (message.info?.role !== "user" || part.type !== "file") {
+      return false;
+    }
+
+    if (part.mime === "application/octet-stream") {
+      return true;
+    }
+
+    return (
+      typeof part.url === "string" &&
+      part.url.startsWith("data:application/octet-stream;")
+    );
+  }
+
+  private async inspectPoisonedFileHistory(
+    sessionID: string,
+    directory: string,
+  ): Promise<PoisonedSessionHistoryInspection | null> {
+    if (!this.openCodeSessionMessages) {
+      return null;
+    }
+
+    try {
+      const { data, error } = await this.openCodeSessionMessages.messages({
+        sessionID,
+        directory,
+      });
+      if (error || !data) {
+        this.logger.warn(
+          `[PromptIngress] Failed to inspect session history for session=${sessionID}, continuing without poisoned-history reset`,
+          error,
+        );
+        return null;
+      }
+
+      const offenders = data.flatMap((message) =>
+        (message.parts ?? [])
+          .filter((part) => this.isPoisonedHistoryFilePart(message, part))
+          .map((part) => ({
+            messageId: message.info?.id,
+            mime: part.mime,
+            urlScheme:
+              typeof part.url === "string"
+                ? part.url.slice(
+                    0,
+                    part.url.indexOf(",") > 0 ? part.url.indexOf(",") : 40,
+                  )
+                : undefined,
+          })),
+      );
+
+      if (offenders.length === 0) {
+        return null;
+      }
+
+      return {
+        offenderCount: offenders.length,
+        firstOffender: offenders[0],
+      };
+    } catch (error) {
+      this.logger.warn(
+        `[PromptIngress] Error while inspecting session history for session=${sessionID}, continuing without poisoned-history reset`,
+        error,
+      );
+      return null;
     }
   }
 
@@ -313,6 +439,51 @@ export class PromptIngressHandler {
       };
     }
 
+    const poisonedHistoryInspection = this.hasFileParts(input)
+      ? await this.inspectPoisonedFileHistory(
+          resolution.sessionInfo.id,
+          resolution.directory,
+        )
+      : null;
+
+    if (poisonedHistoryInspection) {
+      this.logger.warn(
+        `[PromptIngress] Resetting poisoned session before file prompt: session=${resolution.sessionInfo.id}, offenderCount=${poisonedHistoryInspection.offenderCount}, firstOffenderMessage=${poisonedHistoryInspection.firstOffender?.messageId ?? "unknown"}, firstOffenderMime=${poisonedHistoryInspection.firstOffender?.mime ?? "unknown"}, firstOffenderUrlScheme=${poisonedHistoryInspection.firstOffender?.urlScheme ?? "unknown"}`,
+      );
+      const previousSessionId = resolution.sessionInfo.id;
+      this.settings.clearSession();
+      this.settings.clearStatusMessageId();
+
+      try {
+        resolution = await resolvePromptSession(sessionDeps);
+      } catch (error) {
+        this.logger.error(
+          "[PromptIngress] Session recreation failed after poisoned-history reset",
+          error,
+        );
+        return {
+          kind: "blocked",
+          reason: "session_creation_failed",
+        };
+      }
+
+      if (resolution.kind === "no-project") {
+        return { kind: "no-project" };
+      }
+
+      if (resolution.kind === "session-reset") {
+        return {
+          kind: "session-reset",
+          previousDirectory: resolution.previousDirectory,
+          currentDirectory: resolution.currentDirectory,
+        };
+      }
+
+      this.logger.info(
+        `[PromptIngress] Recreated session after poisoned-history reset: previousSession=${previousSessionId}, newSession=${resolution.sessionInfo.id}, directory=${resolution.directory}`,
+      );
+    }
+
     const busy = await isOpenCodeSessionBusy(
       this.openCodeSessionStatus,
       resolution.directory,
@@ -337,6 +508,24 @@ export class PromptIngressHandler {
     this.scheduleAsync(async () => {
       try {
         const parts = await this.buildPromptParts(input);
+        const historyIncluded = parts.some(
+          (part) =>
+            part.type === "text" &&
+            part.text.startsWith(HISTORY_CONTEXT_PREFIX),
+        );
+
+        const fileParts = parts.filter(
+          (p): p is Extract<PromptPartInput, { type: "file" }> =>
+            p.type === "file",
+        );
+        if (fileParts.length > 0) {
+          for (const fp of fileParts) {
+            this.logger.debug(
+              `[PromptIngress] HOP-4 prompt file part: mime=${fp.mime}, filename=${fp.filename ?? "N/A"}, urlScheme=${fp.url.slice(0, 40)}..., urlLength=${fp.url.length}`,
+            );
+          }
+        }
+
         const promptParams: {
           sessionID: string;
           directory: string;
@@ -363,14 +552,18 @@ export class PromptIngressHandler {
           promptParams.variant = model.variant;
         }
 
+        this.logger.info(
+          `[PromptIngress] Dispatching prompt: sourceMessageId=${input.messageId}, chatId=${input.chatId}, session=${resolution.sessionInfo.id}, directory=${resolution.directory}, historyIncluded=${historyIncluded}, totalParts=${parts.length}, fileParts=${fileParts.length}, model=${model ? `${model.providerID}/${model.modelID}` : "default"}, agent=${agent ?? "default"}, variant=${model?.variant ?? "default"}`,
+        );
+
         await this.openCodePromptAsync.promptAsync(promptParams);
 
         this.logger.info(
-          `[PromptIngress] Prompt dispatched: session=${resolution.sessionInfo.id}, directory=${resolution.directory}`,
+          `[PromptIngress] Prompt dispatched: sourceMessageId=${input.messageId}, session=${resolution.sessionInfo.id}, directory=${resolution.directory}, fileParts=${fileParts.length}`,
         );
       } catch (error) {
         this.logger.error(
-          `[PromptIngress] Async prompt error for session=${resolution.sessionInfo.id}`,
+          `[PromptIngress] Async prompt error: sourceMessageId=${input.messageId}, chatId=${input.chatId}, session=${resolution.sessionInfo.id}, directory=${resolution.directory}`,
           error,
         );
         this.interactionManager.clearBusy();

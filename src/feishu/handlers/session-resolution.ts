@@ -60,6 +60,9 @@ export async function resolvePromptSession(
   }
 
   if (existingSession) {
+    logger.info(
+      `[SessionResolution] Reusing existing session: id=${existingSession.id}, directory=${existingSession.directory}`,
+    );
     return {
       kind: "session-ready",
       sessionInfo: existingSession,

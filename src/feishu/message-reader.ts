@@ -184,6 +184,7 @@ function uniqueStrings(values: string[]): string[] {
 }
 
 function parseMessageContent(
+  messageId: string,
   messageType: string,
   rawContent: string,
   logger: Logger,
@@ -216,7 +217,7 @@ function parseMessageContent(
   }
 
   logger.debug(
-    `[MessageReader] Falling back to raw ${messageType} content preview`,
+    `[MessageReader] Falling back to raw content preview: messageId=${messageId || "unknown"}, messageType=${messageType}, contentLen=${normalizedRawContent.length}`,
   );
   return stripReasoningArtifacts(normalizedRawContent);
 }
@@ -247,6 +248,7 @@ function toChatMessage(item: RawMessageItem, logger: Logger): ChatMessage {
     senderId: item.sender?.id ?? "",
     senderType: normalizeSenderType(item.sender?.sender_type),
     content: parseMessageContent(
+      item.message_id ?? "",
       item.msg_type ?? "unknown",
       rawContent,
       logger,

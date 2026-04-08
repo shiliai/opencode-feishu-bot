@@ -1,11 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
-import { ControlRouter } from "../../src/feishu/control-router.js";
-import type { ControlRouterOptions } from "../../src/feishu/control-router.js";
 import {
-  buildSessionListCard,
-  buildModelPickerCard,
+  ControlRouter,
+  type ControlRouterOptions,
+} from "../../src/feishu/control-router.js";
+import {
   buildAgentPickerCard,
+  buildModelPickerCard,
   buildProjectPickerCard,
+  buildSessionListCard,
 } from "../../src/feishu/control-cards.js";
 
 function createMockSettings() {
@@ -389,6 +391,32 @@ describe("Selection card builders", () => {
     expect(actions[0].value).toEqual({
       action: "select_project",
       projectId: "project-1",
+    });
+  });
+
+  it("buildProjectPickerCard renders discover buttons for new directories", () => {
+    const card = buildProjectPickerCard([
+      {
+        id: "project-1",
+        worktree: "/workspace/project-1",
+        name: "Project One",
+      },
+      {
+        worktree: "/workspace/project-3",
+        name: "project-3",
+        isNew: true,
+      },
+    ]);
+
+    const actionEl = card.elements?.find(
+      (el: { tag: string }) => el.tag === "action",
+    );
+    const actions = (
+      actionEl as { actions: Array<{ value: Record<string, unknown> }> }
+    ).actions;
+    expect(actions[1].value).toEqual({
+      action: "discover_project",
+      directory: "/workspace/project-3",
     });
   });
 

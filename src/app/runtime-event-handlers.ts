@@ -1,3 +1,4 @@
+import { readFile } from "node:fs/promises";
 import { extname } from "node:path";
 import { pathToFileURL } from "node:url";
 import type { FeishuMessageReceiveEvent } from "../feishu/event-router.js";
@@ -22,6 +23,47 @@ import { normalizeFeishuEvent } from "../feishu/message-events.js";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+interface PostImageSegment {
+  imageKey: string;
+}
+
+function extractPostImageKeys(rawContent: string): PostImageSegment[] {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(rawContent);
+  } catch {
+    return [];
+  }
+
+  if (!isRecord(parsed)) {
+    return [];
+  }
+
+  const rows = Array.isArray(parsed.content) ? parsed.content : null;
+  if (!rows) {
+    return [];
+  }
+
+  const images: PostImageSegment[] = [];
+  for (const row of rows) {
+    if (!Array.isArray(row)) {
+      continue;
+    }
+
+    for (const segment of row) {
+      if (
+        isRecord(segment) &&
+        segment.tag === "img" &&
+        typeof segment.image_key === "string"
+      ) {
+        images.push({ imageKey: segment.image_key });
+      }
+    }
+  }
+
+  return images;
 }
 
 function getRawMessage(
@@ -65,11 +107,33 @@ function inferMimeType(fileName: string): string {
       return "application/yaml";
     case ".csv":
       return "text/csv";
+    case ".png":
+      return "image/png";
+    case ".jpg":
+    case ".jpeg":
+      return "image/jpeg";
+    case ".gif":
+      return "image/gif";
+    case ".webp":
+      return "image/webp";
+    case ".bmp":
+      return "image/bmp";
+    case ".svg":
+      return "image/svg+xml";
     case ".pdf":
       return "application/pdf";
     default:
       return "application/octet-stream";
   }
+}
+
+function isImageMimeType(mime: string): boolean {
+  return mime.startsWith("image/");
+}
+
+async function toDataUri(localPath: string, mime: string): Promise<string> {
+  const buffer = await readFile(localPath);
+  return `data:${mime};base64,${buffer.toString("base64")}`;
 }
 
 export interface RuntimeEventHandlersOptions {
@@ -86,13 +150,13 @@ export interface RuntimeEventHandlersOptions {
   >;
   fileHandler: Pick<
     FileHandler,
-    "isInboundFileMessage" | "handleInboundFile" | "cleanup"
+    "isInboundFileMessage" | "handleInboundFile" | "downloadFile" | "cleanup"
   >;
   botOpenId?: string | null;
   logger?: Logger;
   onPromptDispatched?: (
     result: Extract<PromptIngressResult, { kind: "dispatched" }>,
-    storedFile?: StoredFile,
+    storedFiles?: StoredFile[],
   ) => Promise<void> | void;
 }
 
@@ -146,34 +210,75 @@ export function createRuntimeEventHandlers(
     event: FeishuMessageReceiveEvent,
   ): Promise<void> => {
     const rawMessage = getRawMessage(event);
+    const eventId =
+      typeof event.header?.event_id === "string" ? event.header.event_id : null;
     const chatId =
       typeof rawMessage?.chat_id === "string" ? rawMessage.chat_id : null;
     const messageId =
       typeof rawMessage?.message_id === "string" ? rawMessage.message_id : null;
+    const messageType =
+      typeof rawMessage?.message_type === "string"
+        ? rawMessage.message_type
+        : null;
+    const chatType =
+      typeof rawMessage?.chat_type === "string" ? rawMessage.chat_type : null;
+    const contentLength =
+      typeof rawMessage?.content === "string" ? rawMessage.content.length : 0;
+
+    logger.debug(
+      `[RuntimeEventHandlers] HOP-0 Event received: eventId=${eventId ?? "unknown"}, messageId=${messageId ?? "unknown"}, chatId=${chatId ?? "unknown"}, chatType=${chatType ?? "unknown"}, messageType=${messageType ?? "unknown"}, contentLen=${contentLength}`,
+    );
 
     if (options.fileHandler.isInboundFileMessage(event)) {
       if (!chatId || !messageId) {
+        logger.warn(
+          `[RuntimeEventHandlers] Dropping inbound media event with missing identifiers: eventId=${eventId ?? "unknown"}, messageId=${messageId ?? "unknown"}, chatId=${chatId ?? "unknown"}, messageType=${messageType ?? "unknown"}`,
+        );
         return;
       }
+
+      logger.debug(
+        `[RuntimeEventHandlers] HOP-1 Feishu inbound media event: eventId=${eventId ?? "unknown"}, messageId=${messageId}, chatId=${chatId}, rawMessageType=${messageType ?? "unknown"}, contentLen=${contentLength}`,
+      );
 
       const storedFile = await options.fileHandler.handleInboundFile(
         event,
         chatId,
       );
       if (!storedFile) {
+        logger.warn(
+          `[RuntimeEventHandlers] HOP-2 handleInboundFile returned null for messageId=${messageId}`,
+        );
         return;
       }
 
+      logger.debug(
+        `[RuntimeEventHandlers] HOP-2 File downloaded: fileName=${storedFile.fileName}, localPath=${storedFile.localPath}, fileSize=${storedFile.fileSize}, storedMimeType=${storedFile.mimeType ?? "undefined"}`,
+      );
+
       const text = `Please review the attached file ${storedFile.fileName}.`;
+      const mime = storedFile.mimeType ?? inferMimeType(storedFile.fileName);
+      const fileUrl = isImageMimeType(mime)
+        ? await toDataUri(storedFile.localPath, mime)
+        : pathToFileURL(storedFile.localPath).href;
+
+      logger.debug(
+        `[RuntimeEventHandlers] HOP-3 Parts constructed: resolvedMime=${mime}, isImage=${isImageMimeType(mime)}, urlScheme=${fileUrl.slice(0, 30)}..., urlLength=${fileUrl.length}`,
+      );
+
       const parts: PromptPartInput[] = [
         { type: "text", text },
         {
           type: "file",
-          mime: inferMimeType(storedFile.fileName),
+          mime,
           filename: storedFile.fileName,
-          url: pathToFileURL(storedFile.localPath).href,
+          url: fileUrl,
         },
       ];
+
+      logger.info(
+        `[RuntimeEventHandlers] HOP-3 Dispatching media prompt: parts=[${parts.map((p) => (p.type === "file" ? `file(mime=${p.mime},filename=${p.filename},urlLen=${p.url.length})` : `text(len=${p.text.length})`)).join(", ")}]`,
+      );
 
       const result = await options.promptIngressHandler.handlePromptInput({
         messageId,
@@ -181,7 +286,7 @@ export function createRuntimeEventHandlers(
         text,
         parts,
       });
-      await handlePromptResult(result, storedFile);
+      await handlePromptResult(result, [storedFile]);
       return;
     }
 
@@ -202,6 +307,94 @@ export function createRuntimeEventHandlers(
           return;
         }
       }
+
+      const rawContent =
+        typeof rawMessage?.content === "string" ? rawMessage.content : null;
+      const messageType =
+        typeof rawMessage?.message_type === "string"
+          ? rawMessage.message_type
+          : null;
+
+      if (messageType === "post" && rawContent) {
+        const imageSegments = extractPostImageKeys(rawContent);
+
+        if (messageId && imageSegments.length === 0) {
+          logger.debug(
+            `[RuntimeEventHandlers] Post message contains no embedded images after extraction: messageId=${messageId}, chatId=${parsed.chatId}, textLen=${parsed.text.length}, rawContentLen=${rawContent.length}`,
+          );
+        }
+
+        if (imageSegments.length > 0 && messageId) {
+          logger.debug(
+            `[RuntimeEventHandlers] Post contains ${imageSegments.length} embedded image(s), downloading: messageId=${messageId}, chatId=${parsed.chatId}, textLen=${parsed.text.length}`,
+          );
+
+          const storedFiles: StoredFile[] = [];
+          const fileParts: PromptPartInput[] = [];
+          let failedDownloads = 0;
+
+          for (const segment of imageSegments) {
+            try {
+              const stored = await options.fileHandler.downloadFile(
+                messageId,
+                segment.imageKey,
+                "image.png",
+                "image",
+              );
+              storedFiles.push(stored);
+
+              const mime = stored.mimeType ?? inferMimeType(stored.fileName);
+              const dataUri = await toDataUri(stored.localPath, mime);
+              fileParts.push({
+                type: "file",
+                mime,
+                filename: stored.fileName,
+                url: dataUri,
+              });
+
+              logger.debug(
+                `[RuntimeEventHandlers] Post image downloaded: key=${segment.imageKey}, mime=${mime}, uriLen=${dataUri.length}`,
+              );
+            } catch (error: unknown) {
+              failedDownloads += 1;
+              logger.error(
+                `[RuntimeEventHandlers] Failed to materialize post image: messageId=${messageId}, key=${segment.imageKey}`,
+                error,
+              );
+            }
+          }
+
+          logger.info(
+            `[RuntimeEventHandlers] Post image download summary: messageId=${messageId}, attempted=${imageSegments.length}, succeeded=${fileParts.length}, failed=${failedDownloads}`,
+          );
+
+          if (fileParts.length > 0) {
+            const parts: PromptPartInput[] = [
+              { type: "text", text: parsed.text },
+              ...fileParts,
+            ];
+
+            logger.info(
+              `[RuntimeEventHandlers] Dispatching post with ${fileParts.length} image(s) and text (len=${parsed.text.length})`,
+            );
+
+            const result = await options.promptIngressHandler.handlePromptInput(
+              {
+                messageId: parsed.messageId,
+                chatId: parsed.chatId,
+                text: parsed.text,
+                parts,
+              },
+            );
+            await handlePromptResult(result, storedFiles);
+            return;
+          }
+
+          logger.warn(
+            `[RuntimeEventHandlers] Skipping post image dispatch because no image parts were materialized: messageId=${messageId}, attempted=${imageSegments.length}`,
+          );
+        }
+      }
     }
 
     const result = await options.promptIngressHandler.handleMessageEvent(event);
@@ -210,7 +403,7 @@ export function createRuntimeEventHandlers(
 
   const handlePromptResult = async (
     result: PromptIngressResult,
-    storedFile?: StoredFile,
+    storedFiles?: StoredFile[],
   ): Promise<void> => {
     if (result.kind !== "dispatched") {
       const identifiers = {
@@ -221,16 +414,25 @@ export function createRuntimeEventHandlers(
           : {}),
       };
       logger.debug(
-        `[RuntimeEventHandlers] Prompt result not dispatched: ${JSON.stringify(identifiers)}`,
+        `[RuntimeEventHandlers] Prompt result not dispatched: ${JSON.stringify({
+          ...identifiers,
+          storedFileCount: storedFiles?.length ?? 0,
+          storedFiles: storedFiles?.map((sf) => sf.fileName) ?? [],
+        })}`,
       );
-      if (storedFile) {
-        await options.fileHandler.cleanup(storedFile);
+      if (storedFiles) {
+        logger.debug(
+          `[RuntimeEventHandlers] Cleaning up stored files after non-dispatch: ${storedFiles.map((sf) => sf.fileName).join(", ")}`,
+        );
+        await Promise.all(
+          storedFiles.map((sf) => options.fileHandler.cleanup(sf)),
+        );
       }
       return;
     }
 
     if (options.onPromptDispatched) {
-      await options.onPromptDispatched(result, storedFile);
+      await options.onPromptDispatched(result, storedFiles);
     }
 
     options.pipelineController.startTurn({

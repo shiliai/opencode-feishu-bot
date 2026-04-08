@@ -1,7 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { tmpdir } from "node:os";
 import { FileStore, type StoredFile } from "../../src/feishu/file-store.js";
 import {
   FileHandler,
@@ -16,7 +15,7 @@ function createMockClient(
 ): FeishuFileClient {
   return {
     im: {
-      resource: {
+      messageResource: {
         get: vi.fn().mockResolvedValue({ data: Buffer.from("downloaded") }),
       },
       file: {
@@ -25,7 +24,9 @@ function createMockClient(
           : vi.fn().mockResolvedValue({ data: { file_key: uploadFileKey } }),
       },
       message: {
-        create: vi.fn().mockResolvedValue({ data: { message_id: sendMessageId } }),
+        create: vi
+          .fn()
+          .mockResolvedValue({ data: { message_id: sendMessageId } }),
       },
     },
   };
@@ -56,7 +57,10 @@ describe("FileHandler egress", () => {
     await fileStore.cleanupAll();
   });
 
-  function createLocalFile(fileName: string, content: string = "output data"): StoredFile {
+  function createLocalFile(
+    fileName: string,
+    content: string = "output data",
+  ): StoredFile {
     const filePath = join(tempDir, fileName);
     writeFileSync(filePath, content);
     return {
@@ -69,7 +73,11 @@ describe("FileHandler egress", () => {
   it("uploads a local file and sends it as a file message", async () => {
     const stored = createLocalFile("result.md", "# Generated output");
 
-    const messageId = await handler.uploadAndSendFile(stored.localPath, stored.fileName, "chat-001");
+    const messageId = await handler.uploadAndSendFile(
+      stored.localPath,
+      stored.fileName,
+      "chat-001",
+    );
 
     expect(messageId).toBe("sent-msg-001");
     expect(client.im.file.create).toHaveBeenCalledOnce();
@@ -105,7 +113,11 @@ describe("FileHandler egress", () => {
 
     const stored = createLocalFile("broken.ts", "code");
 
-    const messageId = await failHandler.uploadAndSendFile(stored.localPath, stored.fileName, "chat-001");
+    const messageId = await failHandler.uploadAndSendFile(
+      stored.localPath,
+      stored.fileName,
+      "chat-001",
+    );
 
     expect(messageId).toBeUndefined();
     expect(failClient.im.file.create).toHaveBeenCalledOnce();

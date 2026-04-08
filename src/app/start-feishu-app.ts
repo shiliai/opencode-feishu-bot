@@ -35,6 +35,7 @@ import { statusStore } from "../feishu/status-store.js";
 import { startFeishuWsClient } from "../feishu/ws-client.js";
 import { interactionManager } from "../interaction/manager.js";
 import { createOpenCodeClient } from "../opencode/client.js";
+import { createOpenCodePromptClient } from "../opencode/prompt-client.js";
 import { permissionManager } from "../permission/manager.js";
 import { questionManager } from "../question/manager.js";
 import { sessionManager } from "../session/manager.js";
@@ -106,17 +107,8 @@ export async function startFeishuApp(): Promise<void> {
 
   const feishuFileClient = feishuClients.client as unknown as FeishuFileClient;
 
-  const openCodePromptAsyncClient: OpenCodePromptAsyncClient = {
-    promptAsync: (parameters) =>
-      openCodeClient.session.promptAsync({
-        sessionID: parameters.sessionID,
-        directory: parameters.directory,
-        model: parameters.model,
-        agent: parameters.agent,
-        variant: parameters.variant,
-        parts: parameters.parts,
-      }),
-  };
+  const openCodePromptAsyncClient: OpenCodePromptAsyncClient =
+    createOpenCodePromptClient(openCodeClient, logger);
 
   // Step 5: Create managers (singletons)
   const managers = {
@@ -156,11 +148,12 @@ export async function startFeishuApp(): Promise<void> {
     interactionManager: managers.interaction,
   });
 
-  const fileStore = new FileStore();
+  const fileStore = new FileStore({ logger });
   const fileHandler = new FileHandler({
     fileStore,
     client: feishuFileClient,
     replySender: renderer,
+    logger,
   });
 
   const messageReader = new MessageReader({
@@ -178,9 +171,11 @@ export async function startFeishuApp(): Promise<void> {
     catalogModelStatePath: config.controlCatalog.modelStatePath,
     messageReader,
     interactionManager: managers.interaction,
+    statusStore,
     cardActionsEnabled:
       config.connectionType === "ws" ||
       Boolean(config.cardCallback && feishuClients.cardActionHandler),
+    workdir: config.workdir,
     logger,
   });
 
@@ -189,6 +184,7 @@ export async function startFeishuApp(): Promise<void> {
     interactionManager: managers.interaction,
     openCodeSession: openCodeClient.session,
     openCodeSessionStatus: openCodeClient.session,
+    openCodeSessionMessages: openCodeClient.session,
     openCodePromptAsync: openCodePromptAsyncClient,
     messageReader,
     botOpenId: config.feishu.botOpenId || null,
@@ -242,14 +238,14 @@ export async function startFeishuApp(): Promise<void> {
     logger,
     onPromptDispatched: async (
       result: Extract<PromptIngressResult, { kind: "dispatched" }>,
-      storedFile,
+      storedFiles,
     ) => {
-      if (!storedFile) {
+      if (!storedFiles || storedFiles.length === 0) {
         return;
       }
 
       const files = inboundFilesBySession.get(result.sessionId) ?? [];
-      files.push(storedFile);
+      files.push(...storedFiles);
       inboundFilesBySession.set(result.sessionId, files);
     },
   });

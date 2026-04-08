@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, expect, it } from "vitest";
 import type { AppConfig } from "../../src/config.js";
 import {
   createFeishuClients,
@@ -8,6 +8,7 @@ import {
 function makeConfig(overrides: Partial<AppConfig> = {}): AppConfig {
   return {
     opencode: { apiUrl: "http://localhost:4096", apiKey: "" },
+    workdir: null,
     feishu: {
       appId: "test-app-id",
       appSecret: "test-app-secret",
@@ -28,6 +29,7 @@ function makeConfig(overrides: Partial<AppConfig> = {}): AppConfig {
     },
     service: { port: 3000, host: "0.0.0.0" },
     logLevel: "info",
+    assistantName: "OpenCode",
     ...overrides,
   };
 }

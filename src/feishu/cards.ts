@@ -5,6 +5,7 @@ import type {
   InteractiveCardLarkMdItem,
   InteractiveCardPlainTextItem,
 } from "@larksuiteoapi/node-sdk";
+import { getConfig } from "../config.js";
 import type { PermissionRequest } from "../permission/types.js";
 import type { Question } from "../question/types.js";
 import type { SummaryTokensInfo, SummaryToolEvent } from "../summary/types.js";
@@ -530,7 +531,7 @@ export function buildControlCard(
 
   return {
     header: {
-      title: plainText("OpenCode Control"),
+      title: plainText(`${getConfig().assistantName} Control`),
       template: "blue",
     },
     elements,

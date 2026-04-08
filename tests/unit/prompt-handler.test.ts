@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { FeishuMessageReceiveEvent } from "../../src/feishu/event-router.js";
 import {
   type OpenCodePromptAsyncClient,
+  type OpenCodeSessionMessagesClient,
   type OpenCodeSessionStatusClient,
   PromptIngressHandler,
 } from "../../src/feishu/handlers/prompt.js";
@@ -351,6 +352,128 @@ describe("PromptIngressHandler", () => {
           mime: "text/plain",
           filename: "notes.txt",
           url: "file:///tmp/notes.txt",
+        },
+      ],
+    });
+  });
+
+  it("resets poisoned session history before dispatching a file prompt", async () => {
+    let currentSession:
+      | { id: string; title: string; directory: string }
+      | undefined = {
+      id: "sess-poisoned",
+      title: "Poisoned",
+      directory: "/workspace/project",
+    };
+
+    const settings = createMockSettings({
+      getCurrentProject: vi.fn().mockReturnValue({
+        id: "proj-1",
+        worktree: "/workspace/project",
+      }),
+      getCurrentSession: vi.fn().mockImplementation(() => currentSession),
+      clearSession: vi.fn().mockImplementation(() => {
+        currentSession = undefined;
+      }),
+      setCurrentSession: vi.fn().mockImplementation((session) => {
+        currentSession = session as {
+          id: string;
+          title: string;
+          directory: string;
+        };
+      }),
+    });
+    const interactionManager = createMockInteractionManager();
+    const openCodeSession: OpenCodeSessionClient = {
+      create: vi.fn().mockResolvedValue({
+        data: {
+          id: "sess-fresh",
+          title: "Fresh",
+          directory: "/workspace/project",
+        },
+        error: undefined,
+      }),
+    };
+    const openCodeSessionStatus: OpenCodeSessionStatusClient = {
+      status: vi.fn().mockResolvedValue({
+        data: { "sess-fresh": { type: "idle" } },
+        error: undefined,
+      }),
+    };
+    const openCodeSessionMessages: OpenCodeSessionMessagesClient = {
+      messages: vi.fn().mockResolvedValue({
+        data: [
+          {
+            info: { role: "user" },
+            parts: [
+              {
+                type: "file",
+                mime: "application/octet-stream",
+                url: "data:application/octet-stream;base64,/9j/4AAQ",
+              },
+            ],
+          },
+        ],
+        error: undefined,
+      }),
+    };
+    const openCodePromptAsync: OpenCodePromptAsyncClient = {
+      promptAsync: vi.fn().mockResolvedValue(undefined),
+    };
+
+    const scheduledTasks: Array<() => void> = [];
+    const handler = new PromptIngressHandler({
+      settings,
+      interactionManager,
+      openCodeSession,
+      openCodeSessionStatus,
+      openCodeSessionMessages,
+      openCodePromptAsync,
+      scheduleAsync: (task) => scheduledTasks.push(task),
+    });
+
+    const result = await handler.handlePromptInput({
+      messageId: "msg-current",
+      chatId: "chat-1",
+      text: "Please review the attached file image.jpg.",
+      parts: [
+        {
+          type: "text",
+          text: "Please review the attached file image.jpg.",
+        },
+        {
+          type: "file",
+          mime: "image/jpeg",
+          filename: "image.jpg",
+          url: "data:image/jpeg;base64,/9j/4AAQ",
+        },
+      ],
+    });
+
+    expect(result.kind).toBe("dispatched");
+    if (result.kind !== "dispatched") {
+      throw new Error("unexpected result kind");
+    }
+    expect(result.sessionId).toBe("sess-fresh");
+    expect(settings.clearSession).toHaveBeenCalledTimes(1);
+    expect(settings.clearStatusMessageId).toHaveBeenCalledTimes(1);
+    expect(openCodeSession.create).toHaveBeenCalledTimes(1);
+
+    await runScheduledTasks(scheduledTasks);
+
+    expect(openCodePromptAsync.promptAsync).toHaveBeenCalledWith({
+      sessionID: "sess-fresh",
+      directory: "/workspace/project",
+      parts: [
+        {
+          type: "text",
+          text: "Please review the attached file image.jpg.",
+        },
+        {
+          type: "file",
+          mime: "image/jpeg",
+          filename: "image.jpg",
+          url: "data:image/jpeg;base64,/9j/4AAQ",
         },
       ],
     });

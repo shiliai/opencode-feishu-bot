@@ -76,14 +76,18 @@ export interface ResponsePipelineControllerSnapshot {
   activeSessions: string[];
 }
 
-const ACTIVE_STATUS_CARD_TITLE = "OpenCode is working";
+function getAssistantName(): string {
+  return getConfig().assistantName;
+}
+
+const getActiveStatusCardTitle = () => `${getAssistantName()} is working`;
 const ACTIVE_STATUS_CARD_TEMPLATE = "blue" as const;
 const ACTIVE_STATUS_CARD_FALLBACK_TEXT = "Thinking…";
 const FINAL_REPLY_FALLBACK_TEXT = "Done.";
-const FINAL_REPLY_TITLE = "OpenCode reply";
-const ERROR_REPLY_TITLE = "OpenCode error";
-const STREAM_ENDED_MESSAGE =
-  "OpenCode stream ended before a final reply was delivered.";
+const getFinalReplyTitle = () => `${getAssistantName()} reply`;
+const getErrorReplyTitle = () => `${getAssistantName()} error`;
+const STREAM_ENDED_MESSAGE = () =>
+  `${getAssistantName()} stream ended before a final reply was delivered.`;
 const RETRYABLE_UPDATE_KEYWORDS = [
   "rate limit",
   "too many requests",
@@ -456,6 +460,10 @@ export class ResponsePipelineController {
     const state = this.statusStore.startTurn(context);
     state.subscriptionAbortController = abortController;
 
+    this.logger.info(
+      `[ResponsePipeline] Starting turn: session=${context.sessionId}, directory=${context.directory}, receiveId=${context.receiveId}, sourceMessageId=${context.sourceMessageId}`,
+    );
+
     this.scheduleAsync(() => {
       void this.runEventSubscription(context, abortController);
     });
@@ -589,7 +597,7 @@ export class ResponsePipelineController {
     try {
       const messageId = await this.renderer.renderStatusCard(
         state.receiveId,
-        ACTIVE_STATUS_CARD_TITLE,
+        getActiveStatusCardTitle(),
         initialContent,
         false,
         ACTIVE_STATUS_CARD_TEMPLATE,
@@ -657,9 +665,13 @@ export class ResponsePipelineController {
     const completionText =
       state.latestCompletedText ?? state.lastPartialText ?? "";
 
+    this.logger.info(
+      `[ResponsePipeline] Session idle reached finalization: session=${sessionId}, completionChars=${completionText.length}, hasStatusCard=${Boolean(state.statusCardMessageId)}, cardUpdatesBroken=${state.cardUpdatesBroken}`,
+    );
+
     try {
       await this.flushPendingPartialUpdate(sessionId);
-      await this.sendFinalReply(state, completionText, FINAL_REPLY_TITLE);
+      await this.sendFinalReply(state, completionText, getFinalReplyTitle());
     } finally {
       this.finishTurn(sessionId);
     }
@@ -675,8 +687,12 @@ export class ResponsePipelineController {
     state.cardUpdatesBroken = true;
     this.clearScheduledStatusUpdate(state);
 
+    this.logger.info(
+      `[ResponsePipeline] Handling session error: session=${sessionId}, message=${message}`,
+    );
+
     try {
-      await this.sendFinalReply(state, message, ERROR_REPLY_TITLE);
+      await this.sendFinalReply(state, message, getErrorReplyTitle());
     } finally {
       this.finishTurn(sessionId);
     }
@@ -701,7 +717,7 @@ export class ResponsePipelineController {
           error,
         );
         await this.enqueueSessionTask(context.sessionId, () =>
-          this.handleSessionError(context.sessionId, STREAM_ENDED_MESSAGE),
+          this.handleSessionError(context.sessionId, STREAM_ENDED_MESSAGE()),
         );
       }
       return;
@@ -709,7 +725,7 @@ export class ResponsePipelineController {
 
     if (!abortController.signal.aborted) {
       await this.enqueueSessionTask(context.sessionId, () =>
-        this.handleSessionError(context.sessionId, STREAM_ENDED_MESSAGE),
+        this.handleSessionError(context.sessionId, STREAM_ENDED_MESSAGE()),
       );
     }
   }
@@ -784,7 +800,7 @@ export class ResponsePipelineController {
       try {
         await this.renderer.updateStatusCard(
           statusCardMessageId,
-          ACTIVE_STATUS_CARD_TITLE,
+          getActiveStatusCardTitle(),
           content,
           false,
           ACTIVE_STATUS_CARD_TEMPLATE,
@@ -821,7 +837,7 @@ export class ResponsePipelineController {
     const resolvedAnswer = this.imageResolver
       ? await this.imageResolver.resolveImagesAwait(answerContent, 15_000)
       : answerContent;
-    const completeTemplate = title === ERROR_REPLY_TITLE ? "red" : "green";
+    const completeTemplate = title === getErrorReplyTitle() ? "red" : "green";
     const reasoningDurationMs = state.reasoningStartTime
       ? Math.max(0, Date.now() - state.reasoningStartTime)
       : undefined;
@@ -842,6 +858,9 @@ export class ResponsePipelineController {
             template: completeTemplate,
           },
         );
+        this.logger.info(
+          `[ResponsePipeline] Final reply delivered via complete-card update: session=${state.sessionId}, statusCardMessageId=${state.statusCardMessageId}`,
+        );
       } else {
         const messageId = await this.renderer.renderCompleteCard(
           state.receiveId,
@@ -860,6 +879,9 @@ export class ResponsePipelineController {
           state.statusCardMessageId = messageId;
           this.settingsManager.setStatusMessageId(messageId);
         }
+        this.logger.info(
+          `[ResponsePipeline] Final reply delivered via complete-card render: session=${state.sessionId}, statusCardMessageId=${messageId ?? "unknown"}`,
+        );
       }
       state.finalReplySent = true;
       return;
@@ -882,6 +904,9 @@ export class ResponsePipelineController {
       await this.renderer.replyPost(state.sourceMessageId, title, paragraphs, {
         uuid,
       });
+      this.logger.info(
+        `[ResponsePipeline] Final reply delivered via threaded post reply: session=${state.sessionId}, sourceMessageId=${state.sourceMessageId}`,
+      );
       state.finalReplySent = true;
       return;
     } catch (error) {
@@ -892,6 +917,9 @@ export class ResponsePipelineController {
     }
 
     await this.renderer.sendPost(state.receiveId, title, paragraphs);
+    this.logger.info(
+      `[ResponsePipeline] Final reply delivered via non-threaded post: session=${state.sessionId}, receiveId=${state.receiveId}`,
+    );
     state.finalReplySent = true;
   }
 
@@ -900,6 +928,10 @@ export class ResponsePipelineController {
     if (!state) {
       return;
     }
+
+    this.logger.info(
+      `[ResponsePipeline] Finishing turn: session=${sessionId}, finalReplySent=${state.finalReplySent}, cardUpdatesBroken=${state.cardUpdatesBroken}, elapsedMs=${Math.max(0, Date.now() - state.turnStartTime)}`,
+    );
 
     this.disposeTurnResources(state);
     this.settingsManager.clearStatusMessageId();
@@ -912,8 +944,9 @@ export class ResponsePipelineController {
   }
 
   private getStatusCardContent(state: StatusTurnState): string {
-    const resolveImagesFn = this.imageResolver
-      ? (text: string) => this.imageResolver!.resolveImages(text)
+    const imageResolver = this.imageResolver;
+    const resolveImagesFn = imageResolver
+      ? (text: string) => imageResolver.resolveImages(text)
       : undefined;
     return (
       buildStreamingStatusContent(state, resolveImagesFn) ||

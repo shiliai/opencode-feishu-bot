@@ -771,6 +771,9 @@ export class SummaryAggregator {
       return;
     }
 
+    logger.info(
+      `[SummaryAggregator] Session error received: session=${sessionId}, message=${message}`,
+    );
     this.stopTyping("session_error", sessionId);
     this.scheduleAsync(() => {
       this.callbacks.onSessionError?.(sessionId, message);
