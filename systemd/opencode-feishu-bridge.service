@@ -1,0 +1,17 @@
+[Unit]
+Description=OpenCode Feishu Bridge Bot
+Documentation=https://github.com/shiliai/opencode-feishu-bot
+After=network.target
+
+[Service]
+Type=simple
+# IMPORTANT: Update WorkingDirectory and ExecStart to match your installation.
+# Run `which node` to find your Node.js binary path.
+WorkingDirectory=%h/opencode-feishu-bridge
+ExecStart=/usr/bin/node %h/opencode-feishu-bridge/dist/index.js
+Restart=always
+RestartSec=5
+Environment=NODE_ENV=production
+
+[Install]
+WantedBy=default.target
