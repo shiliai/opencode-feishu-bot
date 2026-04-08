@@ -61,11 +61,15 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function cloneProjectInfo(project: ProjectInfo | undefined): ProjectInfo | undefined {
+function cloneProjectInfo(
+  project: ProjectInfo | undefined,
+): ProjectInfo | undefined {
   return project ? { ...project } : undefined;
 }
 
-function cloneSessionInfo(session: SessionInfo | undefined): SessionInfo | undefined {
+function cloneSessionInfo(
+  session: SessionInfo | undefined,
+): SessionInfo | undefined {
   return session ? { ...session } : undefined;
 }
 
@@ -94,7 +98,9 @@ function cloneSettings(settings: Settings): Settings {
     currentAgent: settings.currentAgent,
     currentModel: cloneModelInfo(settings.currentModel),
     statusMessageId: settings.statusMessageId,
-    sessionDirectoryCache: cloneSessionDirectoryCache(settings.sessionDirectoryCache),
+    sessionDirectoryCache: cloneSessionDirectoryCache(
+      settings.sessionDirectoryCache,
+    ),
   };
 }
 
@@ -125,7 +131,9 @@ function isModelInfo(value: unknown): value is ModelInfo {
   );
 }
 
-function isSessionDirectoryCacheInfo(value: unknown): value is SessionDirectoryCacheInfo {
+function isSessionDirectoryCacheInfo(
+  value: unknown,
+): value is SessionDirectoryCacheInfo {
   return (
     isRecord(value) &&
     value.version === 1 &&
@@ -168,7 +176,9 @@ function sanitizeSettings(raw: unknown): Settings {
   }
 
   if (isSessionDirectoryCacheInfo(raw.sessionDirectoryCache)) {
-    sanitized.sessionDirectoryCache = cloneSessionDirectoryCache(raw.sessionDirectoryCache);
+    sanitized.sessionDirectoryCache = cloneSessionDirectoryCache(
+      raw.sessionDirectoryCache,
+    );
   }
 
   return sanitized;
@@ -183,7 +193,12 @@ export class SettingsManager {
   private readonly settingsFilePath: string;
 
   constructor(options: SettingsManagerOptions = {}) {
-    this.fileSystem = options.fileSystem ?? { mkdir, readFile, rename, writeFile };
+    this.fileSystem = options.fileSystem ?? {
+      mkdir,
+      readFile,
+      rename,
+      writeFile,
+    };
     this.logger = options.logger ?? defaultLogger;
     this.settingsFilePath =
       options.settingsFilePath ??
@@ -211,7 +226,10 @@ export class SettingsManager {
 
   private async readSettingsFile(): Promise<Settings> {
     try {
-      const content = await this.fileSystem.readFile(this.settingsFilePath, "utf-8");
+      const content = await this.fileSystem.readFile(
+        this.settingsFilePath,
+        "utf-8",
+      );
       return sanitizeSettings(JSON.parse(content) as unknown);
     } catch (error) {
       const err = error as NodeJS.ErrnoException;
@@ -252,7 +270,10 @@ export class SettingsManager {
             JSON.stringify(snapshot, null, 2),
             "utf-8",
           );
-          await this.fileSystem.rename(temporaryFilePath, this.settingsFilePath);
+          await this.fileSystem.rename(
+            temporaryFilePath,
+            this.settingsFilePath,
+          );
         } catch (error) {
           this.logger.error(
             `[SettingsManager] Error writing settings file ${this.settingsFilePath}`,
@@ -340,11 +361,14 @@ export class SettingsManager {
   }
 
   getSessionDirectoryCache(): SessionDirectoryCacheInfo | undefined {
-    return cloneSessionDirectoryCache(this.currentSettings.sessionDirectoryCache);
+    return cloneSessionDirectoryCache(
+      this.currentSettings.sessionDirectoryCache,
+    );
   }
 
   setSessionDirectoryCache(cache: SessionDirectoryCacheInfo): Promise<void> {
-    this.currentSettings.sessionDirectoryCache = cloneSessionDirectoryCache(cache);
+    this.currentSettings.sessionDirectoryCache =
+      cloneSessionDirectoryCache(cache);
     return this.writeSettingsFile(this.currentSettings);
   }
 
@@ -424,11 +448,15 @@ export function clearStatusMessageId(): void {
   settingsManager.clearStatusMessageId();
 }
 
-export function getSessionDirectoryCache(): SessionDirectoryCacheInfo | undefined {
+export function getSessionDirectoryCache():
+  | SessionDirectoryCacheInfo
+  | undefined {
   return settingsManager.getSessionDirectoryCache();
 }
 
-export function setSessionDirectoryCache(cache: SessionDirectoryCacheInfo): Promise<void> {
+export function setSessionDirectoryCache(
+  cache: SessionDirectoryCacheInfo,
+): Promise<void> {
   return settingsManager.setSessionDirectoryCache(cache);
 }
 

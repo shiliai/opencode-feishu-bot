@@ -204,7 +204,6 @@ describe("ControlRouter — unsupported commands", () => {
       "/config",
       "/debug",
       "/restart",
-      "/version",
     ];
 
     for (const cmd of extraCommands) {

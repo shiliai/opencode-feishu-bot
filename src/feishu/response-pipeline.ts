@@ -14,7 +14,7 @@ import type {
 } from "../summary/types.js";
 import { logger as defaultLogger, type Logger } from "../utils/logger.js";
 import { buildStreamingStatusContent } from "./cards.js";
-import type { ImageResolver } from "./image-resolver.js";
+import type { ImageResolverLike } from "./image-resolver.js";
 import { optimizeMarkdownStyle } from "./markdown-style.js";
 import { splitReasoningText, stripReasoningTags } from "./reasoning-utils.js";
 import type { FeishuRenderer } from "./renderer.js";
@@ -61,7 +61,7 @@ export interface ResponsePipelineControllerOptions {
   eventSubscriber?: ResponsePipelineEventSubscriber;
   summaryAggregator?: ResponsePipelineSummaryAggregator;
   renderer: ResponsePipelineRenderer;
-  imageResolver?: ImageResolver;
+  imageResolver?: ImageResolverLike;
   settingsManager: ResponsePipelineSettingsManager;
   interactionManager: ResponsePipelineInteractionManager;
   statusStore?: StatusStore;
@@ -371,7 +371,7 @@ export class ResponsePipelineController {
   private readonly eventSubscriber: ResponsePipelineEventSubscriber;
   private readonly summaryAggregator: ResponsePipelineSummaryAggregator;
   private readonly renderer: ResponsePipelineRenderer;
-  private readonly imageResolver?: ImageResolver;
+  private readonly imageResolver?: ImageResolverLike;
   private readonly settingsManager: ResponsePipelineSettingsManager;
   private readonly interactionManager: ResponsePipelineInteractionManager;
   private readonly statusStore: StatusStore;

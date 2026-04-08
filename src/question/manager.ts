@@ -6,7 +6,10 @@ function cloneState(state: QuestionState): QuestionState {
     questions: [...state.questions],
     currentIndex: state.currentIndex,
     selectedOptions: new Map(
-      Array.from(state.selectedOptions.entries(), ([key, value]) => [key, new Set(value)]),
+      Array.from(state.selectedOptions.entries(), ([key, value]) => [
+        key,
+        new Set(value),
+      ]),
     ),
     customAnswers: new Map(state.customAnswers.entries()),
     customInputQuestionIndex: state.customInputQuestionIndex,
@@ -40,7 +43,9 @@ export class QuestionManager {
     );
 
     if (this.state.isActive) {
-      logger.info("[QuestionManager] Poll already active, forcing reset before starting new poll");
+      logger.info(
+        "[QuestionManager] Poll already active, forcing reset before starting new poll",
+      );
       this.clear();
     }
 
@@ -82,7 +87,8 @@ export class QuestionManager {
       return;
     }
 
-    const selected = this.state.selectedOptions.get(questionIndex) ?? new Set<number>();
+    const selected =
+      this.state.selectedOptions.get(questionIndex) ?? new Set<number>();
 
     if (question.multiple) {
       if (selected.has(optionIndex)) {
@@ -102,7 +108,9 @@ export class QuestionManager {
   }
 
   getSelectedOptions(questionIndex: number): Set<number> {
-    return new Set(this.state.selectedOptions.get(questionIndex) ?? new Set<number>());
+    return new Set(
+      this.state.selectedOptions.get(questionIndex) ?? new Set<number>(),
+    );
   }
 
   getSelectedAnswer(questionIndex: number): string {
@@ -111,7 +119,8 @@ export class QuestionManager {
       return "";
     }
 
-    const selected = this.state.selectedOptions.get(questionIndex) ?? new Set<number>();
+    const selected =
+      this.state.selectedOptions.get(questionIndex) ?? new Set<number>();
     const options = Array.from(selected)
       .map((index) => question.options[index])
       .filter((option): option is NonNullable<typeof option> => Boolean(option))

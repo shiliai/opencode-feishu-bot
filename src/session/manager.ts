@@ -13,7 +13,9 @@ export interface SessionStore {
 }
 
 export class SessionManager {
-  constructor(private readonly store: SessionStore = settingsManager as SettingsManager) {}
+  constructor(
+    private readonly store: SessionStore = settingsManager as SettingsManager,
+  ) {}
 
   setCurrentSession(sessionInfo: SessionInfo): void {
     this.store.setCurrentSession(sessionInfo);

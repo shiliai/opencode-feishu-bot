@@ -18,7 +18,9 @@ export class PermissionManager {
     );
 
     if (this.state.requestsByMessageId.has(messageId)) {
-      logger.warn(`[PermissionManager] Message ID already tracked, replacing: ${messageId}`);
+      logger.warn(
+        `[PermissionManager] Message ID already tracked, replacing: ${messageId}`,
+      );
     }
 
     this.state.requestsByMessageId.set(messageId, request);

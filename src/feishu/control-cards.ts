@@ -31,6 +31,7 @@ const COMMAND_HELP: Array<{ command: string; description: string }> = [
   { command: "/model [name]", description: "Switch model (or show picker)" },
   { command: "/agent [name]", description: "Switch agent (or show picker)" },
   { command: "/status", description: "Show current status" },
+  { command: "/version", description: "Show bridge version" },
   { command: "/abort", description: "Abort the current session" },
 ];
 

@@ -57,7 +57,9 @@ function formatArg(arg: unknown): string {
   });
 }
 
-function resolveConfiguredLogLevel(getLevel?: () => string | undefined): LogLevel {
+function resolveConfiguredLogLevel(
+  getLevel?: () => string | undefined,
+): LogLevel {
   try {
     return normalizeLogLevel(getLevel?.() ?? getConfig().logLevel);
   } catch {
@@ -77,7 +79,8 @@ function writeLog(
 ): void {
   const formattedArgs = args.map((arg) => formatArg(arg));
   const prefix = formatPrefix(level, now);
-  const line = formattedArgs.length > 0 ? `${prefix} ${formattedArgs.join(" ")}` : prefix;
+  const line =
+    formattedArgs.length > 0 ? `${prefix} ${formattedArgs.join(" ")}` : prefix;
   stream.write(`${line}\n`);
 }
 
