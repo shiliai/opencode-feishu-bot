@@ -1,4 +1,4 @@
-import { resolve } from "node:path";
+import { isAbsolute, relative, resolve } from "node:path";
 import { DEFAULT_CONTROL_CATALOG_CACHE_TTL_MS } from "../config.js";
 import type { FeishuRenderer } from "../feishu/renderer.js";
 import type { InteractionManager } from "../interaction/manager.js";
@@ -126,6 +126,21 @@ function resolveDirectoryScope(
   }
 
   return process.cwd();
+}
+
+function isDirectChildDirectory(
+  parentDirectory: string,
+  candidateDirectory: string,
+): boolean {
+  const relativePath = relative(parentDirectory, candidateDirectory);
+  if (!relativePath || relativePath === "." || isAbsolute(relativePath)) {
+    return false;
+  }
+
+  const segments = relativePath
+    .split(/[\\/]/)
+    .filter((segment) => segment.length > 0);
+  return segments.length === 1 && segments[0] !== "..";
 }
 
 export interface OpenCodeSessionClient {
@@ -865,18 +880,65 @@ export class ControlRouter {
     return this.mergeProjectEntries(projects, workdirEntries);
   }
 
+  private validateDiscoverProjectDirectory(
+    directory: string,
+  ): { valid: true; directory: string } | { valid: false; message: string } {
+    if (!this.workdir) {
+      return {
+        valid: false,
+        message:
+          "Project discovery is unavailable because OPENCODE_WORKDIR is not configured.",
+      };
+    }
+
+    if (!isAbsolute(directory)) {
+      return {
+        valid: false,
+        message: "Project discovery requires an absolute path.",
+      };
+    }
+
+    const normalizedWorkdir = resolve(this.workdir);
+    const normalizedDirectory = resolve(directory);
+    if (!isDirectChildDirectory(normalizedWorkdir, normalizedDirectory)) {
+      return {
+        valid: false,
+        message: `Project discovery is limited to immediate subdirectories of ${normalizedWorkdir}.`,
+      };
+    }
+
+    return { valid: true, directory: normalizedDirectory };
+  }
+
   private async discoverProject(
     receiveId: string,
     directory: string,
   ): Promise<ControlCommandResult> {
+    const validation = this.validateDiscoverProjectDirectory(directory);
+    if (!validation.valid) {
+      this.logger.warn(
+        `[ControlRouter] Rejected project discovery request for directory: ${directory}`,
+      );
+      if (receiveId) {
+        await this.renderer.sendText(receiveId, validation.message);
+      }
+      return { success: false, message: validation.message };
+    }
+
+    const normalizedDirectory = validation.directory;
     try {
-      const result = await this.openCodeSession.create({ directory });
+      const result = await this.openCodeSession.create({
+        directory: normalizedDirectory,
+      });
       if (result.error) {
         throw result.error;
       }
 
-      const sessionInfo = this.parseSessionInfo(result.data, directory);
-      const discoveredDirectory = sessionInfo?.directory ?? directory;
+      const sessionInfo = this.parseSessionInfo(
+        result.data,
+        normalizedDirectory,
+      );
+      const discoveredDirectory = sessionInfo?.directory ?? normalizedDirectory;
       const projectName = getPathLeaf(discoveredDirectory);
       this.settings.setCurrentProject({
         id: "discovered",

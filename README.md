@@ -27,7 +27,7 @@ Common optional settings:
 - `FEISHU_CARD_CALLBACK_ENCRYPT_KEY` — defaults to empty (plaintext payload mode); set this when Feishu encrypted callback payloads are enabled
 - `OPENCODE_API_BASE_URL` — defaults to `http://localhost:4096`
 - `OPENCODE_API_KEY`
-- `OPENCODE_WORKDIR` — optional absolute path; when set, `/projects` also lists subdirectories of this path as candidate projects (auto-discovery)
+- `OPENCODE_WORKDIR` — optional absolute path; when set, `/projects` scans this directory from the bridge process and lists its immediate subdirectories as candidate projects (auto-discovery). This path must be accessible to the bridge process and must also be a valid path for the OpenCode server when passed to `session.create`.
 - `ASSISTANT_NAME` — customizable name shown in card titles (default `"OpenCode"`)
 - `SERVICE_HOST` — defaults to `0.0.0.0`
 - `SERVICE_PORT` — defaults to `3000`
@@ -80,12 +80,12 @@ The bridge currently supports these slash commands in Feishu chat:
 ### Notes on command behavior
 
 - `State` in `/status` is from the interaction manager (`idle` or `busy`).
-- `Context` in `/status` shows the session's peak context token usage vs the model's context window (e.g. `151K/400K (38%)`).
+- `Context` in `/status` shows the session's peak context token usage vs the model's context window when that limit is known (e.g. `151K/400K (38%)`). If the limit is unavailable, it shows `used/unknown` without a percentage.
 - `/new` now requires explicit confirmation from the card button before a new session is created.
 - When Feishu card callbacks are not configured, `/new` falls back to immediate session creation to avoid callback error `200340`.
 - `/history` reads recent messages from the current chat and renders them as a history card.
 - If no model/agent has been set yet, `/status` shows `Model: {ASSISTANT_NAME} default` / `Agent: {ASSISTANT_NAME} default` (configurable via `ASSISTANT_NAME` env var).
-- When `OPENCODE_WORKDIR` is set, `/projects` also lists subdirectories of that path. Selecting a new directory triggers auto-discovery on the OpenCode server.
+- When `OPENCODE_WORKDIR` is set, `/projects` scans immediate subdirectories of that path from the bridge process. Selecting a new directory triggers auto-discovery on the OpenCode server, so the same path must also be meaningful there if the bridge and OpenCode server run on different hosts.
 - During busy periods, control commands such as `/status`, `/help`, and `/abort` are still allowed.
 - In group chats, normal prompt messages require `@bot` mention behavior configured by Feishu permissions and bridge settings.
 

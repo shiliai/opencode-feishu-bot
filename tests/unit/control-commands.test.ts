@@ -469,6 +469,7 @@ describe("ControlRouter — command dispatch", () => {
       sessionManager,
       renderer,
       openCodeClient,
+      workdir: "/workspace",
     });
 
     const result = await router.handleCardAction({
@@ -500,6 +501,71 @@ describe("ControlRouter — command dispatch", () => {
     expect(renderer.sendText).toHaveBeenCalledWith(
       "chat-1",
       expect.stringContaining("Project discovered: project-3"),
+    );
+  });
+
+  it("discover_project rejects relative paths from card payloads", async () => {
+    const renderer = createMockRenderer();
+    const openCodeClient = createMockOpenCodeClient();
+    const router = createRouter({
+      renderer,
+      openCodeClient,
+      workdir: "/workspace",
+    });
+
+    const result = await router.handleCardAction({
+      open_chat_id: "chat-1",
+      action: {
+        value: {
+          action: "discover_project",
+          directory: "project-3",
+        },
+      },
+    });
+
+    expect(result).toEqual({
+      toast: {
+        type: "error",
+        content: "Project discovery requires an absolute path.",
+      },
+    });
+    expect(openCodeClient.session.create).not.toHaveBeenCalled();
+    expect(renderer.sendText).toHaveBeenCalledWith(
+      "chat-1",
+      "Project discovery requires an absolute path.",
+    );
+  });
+
+  it("discover_project rejects directories outside the immediate workdir children", async () => {
+    const renderer = createMockRenderer();
+    const openCodeClient = createMockOpenCodeClient();
+    const router = createRouter({
+      renderer,
+      openCodeClient,
+      workdir: "/workspace",
+    });
+
+    const result = await router.handleCardAction({
+      open_chat_id: "chat-1",
+      action: {
+        value: {
+          action: "discover_project",
+          directory: "/workspace/team/project-3",
+        },
+      },
+    });
+
+    expect(result).toEqual({
+      toast: {
+        type: "error",
+        content:
+          "Project discovery is limited to immediate subdirectories of /workspace.",
+      },
+    });
+    expect(openCodeClient.session.create).not.toHaveBeenCalled();
+    expect(renderer.sendText).toHaveBeenCalledWith(
+      "chat-1",
+      "Project discovery is limited to immediate subdirectories of /workspace.",
     );
   });
 

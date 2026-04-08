@@ -438,10 +438,10 @@ export function buildStatusCard(status: {
     const limitStr = status.contextLimit
       ? formatTokenCount(status.contextLimit)
       : "unknown";
-    const pct = status.contextLimit
-      ? Math.round((status.contextUsed / status.contextLimit) * 100)
-      : 0;
-    lines.push(`**Context**: ${used}/${limitStr} (${pct}%)`);
+    const pctSuffix = status.contextLimit
+      ? ` (${Math.round((status.contextUsed / status.contextLimit) * 100)}%)`
+      : "";
+    lines.push(`**Context**: ${used}/${limitStr}${pctSuffix}`);
   }
 
   return {
