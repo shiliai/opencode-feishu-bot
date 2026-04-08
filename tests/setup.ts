@@ -14,3 +14,6 @@ for (const [key, value] of Object.entries(TEST_ENV_DEFAULTS)) {
     process.env[key] = value;
   }
 }
+
+process.env.ASSISTANT_NAME = "OpenCode";
+delete process.env.OPENCODE_WORKDIR;
