@@ -72,6 +72,7 @@ The bridge currently supports these slash commands in Feishu chat:
 | `/agent`         | `/agent`               | Opens agent picker card (shows currently available agent entries) |
 | `/agent [name]`  | `/agent build`         | Sets current agent to `[name]`                                    |
 | `/status`        | `/status`              | Shows current Session / Model / Agent / State                     |
+| `/version`       | `/version`             | Shows bridge version                                              |
 | `/abort`         | `/abort`               | Aborts the current session and clears busy state                  |
 
 ### Notes on command behavior

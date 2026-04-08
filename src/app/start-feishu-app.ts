@@ -40,6 +40,7 @@ import { questionManager } from "../question/manager.js";
 import { sessionManager } from "../session/manager.js";
 import { settingsManager } from "../settings/manager.js";
 import { logger } from "../utils/logger.js";
+import { APP_VERSION } from "../version.js";
 import { createRuntimeEventHandlers } from "./runtime-event-handlers.js";
 import { RuntimeSummaryAggregator } from "./runtime-summary-aggregator.js";
 
@@ -62,7 +63,7 @@ export async function startFeishuApp(): Promise<void> {
     throw error;
   }
 
-  logger.info("opencode-feishu-bridge starting...");
+  logger.info(`opencode-feishu-bridge v${APP_VERSION} starting...`);
 
   // Step 2: Create Feishu clients — forward reference needed because eventRouter
   // doesn't exist yet; the indirection is resolved after step 8
@@ -338,7 +339,7 @@ export async function startFeishuApp(): Promise<void> {
     });
   }
 
-  logger.info("opencode-feishu-bridge started successfully");
+  logger.info(`opencode-feishu-bridge v${APP_VERSION} started successfully`);
 
   // Step 11: Graceful shutdown
   const shutdown = (signal: string): void => {

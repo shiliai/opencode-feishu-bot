@@ -14,7 +14,11 @@ import type {
 } from "./types.js";
 import { logger } from "../utils/logger.js";
 
-export const DEFAULT_ALLOWED_INTERACTION_COMMANDS = ["/help", "/status", "/abort"] as const;
+export const DEFAULT_ALLOWED_INTERACTION_COMMANDS = [
+  "/help",
+  "/status",
+  "/abort",
+] as const;
 export const BUSY_ALLOWED_COMMANDS = ["/abort", "/status", "/help"] as const;
 
 export function normalizeCommand(command: string): string | null {
@@ -104,7 +108,9 @@ function classifyIncomingInput(input: InteractionInput): {
   return { inputType: "other" };
 }
 
-function getExpectedInputBlockReason(expectedInput: ExpectedInput): BlockReason {
+function getExpectedInputBlockReason(
+  expectedInput: ExpectedInput,
+): BlockReason {
   switch (expectedInput) {
     case "callback":
       return "expected_callback";
@@ -152,7 +158,10 @@ function allowsBusyInteraction(kind: InteractionKind | undefined): boolean {
   return kind === "question" || kind === "permission";
 }
 
-function isBusyAllowedCommand(command: string | undefined, busyAllowedCommands: Set<string>): boolean {
+function isBusyAllowedCommand(
+  command: string | undefined,
+  busyAllowedCommands: Set<string>,
+): boolean {
   return Boolean(command && busyAllowedCommands.has(command));
 }
 
@@ -223,7 +232,9 @@ export class InteractionManager {
         options.allowedCommands !== undefined
           ? normalizeAllowedCommands(options.allowedCommands)
           : [...this.state.allowedCommands],
-      metadata: options.metadata ? { ...options.metadata } : { ...this.state.metadata },
+      metadata: options.metadata
+        ? { ...options.metadata }
+        : { ...this.state.metadata },
       expiresAt:
         options.expiresInMs === undefined
           ? this.state.expiresAt
@@ -284,9 +295,13 @@ export class InteractionManager {
     const { inputType, command } = classifyIncomingInput(input);
     const isBusy = options.busy ?? this.isBusy();
     const busyAllowedCommands = new Set(
-      normalizeAllowedCommands(options.busyAllowedCommands ?? BUSY_ALLOWED_COMMANDS),
+      normalizeAllowedCommands(
+        options.busyAllowedCommands ?? BUSY_ALLOWED_COMMANDS,
+      ),
     );
-    const allowBusyKinds = new Set(options.allowBusyKinds ?? ["question", "permission"]);
+    const allowBusyKinds = new Set(
+      options.allowBusyKinds ?? ["question", "permission"],
+    );
 
     if (state && this.isExpired()) {
       this.clear("expired");
@@ -300,7 +315,13 @@ export class InteractionManager {
         }
 
         if (state) {
-          return createBlockDecision(inputType, state, "command_not_allowed", command, true);
+          return createBlockDecision(
+            inputType,
+            state,
+            "command_not_allowed",
+            command,
+            true,
+          );
         }
 
         return {
@@ -313,13 +334,23 @@ export class InteractionManager {
         };
       }
 
-      if (state && allowBusyKinds.has(state.kind) && allowsBusyInteraction(state.kind)) {
+      if (
+        state &&
+        allowBusyKinds.has(state.kind) &&
+        allowsBusyInteraction(state.kind)
+      ) {
         if (state.expectedInput === "mixed") {
           if (inputType === "callback" || inputType === "text") {
             return createAllowDecision(inputType, state, command, true);
           }
 
-          return createBlockDecision(inputType, state, "expected_text", command, true);
+          return createBlockDecision(
+            inputType,
+            state,
+            "expected_text",
+            command,
+            true,
+          );
         }
 
         if (state.expectedInput === inputType) {
@@ -336,7 +367,13 @@ export class InteractionManager {
       }
 
       if (state) {
-        return createBlockDecision(inputType, state, "expected_text", command, true);
+        return createBlockDecision(
+          inputType,
+          state,
+          "expected_text",
+          command,
+          true,
+        );
       }
 
       return {
@@ -362,7 +399,12 @@ export class InteractionManager {
         return createAllowDecision(inputType, state, command);
       }
 
-      return createBlockDecision(inputType, state, "command_not_allowed", command);
+      return createBlockDecision(
+        inputType,
+        state,
+        "command_not_allowed",
+        command,
+      );
     }
 
     if (state.expectedInput === "mixed") {

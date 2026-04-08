@@ -24,18 +24,23 @@ export interface OpenCodeEventSubscriberSnapshot {
 const DEFAULT_RECONNECT_BASE_DELAY_MS = 1_000;
 const DEFAULT_RECONNECT_MAX_DELAY_MS = 15_000;
 
-export const FATAL_NO_STREAM_ERROR = "No stream returned from event subscription";
+export const FATAL_NO_STREAM_ERROR =
+  "No stream returned from event subscription";
 
 export function getReconnectDelayMs(
   attempt: number,
   reconnectBaseDelayMs: number = DEFAULT_RECONNECT_BASE_DELAY_MS,
   reconnectMaxDelayMs: number = DEFAULT_RECONNECT_MAX_DELAY_MS,
 ): number {
-  const exponentialDelay = reconnectBaseDelayMs * Math.pow(2, Math.max(0, attempt - 1));
+  const exponentialDelay =
+    reconnectBaseDelayMs * Math.pow(2, Math.max(0, attempt - 1));
   return Math.min(exponentialDelay, reconnectMaxDelayMs);
 }
 
-export function waitWithAbort(ms: number, signal: AbortSignal): Promise<boolean> {
+export function waitWithAbort(
+  ms: number,
+  signal: AbortSignal,
+): Promise<boolean> {
   return new Promise((resolve) => {
     if (signal.aborted) {
       resolve(false);
@@ -90,7 +95,10 @@ export class OpenCodeEventSubscriber {
   private readonly client: Pick<OpencodeClient, "event">;
   private readonly reconnectBaseDelayMs: number;
   private readonly reconnectMaxDelayMs: number;
-  private readonly waitFn: (ms: number, signal: AbortSignal) => Promise<boolean>;
+  private readonly waitFn: (
+    ms: number,
+    signal: AbortSignal,
+  ) => Promise<boolean>;
   private readonly scheduleCallback: (callback: () => void) => void;
 
   constructor(options: OpenCodeEventSubscriberOptions = {}) {
@@ -100,7 +108,8 @@ export class OpenCodeEventSubscriber {
     this.reconnectMaxDelayMs =
       options.reconnectMaxDelayMs ?? DEFAULT_RECONNECT_MAX_DELAY_MS;
     this.waitFn = options.waitFn ?? waitWithAbort;
-    this.scheduleCallback = options.scheduleCallback ?? ((callback) => setImmediate(callback));
+    this.scheduleCallback =
+      options.scheduleCallback ?? ((callback) => setImmediate(callback));
   }
 
   getSnapshot(): OpenCodeEventSubscriberSnapshot {
@@ -117,7 +126,9 @@ export class OpenCodeEventSubscriber {
   ): Promise<void> {
     if (this.isListening && this.activeDirectory === directory) {
       this.eventCallback = callback;
-      logger.debug(`[OpenCodeEvents] Event listener already running for ${directory}`);
+      logger.debug(
+        `[OpenCodeEvents] Event listener already running for ${directory}`,
+      );
       return;
     }
 
@@ -199,7 +210,10 @@ export class OpenCodeEventSubscriber {
             `[OpenCodeEvents] Event stream ended for ${directory}, reconnecting in ${reconnectDelay}ms (attempt=${reconnectAttempt})`,
           );
 
-          const shouldContinue = await this.waitFn(reconnectDelay, controller.signal);
+          const shouldContinue = await this.waitFn(
+            reconnectDelay,
+            controller.signal,
+          );
           if (!shouldContinue) {
             break;
           }
@@ -215,7 +229,10 @@ export class OpenCodeEventSubscriber {
             return;
           }
 
-          if (error instanceof Error && error.message === FATAL_NO_STREAM_ERROR) {
+          if (
+            error instanceof Error &&
+            error.message === FATAL_NO_STREAM_ERROR
+          ) {
             logger.error("[OpenCodeEvents] Event stream fatal error", error);
             throw error;
           }
@@ -231,7 +248,10 @@ export class OpenCodeEventSubscriber {
             error,
           );
 
-          const shouldContinue = await this.waitFn(reconnectDelay, controller.signal);
+          const shouldContinue = await this.waitFn(
+            reconnectDelay,
+            controller.signal,
+          );
           if (!shouldContinue) {
             break;
           }
@@ -252,7 +272,11 @@ export class OpenCodeEventSubscriber {
       detachExternalAbort();
 
       if (this.streamAbortController === controller) {
-        if (this.isListening && this.activeDirectory === directory && !controller.signal.aborted) {
+        if (
+          this.isListening &&
+          this.activeDirectory === directory &&
+          !controller.signal.aborted
+        ) {
           logger.warn(
             `[OpenCodeEvents] Event stream ended for ${directory}, listener marked as disconnected`,
           );
@@ -285,7 +309,11 @@ export async function subscribeToEvents(
   callback: EventCallback,
   options?: SubscribeToEventsOptions,
 ): Promise<void> {
-  return openCodeEventSubscriber.subscribeToEvents(directory, callback, options);
+  return openCodeEventSubscriber.subscribeToEvents(
+    directory,
+    callback,
+    options,
+  );
 }
 
 export function stopEventListening(): void {

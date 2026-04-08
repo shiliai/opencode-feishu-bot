@@ -36,11 +36,19 @@ export class FileStore {
     return dir;
   }
 
-  async storeFile(tempDir: string, fileName: string, data: Buffer | string): Promise<StoredFile> {
+  async storeFile(
+    tempDir: string,
+    fileName: string,
+    data: Buffer | string,
+  ): Promise<StoredFile> {
     const localPath = join(tempDir, fileName);
     await writeFile(localPath, data);
-    const fileSize = Buffer.isBuffer(data) ? data.length : Buffer.byteLength(data);
-    this.logger.debug(`[FileStore] Stored file: ${localPath} (${fileSize} bytes)`);
+    const fileSize = Buffer.isBuffer(data)
+      ? data.length
+      : Buffer.byteLength(data);
+    this.logger.debug(
+      `[FileStore] Stored file: ${localPath} (${fileSize} bytes)`,
+    );
     return { localPath, fileName, fileSize };
   }
 
@@ -53,7 +61,10 @@ export class FileStore {
       await rm(tempDir, { recursive: true, force: true });
       this.logger.debug(`[FileStore] Cleaned up temp dir: ${tempDir}`);
     } catch (error: unknown) {
-      this.logger.warn(`[FileStore] Failed to clean up temp dir: ${tempDir}`, error);
+      this.logger.warn(
+        `[FileStore] Failed to clean up temp dir: ${tempDir}`,
+        error,
+      );
     } finally {
       this.activeTempDirs.delete(tempDir);
     }

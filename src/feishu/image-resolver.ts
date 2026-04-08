@@ -9,7 +9,12 @@ export interface ImageResolverOptions {
   onImageResolved?: () => void;
 }
 
-export class ImageResolver {
+export interface ImageResolverLike {
+  resolveImages(text: string): string;
+  resolveImagesAwait(text: string, timeoutMs?: number): Promise<string>;
+}
+
+export class ImageResolver implements ImageResolverLike {
   private readonly resolved = new Map<string, string>();
   private readonly pending = new Map<string, Promise<string | null>>();
   private readonly failed = new Set<string>();

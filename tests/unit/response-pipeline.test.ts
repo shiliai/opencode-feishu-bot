@@ -1,4 +1,3 @@
-// biome-ignore assist/source/organizeImports: test imports are intentionally arranged for vitest mocks
 import type { Event } from "@opencode-ai/sdk/v2";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ResponsePipelineController } from "../../src/feishu/response-pipeline.js";

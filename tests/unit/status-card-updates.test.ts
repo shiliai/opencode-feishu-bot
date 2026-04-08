@@ -1,6 +1,6 @@
-// biome-ignore assist/source/organizeImports: test imports are intentionally arranged for vitest mocks
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ResponsePipelineController } from "../../src/feishu/response-pipeline.js";
+import type { ImageResolverLike } from "../../src/feishu/image-resolver.js";
 import {
   StatusStore,
   type ResponsePipelineTurnContext,
@@ -34,7 +34,7 @@ function makeTurnContext(
   };
 }
 
-function createHarness(options?: { imageResolver?: any }) {
+function createHarness(options?: { imageResolver?: ImageResolverLike }) {
   const statusStore = new StatusStore();
   let callbacks: SummaryCallbacks | undefined;
 
@@ -311,6 +311,11 @@ describe("ResponsePipelineController status card throttling", () => {
     const mockImageResolver = {
       resolveImages: vi.fn((text: string) =>
         text.replace("![img](http://pending)", "![img](img_resolved)"),
+      ),
+      resolveImagesAwait: vi.fn((text: string) =>
+        Promise.resolve(
+          text.replace("![img](http://pending)", "![img](img_resolved)"),
+        ),
       ),
     };
     const harness = createHarness({ imageResolver: mockImageResolver });

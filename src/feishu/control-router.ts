@@ -9,6 +9,7 @@ import type {
   SettingsManager,
 } from "../settings/manager.js";
 import type { Logger } from "../utils/logger.js";
+import { APP_VERSION } from "../version.js";
 import { buildConfirmCard } from "./cards.js";
 import type { FeishuClients } from "./client.js";
 import type { ProjectSummary, SessionSummary } from "./control-cards.js";
@@ -38,6 +39,7 @@ export type ControlCommand =
   | "/model"
   | "/agent"
   | "/status"
+  | "/version"
   | "/abort";
 
 export interface ControlCommandResult {
@@ -58,6 +60,7 @@ const SUPPORTED_COMMANDS = new Set<string>([
   "/models",
   "/agent",
   "/status",
+  "/version",
   "/abort",
 ]);
 
@@ -370,6 +373,8 @@ export class ControlRouter {
         return this.handleAgent(receiveId, args);
       case "/status":
         return this.handleStatus(receiveId);
+      case "/version":
+        return this.handleVersion(receiveId);
       case "/abort":
         return this.handleAbort(receiveId);
     }
@@ -1115,6 +1120,19 @@ export class ControlRouter {
     });
     const messageId = await this.renderer.sendCard(receiveId, card);
     return { success: true, cardMessageId: messageId ?? undefined };
+  }
+
+  private async handleVersion(
+    receiveId: string,
+  ): Promise<ControlCommandResult> {
+    const messageIds = await this.renderer.sendText(
+      receiveId,
+      `opencode-feishu-bridge v${APP_VERSION}`,
+    );
+    return {
+      success: true,
+      cardMessageId: messageIds[0] ?? undefined,
+    };
   }
 
   private async handleAbort(_receiveId: string): Promise<ControlCommandResult> {

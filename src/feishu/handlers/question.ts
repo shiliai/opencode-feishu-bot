@@ -52,7 +52,9 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function extractActionValue(event: Record<string, unknown>): CardActionValue | null {
+function extractActionValue(
+  event: Record<string, unknown>,
+): CardActionValue | null {
   const actionObj = event.action;
   if (!isRecord(actionObj)) {
     return null;
@@ -67,7 +69,10 @@ function extractActionValue(event: Record<string, unknown>): CardActionValue | n
     return null;
   }
 
-  if (typeof value.messageId !== "string" || typeof value.optionIndex !== "number") {
+  if (
+    typeof value.messageId !== "string" ||
+    typeof value.optionIndex !== "number"
+  ) {
     return null;
   }
 
@@ -110,7 +115,10 @@ export class QuestionCardHandler {
       return false;
     }
 
-    const answer = text.trim().slice(QUESTION_GUIDED_REPLY_PREFIX.length).trim();
+    const answer = text
+      .trim()
+      .slice(QUESTION_GUIDED_REPLY_PREFIX.length)
+      .trim();
     if (!answer) {
       return false;
     }
@@ -118,7 +126,9 @@ export class QuestionCardHandler {
     const currentIndex = this.questionManager.getCurrentIndex();
     const requestID = this.questionManager.getRequestID();
     if (!requestID) {
-      this.logger.warn("[QuestionCardHandler] No requestID found for guided reply");
+      this.logger.warn(
+        "[QuestionCardHandler] No requestID found for guided reply",
+      );
       return false;
     }
 
@@ -132,7 +142,10 @@ export class QuestionCardHandler {
     return true;
   }
 
-  async handleQuestionEvent(receiveId: string, sourceMessageId: string): Promise<void> {
+  async handleQuestionEvent(
+    receiveId: string,
+    sourceMessageId: string,
+  ): Promise<void> {
     const question = this.questionManager.getCurrentQuestion();
     if (!question) {
       this.logger.debug("[QuestionCardHandler] No active question to render");
@@ -167,11 +180,16 @@ export class QuestionCardHandler {
         );
       }
     } catch (error) {
-      this.logger.error("[QuestionCardHandler] Failed to render question card", error);
+      this.logger.error(
+        "[QuestionCardHandler] Failed to render question card",
+        error,
+      );
     }
   }
 
-  async handleCardAction(event: Record<string, unknown>): Promise<Record<string, never>> {
+  async handleCardAction(
+    event: Record<string, unknown>,
+  ): Promise<Record<string, never>> {
     const actionValue = extractActionValue(event);
     if (!actionValue) {
       return {};
@@ -193,7 +211,9 @@ export class QuestionCardHandler {
     const requestID = this.questionManager.getRequestID();
 
     if (!requestID) {
-      this.logger.warn("[QuestionCardHandler] No requestID found, skipping reply");
+      this.logger.warn(
+        "[QuestionCardHandler] No requestID found, skipping reply",
+      );
       return {};
     }
 
@@ -223,11 +243,16 @@ export class QuestionCardHandler {
       this.syncInteractionState(nextQuestion);
 
       if (!this.activeReceiveId || !this.activeSourceMessageId) {
-        this.logger.warn("[QuestionCardHandler] Missing render context for next question");
+        this.logger.warn(
+          "[QuestionCardHandler] Missing render context for next question",
+        );
         return;
       }
 
-      await this.handleQuestionEvent(this.activeReceiveId, this.activeSourceMessageId);
+      await this.handleQuestionEvent(
+        this.activeReceiveId,
+        this.activeSourceMessageId,
+      );
       return;
     }
 

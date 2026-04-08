@@ -1,4 +1,3 @@
-// biome-ignore assist/source/organizeImports: test imports are intentionally arranged for vitest mocks
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   ResponsePipelineController,

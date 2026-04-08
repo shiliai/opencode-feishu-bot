@@ -35,6 +35,14 @@
     "developer-tools"
   ],
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/shiliai/opencode-feishu-bot.git"
+  },
+  "bugs": {
+    "url": "https://github.com/shiliai/opencode-feishu-bot/issues"
+  },
+  "homepage": "https://github.com/shiliai/opencode-feishu-bot#readme",
   "dependencies": {
     "@larksuiteoapi/node-sdk": "1.60.0",
     "@opencode-ai/sdk": "^1.1.21",

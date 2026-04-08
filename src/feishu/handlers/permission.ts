@@ -70,7 +70,10 @@ export class PermissionCardHandler {
     this.permissionManager.startPermission(request, sourceMessageId);
 
     try {
-      const cardMessageId = await this.renderer.renderPermissionCard(receiveId, request);
+      const cardMessageId = await this.renderer.renderPermissionCard(
+        receiveId,
+        request,
+      );
       if (cardMessageId) {
         if (cardMessageId !== sourceMessageId) {
           this.permissionManager.removeByMessageId(sourceMessageId);
@@ -88,7 +91,9 @@ export class PermissionCardHandler {
     }
   }
 
-  async handleCardAction(event: Record<string, unknown>): Promise<Record<string, never>> {
+  async handleCardAction(
+    event: Record<string, unknown>,
+  ): Promise<Record<string, never>> {
     // Extract action value from the card action event
     const actionObj = event.action;
     if (!isRecord(actionObj)) {
@@ -107,7 +112,10 @@ export class PermissionCardHandler {
     const cardReply = actionValue.reply;
     const requestIdFromCard = actionValue.requestId;
 
-    if (typeof cardReply !== "string" || typeof requestIdFromCard !== "string") {
+    if (
+      typeof cardReply !== "string" ||
+      typeof requestIdFromCard !== "string"
+    ) {
       this.logger.warn(
         "[PermissionCardHandler] Invalid card action value: missing reply or requestId",
       );
@@ -115,9 +123,12 @@ export class PermissionCardHandler {
     }
 
     // Look up the pending request using open_message_id
-    const messageId = typeof event.open_message_id === "string" ? event.open_message_id : null;
+    const messageId =
+      typeof event.open_message_id === "string" ? event.open_message_id : null;
     if (!messageId) {
-      this.logger.warn("[PermissionCardHandler] Card action missing open_message_id");
+      this.logger.warn(
+        "[PermissionCardHandler] Card action missing open_message_id",
+      );
       return this.emptyResponse;
     }
 
