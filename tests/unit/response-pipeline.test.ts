@@ -327,6 +327,31 @@ describe("ResponsePipelineController", () => {
     );
   });
 
+  it("ignores session idle finalization while abort is in progress", async () => {
+    const harness = createHarness();
+    const context = makeTurnContext();
+
+    harness.controller.startTurn(context);
+    harness.callbacks.onTypingStart?.(context.sessionId);
+    await drainSession(harness.controller, context.sessionId);
+
+    const state = harness.statusStore.get(context.sessionId);
+    if (!state) {
+      throw new Error("expected turn state");
+    }
+    state.abortRequested = true;
+
+    harness.callbacks.onSessionIdle?.(context.sessionId);
+    await drainSession(harness.controller, context.sessionId);
+
+    expect(harness.renderer.updateCompleteCard).not.toHaveBeenCalled();
+    expect(harness.renderer.renderCompleteCard).not.toHaveBeenCalled();
+    expect(harness.renderer.replyPost).not.toHaveBeenCalled();
+    expect(harness.renderer.sendPost).not.toHaveBeenCalled();
+    expect(harness.interactionManager.clearBusy).not.toHaveBeenCalled();
+    expect(harness.statusStore.get(context.sessionId)).toBe(state);
+  });
+
   it("uses the latest completed assistant message when the session goes idle", async () => {
     const harness = createHarness();
     const context = makeTurnContext();
@@ -399,6 +424,31 @@ describe("ResponsePipelineController", () => {
       context.receiveId,
     );
     expect(harness.statusStore.get(context.sessionId)).toBeUndefined();
+  });
+
+  it("ignores session error finalization while abort is in progress", async () => {
+    const harness = createHarness();
+    const context = makeTurnContext();
+
+    harness.controller.startTurn(context);
+    harness.callbacks.onTypingStart?.(context.sessionId);
+    await drainSession(harness.controller, context.sessionId);
+
+    const state = harness.statusStore.get(context.sessionId);
+    if (!state) {
+      throw new Error("expected turn state");
+    }
+    state.abortRequested = true;
+
+    harness.callbacks.onSessionError?.(context.sessionId, "session aborted");
+    await drainSession(harness.controller, context.sessionId);
+
+    expect(harness.renderer.updateCompleteCard).not.toHaveBeenCalled();
+    expect(harness.renderer.renderCompleteCard).not.toHaveBeenCalled();
+    expect(harness.renderer.replyPost).not.toHaveBeenCalled();
+    expect(harness.renderer.sendPost).not.toHaveBeenCalled();
+    expect(harness.interactionManager.clearBusy).not.toHaveBeenCalled();
+    expect(harness.statusStore.get(context.sessionId)).toBe(state);
   });
 
   it("handlePartial deduplicates identical partial text and only schedules on signature changes", async () => {

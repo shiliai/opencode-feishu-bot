@@ -1031,7 +1031,7 @@ describe("ControlRouter — command dispatch", () => {
     expect(abortController.signal.aborted).toBe(true);
     expect(renderer.updateCompleteCard).toHaveBeenCalledWith(
       "status-card-1",
-      "OpenCode cancelled",
+      "OpenCode aborted",
       "✅ 已取消当前操作",
       expect.objectContaining({
         template: "orange",

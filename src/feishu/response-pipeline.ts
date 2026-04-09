@@ -105,6 +105,7 @@ const ACTIVE_STATUS_CARD_TEMPLATE = "blue" as const;
 const ACTIVE_STATUS_CARD_FALLBACK_TEXT = "Thinking…";
 const FINAL_REPLY_FALLBACK_TEXT = "Done.";
 const getFinalReplyTitle = () => `${getAssistantName()} reply`;
+const getAbortedReplyTitle = () => `${getAssistantName()} aborted`;
 const getErrorReplyTitle = () => `${getAssistantName()} error`;
 const STREAM_ENDED_MESSAGE = () =>
   `${getAssistantName()} stream ended before a final reply was delivered.`;
@@ -693,6 +694,13 @@ export class ResponsePipelineController {
       return;
     }
 
+    if (state.abortRequested) {
+      this.logger.info(
+        `[ResponsePipeline] Ignoring session idle finalization because abort is in progress: session=${sessionId}`,
+      );
+      return;
+    }
+
     state.pendingCompletion = true;
     const eventBasedText =
       state.latestCompletedText ?? state.lastPartialText ?? "";
@@ -738,6 +746,13 @@ export class ResponsePipelineController {
   async handleSessionError(sessionId: string, message: string): Promise<void> {
     const state = this.statusStore.get(sessionId);
     if (!state || state.finalReplySent) {
+      return;
+    }
+
+    if (state.abortRequested) {
+      this.logger.info(
+        `[ResponsePipeline] Ignoring session error finalization because abort is in progress: session=${sessionId}, message=${message}`,
+      );
       return;
     }
 
@@ -895,7 +910,12 @@ export class ResponsePipelineController {
     const resolvedAnswer = this.imageResolver
       ? await this.imageResolver.resolveImagesAwait(answerContent, 15_000)
       : answerContent;
-    const completeTemplate = title === getErrorReplyTitle() ? "red" : "green";
+    const completeTemplate =
+      title === getErrorReplyTitle()
+        ? "red"
+        : title === getAbortedReplyTitle()
+          ? "orange"
+          : "green";
     const reasoningDurationMs = state.reasoningStartTime
       ? Math.max(0, Date.now() - state.reasoningStartTime)
       : undefined;

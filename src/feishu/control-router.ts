@@ -255,7 +255,7 @@ function createNoopLogger(): Logger {
 }
 
 function getAbortCardTitle(): string {
-  return `${getConfig().assistantName} cancelled`;
+  return `${getConfig().assistantName} aborted`;
 }
 
 type AbortSessionState = "idle" | "busy" | "not-found";
@@ -2001,6 +2001,11 @@ export class ControlRouter {
       return { success: false, message: "No active session to abort" };
     }
 
+    const turnState = this.statusStore?.get(currentSession.id);
+    if (turnState) {
+      turnState.abortRequested = true;
+    }
+
     try {
       const abortResponse = await this.openCodeSession.abort({
         sessionID: currentSession.id,
@@ -2019,6 +2024,9 @@ export class ControlRouter {
         currentSession.directory,
       );
       if (finalState === "busy") {
+        if (turnState) {
+          turnState.abortRequested = false;
+        }
         const message =
           "⚠️ 已发送取消请求，但任务仍在处理中，请稍后再试 /abort 或用 /status 确认状态";
         this.logger.warn(
@@ -2031,15 +2039,15 @@ export class ControlRouter {
         };
       }
 
-      const turnState = this.statusStore?.clear(currentSession.id);
-      if (turnState) {
-        this.disposeTurnResources(turnState);
+      const completedTurnState = this.statusStore?.clear(currentSession.id);
+      if (completedTurnState) {
+        this.disposeTurnResources(completedTurnState);
       }
 
       this.settings.clearChatStatusMessageId(receiveId);
       this.interactionManager.clearBusy(receiveId);
 
-      await this.updateAbortedStatusCard(turnState);
+      await this.updateAbortedStatusCard(completedTurnState);
 
       this.logger.info(`[ControlRouter] Aborted session: ${currentSession.id}`);
       await this.renderer.sendText(receiveId, "✅ 已取消当前操作");
@@ -2048,6 +2056,9 @@ export class ControlRouter {
         message: `Session aborted: ${currentSession.id}`,
       };
     } catch (error) {
+      if (turnState) {
+        turnState.abortRequested = false;
+      }
       this.logger.error("[ControlRouter] Failed to abort session", error);
       await this.renderer.sendText(receiveId, "❌ 取消操作失败，请重试");
       return { success: false, message: "Failed to abort session" };
