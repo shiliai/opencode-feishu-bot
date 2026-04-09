@@ -615,6 +615,31 @@ describe("ControlRouter — command dispatch", () => {
     );
   });
 
+  it("confirm_write card action returns an error toast when receiveId is missing", async () => {
+    const renderer = createMockRenderer();
+    const openCodeClient = createMockOpenCodeClient();
+    const router = createRouter({ renderer, openCodeClient });
+
+    const result = await router.handleCardAction({
+      action: {
+        value: {
+          action: "confirm_write",
+          operationId: "create_new_session",
+        },
+      },
+    });
+
+    expect(result).toEqual({
+      toast: {
+        type: "error",
+        content:
+          "Unable to determine which chat should receive the new session. Please try again from the original chat.",
+      },
+    });
+    expect(openCodeClient.session.create).not.toHaveBeenCalled();
+    expect(renderer.sendText).not.toHaveBeenCalled();
+  });
+
   it("/session <id> switches to specified session", async () => {
     const renderer = createMockRenderer();
     const sessionManager = createMockSessionManager();

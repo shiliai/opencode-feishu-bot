@@ -586,6 +586,16 @@ export class ControlRouter {
           }
 
           const receiveId = getCardActionReceiveId(event);
+          if (!receiveId) {
+            this.logger.warn(
+              "[ControlRouter] Missing receiveId for create session card action",
+            );
+            return buildCardActionToast(
+              "Unable to determine which chat should receive the new session. Please try again from the original chat.",
+              "error",
+            );
+          }
+
           try {
             const result = await this.executeCreateSession(receiveId);
             if (receiveId && result.message) {
