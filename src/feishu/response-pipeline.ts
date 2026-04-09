@@ -527,7 +527,10 @@ export class ResponsePipelineController {
   private readonly sessionTasks = new Map<string, Promise<void>>();
 
   constructor(options: ResponsePipelineControllerOptions) {
-    const appConfig = options.config ? undefined : getConfig();
+    const appConfig =
+      options.config?.throttle && options.config?.statusCard
+        ? undefined
+        : getConfig();
 
     this.eventSubscriber = options.eventSubscriber ?? openCodeEventSubscriber;
     this.summaryAggregator =
@@ -540,14 +543,11 @@ export class ResponsePipelineController {
     this.statusStore = options.statusStore ?? defaultStatusStore;
     this.throttleConfig =
       options.config?.throttle ?? appConfig?.throttle ?? getConfig().throttle;
-    this.statusCardConfig = options.config?.statusCard ?? {
-      recentUpdatesCount:
-        appConfig?.statusCard.recentUpdatesCount ??
-        DEFAULT_STATUS_CARD_RECENT_UPDATES_COUNT,
-      recreateInterval:
-        appConfig?.statusCard.recreateInterval ??
-        DEFAULT_STATUS_CARD_RECREATE_INTERVAL,
-    };
+    this.statusCardConfig = options.config?.statusCard ??
+      appConfig?.statusCard ?? {
+        recentUpdatesCount: DEFAULT_STATUS_CARD_RECENT_UPDATES_COUNT,
+        recreateInterval: DEFAULT_STATUS_CARD_RECREATE_INTERVAL,
+      };
     this.logger = options.logger ?? defaultLogger;
     this.scheduleAsync =
       options.scheduleAsync ?? ((task) => setImmediate(task));
@@ -1109,7 +1109,7 @@ export class ResponsePipelineController {
     return (
       !state.pendingCompletion &&
       this.statusCardConfig.recreateInterval > 0 &&
-      state.statusCardUpdateCount + 1 >= this.statusCardConfig.recreateInterval
+      state.statusCardUpdateCount >= this.statusCardConfig.recreateInterval
     );
   }
 

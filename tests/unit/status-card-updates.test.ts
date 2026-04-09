@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { resetConfig } from "../../src/config.js";
 import { ResponsePipelineController } from "../../src/feishu/response-pipeline.js";
 import type { ImageResolverLike } from "../../src/feishu/image-resolver.js";
 import {
@@ -23,6 +24,22 @@ type SettingsManager = ControllerOptions["settingsManager"];
 type InteractionManager = ControllerOptions["interactionManager"];
 type Logger = NonNullable<ControllerOptions["logger"]>;
 
+const CONFIG_ENV_KEYS = [
+  "FEISHU_APP_ID",
+  "FEISHU_APP_SECRET",
+  "FEISHU_CONNECTION_TYPE",
+  "OPENCODE_API_BASE_URL",
+  "SERVICE_PORT",
+  "SERVICE_HOST",
+  "LOG_LEVEL",
+  "STATUS_CARD_RECENT_UPDATES_COUNT",
+  "STATUS_CARD_RECREATE_INTERVAL",
+] as const;
+
+const ORIGINAL_CONFIG_ENV = new Map(
+  CONFIG_ENV_KEYS.map((key) => [key, process.env[key]]),
+);
+
 function makeTurnContext(
   sessionId: string = "session-1",
 ): ResponsePipelineTurnContext {
@@ -38,6 +55,7 @@ function createHarness(options?: {
   imageResolver?: ImageResolverLike;
   recreateInterval?: number;
   recentUpdatesCount?: number;
+  includeStatusCardConfig?: boolean;
 }) {
   const statusStore = new StatusStore();
   let callbacks: SummaryCallbacks | undefined;
@@ -152,10 +170,14 @@ function createHarness(options?: {
         statusCardPatchRetryDelayMs: 25,
         statusCardPatchMaxAttempts: 3,
       },
-      statusCard: {
-        recreateInterval: options?.recreateInterval ?? 5,
-        recentUpdatesCount: options?.recentUpdatesCount ?? 5,
-      },
+      ...(options?.includeStatusCardConfig === false
+        ? {}
+        : {
+            statusCard: {
+              recreateInterval: options?.recreateInterval ?? 5,
+              recentUpdatesCount: options?.recentUpdatesCount ?? 5,
+            },
+          }),
     },
   });
 
@@ -197,6 +219,16 @@ describe("ResponsePipelineController status card throttling", () => {
   });
 
   afterEach(() => {
+    for (const key of CONFIG_ENV_KEYS) {
+      const originalValue = ORIGINAL_CONFIG_ENV.get(key);
+      if (originalValue === undefined) {
+        delete process.env[key];
+        continue;
+      }
+
+      process.env[key] = originalValue;
+    }
+    resetConfig();
     vi.useRealTimers();
   });
 
@@ -388,11 +420,22 @@ describe("ResponsePipelineController status card throttling", () => {
     await vi.advanceTimersByTimeAsync(1_000);
     await drainSession(harness.controller, context.sessionId);
 
+    expect(harness.renderer.updateStatusCard).toHaveBeenCalledTimes(2);
+    expect(harness.renderer.deleteMessage).not.toHaveBeenCalled();
+
+    harness.callbacks.onPartial?.(
+      context.sessionId,
+      "assistant-msg-1",
+      "Third",
+    );
+    await vi.advanceTimersByTimeAsync(1_000);
+    await drainSession(harness.controller, context.sessionId);
+
     expect(harness.renderer.renderStatusCard).toHaveBeenCalledTimes(2);
     expect(harness.renderer.renderStatusCard).toHaveBeenLastCalledWith(
       context.receiveId,
       "OpenCode is working",
-      expect.stringContaining("Second"),
+      expect.stringContaining("Third"),
       false,
       "blue",
     );
@@ -405,5 +448,50 @@ describe("ResponsePipelineController status card throttling", () => {
     expect(
       harness.statusStore.get(context.sessionId)?.statusCardMessageId,
     ).toBe("status-card-2");
+  });
+
+  it("uses runtime status card config when only throttle overrides are provided", async () => {
+    process.env.FEISHU_APP_ID = "test-app-id";
+    process.env.FEISHU_APP_SECRET = "test-app-secret";
+    process.env.FEISHU_CONNECTION_TYPE = "ws";
+    process.env.OPENCODE_API_BASE_URL = "http://localhost:4096";
+    process.env.SERVICE_PORT = "3000";
+    process.env.SERVICE_HOST = "0.0.0.0";
+    process.env.LOG_LEVEL = "info";
+    process.env.STATUS_CARD_RECENT_UPDATES_COUNT = "3";
+    process.env.STATUS_CARD_RECREATE_INTERVAL = "1";
+    resetConfig();
+
+    const harness = createHarness({ includeStatusCardConfig: false });
+    const context = makeTurnContext();
+
+    harness.renderer.renderStatusCard
+      .mockResolvedValueOnce("status-card-1")
+      .mockResolvedValueOnce("status-card-2");
+
+    await createLiveStatusCard(harness, context);
+
+    harness.callbacks.onPartial?.(
+      context.sessionId,
+      "assistant-msg-1",
+      "First",
+    );
+    await vi.advanceTimersByTimeAsync(1_000);
+    await drainSession(harness.controller, context.sessionId);
+
+    expect(harness.renderer.updateStatusCard).toHaveBeenCalledTimes(1);
+
+    harness.callbacks.onPartial?.(
+      context.sessionId,
+      "assistant-msg-1",
+      "Second",
+    );
+    await vi.advanceTimersByTimeAsync(1_000);
+    await drainSession(harness.controller, context.sessionId);
+
+    expect(harness.renderer.renderStatusCard).toHaveBeenCalledTimes(2);
+    expect(harness.renderer.deleteMessage).toHaveBeenCalledWith(
+      "status-card-1",
+    );
   });
 });
