@@ -1,8 +1,6 @@
 name: Version Bump
 
 on:
-  push:
-    branches: [main]
   workflow_dispatch:
     inputs:
       bump_type:
@@ -17,11 +15,11 @@ on:
 
 permissions:
   contents: write
+  pull-requests: write
 
 jobs:
   bump:
     runs-on: ubuntu-latest
-    if: "${{ github.event_name != 'push' || !startsWith(github.event.head_commit.message, 'chore: bump version') }}"
     steps:
       - uses: actions/checkout@v4
         with:
@@ -45,9 +43,16 @@ jobs:
           NEW_VERSION=$(npm version "${BUMP_TYPE}" --no-git-tag-version)
           echo "Bumped version to ${NEW_VERSION}"
 
-      - name: Commit and tag version bump
+      - name: Commit version bump on PR branch
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
+          GITHUB_RUN_ATTEMPT: ${{ github.run_attempt }}
         run: |
           NEW_VERSION=$(node -p "require('./package.json').version")
+          BRANCH_NAME="ci/version-bump-v${NEW_VERSION}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+
+          git checkout -b "${BRANCH_NAME}"
           git add package.json package-lock.json
 
           if git diff --cached --quiet; then
@@ -56,6 +61,10 @@ jobs:
           fi
 
           git commit -m "chore: bump version to ${NEW_VERSION}"
-          git tag "v${NEW_VERSION}"
-          git push
-          git push --tags
+          git push --set-upstream origin "${BRANCH_NAME}"
+          gh pr create \
+            --base main \
+            --head "${BRANCH_NAME}" \
+            --title "chore: bump version to ${NEW_VERSION}" \
+            --body "Automated version bump PR created by the Version Bump workflow.\n\n- bump type: ${{ github.event.inputs.bump_type || 'patch' }}\n- version: ${NEW_VERSION}" \
+            || gh pr view "${BRANCH_NAME}" --json url
