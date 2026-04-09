@@ -1,3 +1,4 @@
+import { pathToFileURL } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import { createRuntimeEventHandlers } from "../../src/app/runtime-event-handlers.js";
 import type { FeishuMessageReceiveEvent } from "../../src/feishu/event-router.js";
@@ -20,6 +21,44 @@ function createTextEvent(options: {
         chat_type: "p2p",
         message_type: "text",
         content: JSON.stringify({ text: options.text }),
+      },
+      sender: {
+        sender_id: { open_id: "user-open-id" },
+      },
+    },
+  };
+}
+
+function createFileEvent(options: {
+  eventId: string;
+  messageId: string;
+  chatId: string;
+  chatType?: "p2p" | "group";
+  fileName?: string;
+  mentions?: Array<{
+    key: string;
+    id: { open_id?: string; union_id?: string; user_id?: string };
+    name?: string;
+    tenant_key?: string;
+  }>;
+}): FeishuMessageReceiveEvent {
+  return {
+    header: {
+      event_id: options.eventId,
+      event_type: "im.message.receive_v1",
+    },
+    event: {
+      message: {
+        message_id: options.messageId,
+        chat_id: options.chatId,
+        chat_type: options.chatType ?? "group",
+        message_type: "file",
+        content: JSON.stringify({
+          file_key: "file-key-1",
+          file_name: options.fileName ?? "review.txt",
+          file_size: 12,
+        }),
+        mentions: options.mentions ?? [],
       },
       sender: {
         sender_id: { open_id: "user-open-id" },
@@ -261,5 +300,203 @@ describe("runtime event handlers chat serialization", () => {
       "chat-1",
       "📝 已将新消息追加到当前任务，继续处理中…",
     );
+  });
+
+  it("ignores group file messages without an explicit bot mention", async () => {
+    const promptIngressHandler = {
+      handlePromptInput: vi.fn(),
+      handleMessageEvent: vi.fn(),
+    };
+    const fileHandler = {
+      isInboundFileMessage: vi.fn().mockReturnValue(true),
+      handleInboundFile: vi.fn(),
+      downloadFile: vi.fn(),
+      cleanup: vi.fn(),
+    };
+
+    const handlers = createRuntimeEventHandlers({
+      promptIngressHandler: promptIngressHandler as never,
+      pipelineController: {
+        startTurn: vi.fn(),
+        recordFollowUpAppended: vi.fn().mockResolvedValue(undefined),
+      },
+      questionCardHandler: {
+        handleCardAction: vi.fn(),
+        canHandleTextReply: vi.fn().mockReturnValue(false),
+        handleTextReply: vi.fn(),
+      },
+      permissionCardHandler: {
+        handleCardAction: vi.fn(),
+      },
+      controlRouter: {
+        parseCommand: vi.fn().mockReturnValue(null),
+        handleCommand: vi.fn(),
+        handleCardAction: vi.fn(),
+      },
+      fileHandler: fileHandler as never,
+      botOpenId: "bot-open-id",
+      logger: {
+        debug: vi.fn(),
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+      },
+    });
+
+    await handlers.handleMessageReceived(
+      createFileEvent({
+        eventId: "evt-file-no-mention",
+        messageId: "msg-file-no-mention",
+        chatId: "chat-group-1",
+      }),
+    );
+
+    expect(fileHandler.handleInboundFile).not.toHaveBeenCalled();
+    expect(promptIngressHandler.handlePromptInput).not.toHaveBeenCalled();
+    expect(promptIngressHandler.handleMessageEvent).not.toHaveBeenCalled();
+  });
+
+  it("ignores group file messages when FEISHU_BOT_OPEN_ID is unset", async () => {
+    const promptIngressHandler = {
+      handlePromptInput: vi.fn(),
+      handleMessageEvent: vi.fn(),
+    };
+    const fileHandler = {
+      isInboundFileMessage: vi.fn().mockReturnValue(true),
+      handleInboundFile: vi.fn(),
+      downloadFile: vi.fn(),
+      cleanup: vi.fn(),
+    };
+
+    const handlers = createRuntimeEventHandlers({
+      promptIngressHandler: promptIngressHandler as never,
+      pipelineController: {
+        startTurn: vi.fn(),
+        recordFollowUpAppended: vi.fn().mockResolvedValue(undefined),
+      },
+      questionCardHandler: {
+        handleCardAction: vi.fn(),
+        canHandleTextReply: vi.fn().mockReturnValue(false),
+        handleTextReply: vi.fn(),
+      },
+      permissionCardHandler: {
+        handleCardAction: vi.fn(),
+      },
+      controlRouter: {
+        parseCommand: vi.fn().mockReturnValue(null),
+        handleCommand: vi.fn(),
+        handleCardAction: vi.fn(),
+      },
+      fileHandler: fileHandler as never,
+      logger: {
+        debug: vi.fn(),
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+      },
+    });
+
+    await handlers.handleMessageReceived(
+      createFileEvent({
+        eventId: "evt-file-no-bot-id",
+        messageId: "msg-file-no-bot-id",
+        chatId: "chat-group-1",
+        mentions: [
+          {
+            key: "@_user_1",
+            id: { open_id: "some-other-user" },
+            name: "Another User",
+          },
+        ],
+      }),
+    );
+
+    expect(fileHandler.handleInboundFile).not.toHaveBeenCalled();
+    expect(promptIngressHandler.handlePromptInput).not.toHaveBeenCalled();
+    expect(promptIngressHandler.handleMessageEvent).not.toHaveBeenCalled();
+  });
+
+  it("dispatches group file messages when the bot is explicitly mentioned", async () => {
+    const promptIngressHandler = {
+      handlePromptInput: vi
+        .fn()
+        .mockResolvedValue({ kind: "blocked", reason: "noop" } as const),
+      handleMessageEvent: vi.fn(),
+    };
+    const fileHandler = {
+      isInboundFileMessage: vi.fn().mockReturnValue(true),
+      handleInboundFile: vi.fn().mockResolvedValue({
+        fileName: "review.txt",
+        fileSize: 12,
+        localPath: "/tmp/review.txt",
+        mimeType: "text/plain",
+      }),
+      downloadFile: vi.fn(),
+      cleanup: vi.fn(),
+    };
+
+    const handlers = createRuntimeEventHandlers({
+      promptIngressHandler: promptIngressHandler as never,
+      pipelineController: {
+        startTurn: vi.fn(),
+        recordFollowUpAppended: vi.fn().mockResolvedValue(undefined),
+      },
+      questionCardHandler: {
+        handleCardAction: vi.fn(),
+        canHandleTextReply: vi.fn().mockReturnValue(false),
+        handleTextReply: vi.fn(),
+      },
+      permissionCardHandler: {
+        handleCardAction: vi.fn(),
+      },
+      controlRouter: {
+        parseCommand: vi.fn().mockReturnValue(null),
+        handleCommand: vi.fn(),
+        handleCardAction: vi.fn(),
+      },
+      fileHandler: fileHandler as never,
+      botOpenId: "bot-open-id",
+      logger: {
+        debug: vi.fn(),
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+      },
+    });
+
+    await handlers.handleMessageReceived(
+      createFileEvent({
+        eventId: "evt-file-with-mention",
+        messageId: "msg-file-with-mention",
+        chatId: "chat-group-1",
+        mentions: [
+          {
+            key: "@_user_1",
+            id: { open_id: "bot-open-id" },
+            name: "OpenCode Bot",
+          },
+        ],
+      }),
+    );
+
+    expect(fileHandler.handleInboundFile).toHaveBeenCalledTimes(1);
+    expect(promptIngressHandler.handlePromptInput).toHaveBeenCalledWith({
+      messageId: "msg-file-with-mention",
+      chatId: "chat-group-1",
+      text: "Please review the attached file review.txt.",
+      parts: [
+        {
+          type: "text",
+          text: "Please review the attached file review.txt.",
+        },
+        {
+          type: "file",
+          mime: "text/plain",
+          filename: "review.txt",
+          url: pathToFileURL("/tmp/review.txt").href,
+        },
+      ],
+    });
+    expect(promptIngressHandler.handleMessageEvent).not.toHaveBeenCalled();
   });
 });

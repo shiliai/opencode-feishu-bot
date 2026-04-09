@@ -132,6 +132,31 @@ describe("feishu message event helpers", () => {
     expect(parseFeishuPromptEvent(event, { botOpenId: "ou_other" })).toBeNull();
   });
 
+  it("rejects group text when FEISHU_BOT_OPEN_ID is unset", () => {
+    const event = createEvent({
+      event: {
+        sender: { sender_id: { open_id: "ou_sender" } },
+        message: {
+          message_id: "om_group_missing_bot_id",
+          chat_id: "oc_group",
+          chat_type: "group",
+          message_type: "text",
+          content: JSON.stringify({ text: "@_user_1 summarize this" }),
+          mentions: [
+            {
+              key: "@_user_1",
+              id: { open_id: "ou_bot" },
+              name: "OpenCode Bot",
+            },
+          ],
+        },
+      },
+    });
+
+    expect(parseFeishuPromptEvent(event)).toBeNull();
+    expect(parseFeishuPromptEvent(event, { botOpenId: null })).toBeNull();
+  });
+
   it("rejects unsupported or invalid payloads safely", () => {
     expect(
       parseFeishuPromptEvent(
