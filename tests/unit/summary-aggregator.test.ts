@@ -392,6 +392,50 @@ describe("SummaryAggregator", () => {
     );
   });
 
+  it("preserves todowrite metadata so downstream renderers can show todo state", () => {
+    const onTool = vi.fn();
+    aggregator.setOnTool(onTool);
+    aggregator.setSession("session-1");
+
+    aggregator.processEvent(
+      makeEvent("message.part.updated", {
+        part: {
+          id: "todo-tool",
+          sessionID: "session-1",
+          messageID: "message-1",
+          type: "tool",
+          callID: "call-todo",
+          tool: "todowrite",
+          state: {
+            status: "completed",
+            title: "Sync todos",
+            metadata: {
+              todos: [
+                { id: "1", content: "Done item", status: "completed" },
+                { id: "2", content: "Active item", status: "in_progress" },
+                { id: "3", content: "Pending item", status: "pending" },
+              ],
+            },
+          },
+        },
+      }),
+    );
+
+    expect(onTool).toHaveBeenCalledWith(
+      expect.objectContaining({
+        tool: "todowrite",
+        status: "completed",
+        metadata: {
+          todos: [
+            { id: "1", content: "Done item", status: "completed" },
+            { id: "2", content: "Active item", status: "in_progress" },
+            { id: "3", content: "Pending item", status: "pending" },
+          ],
+        },
+      }),
+    );
+  });
+
   it("emits question, permission, session diff, retry, compacted, and error callbacks", () => {
     const onQuestion = vi.fn();
     const onPermission = vi.fn();
