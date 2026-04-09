@@ -1,26 +1,29 @@
 import { readFile } from "node:fs/promises";
 import { extname } from "node:path";
 import { pathToFileURL } from "node:url";
+import type {
+  CardActionResponse,
+  ControlRouter,
+} from "../feishu/control-router.js";
+import {
+  normalizeFeishuEvent,
+  parseFeishuMessageAddressing,
+  parseFeishuPromptEvent,
+} from "../feishu/message-events.js";
 import type { FeishuMessageReceiveEvent } from "../feishu/event-router.js";
-import { parseFeishuPromptEvent } from "../feishu/message-events.js";
+import type { FileHandler } from "../feishu/file-handler.js";
+import type { StoredFile } from "../feishu/file-store.js";
+import type { PermissionCardHandler } from "../feishu/handlers/permission.js";
 import type {
   PromptIngressHandler,
   PromptIngressResult,
 } from "../feishu/handlers/prompt.js";
 import type { PromptPartInput } from "../feishu/handlers/prompt.js";
-import type { FileHandler } from "../feishu/file-handler.js";
-import type { StoredFile } from "../feishu/file-store.js";
-import type { ResponsePipelineController } from "../feishu/response-pipeline.js";
 import type { QuestionCardHandler } from "../feishu/handlers/question.js";
-import type { PermissionCardHandler } from "../feishu/handlers/permission.js";
 import type { FeishuRenderer } from "../feishu/renderer.js";
-import type {
-  CardActionResponse,
-  ControlRouter,
-} from "../feishu/control-router.js";
+import type { ResponsePipelineController } from "../feishu/response-pipeline.js";
 import type { Logger } from "../utils/logger.js";
 import { logger as defaultLogger } from "../utils/logger.js";
-import { normalizeFeishuEvent } from "../feishu/message-events.js";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -268,6 +271,22 @@ export function createRuntimeEventHandlers(
       if (!chatId || !messageId) {
         logger.warn(
           `[RuntimeEventHandlers] Dropping inbound media event with missing identifiers: eventId=${eventId ?? "unknown"}, messageId=${messageId ?? "unknown"}, chatId=${chatId ?? "unknown"}, messageType=${messageType ?? "unknown"}`,
+        );
+        return;
+      }
+
+      const addressing = parseFeishuMessageAddressing(event, {
+        botOpenId: options.botOpenId ?? null,
+      });
+      if (!addressing) {
+        logger.warn(
+          `[RuntimeEventHandlers] Dropping inbound media event with invalid addressing metadata: eventId=${eventId ?? "unknown"}, messageId=${messageId}, chatId=${chatId}, messageType=${messageType ?? "unknown"}`,
+        );
+        return;
+      }
+      if (!addressing.isDirectMessage && !addressing.botMentioned) {
+        logger.debug(
+          `[RuntimeEventHandlers] Ignoring inbound media event in group chat without explicit bot mention: eventId=${eventId ?? "unknown"}, messageId=${messageId}, chatId=${chatId}, messageType=${messageType ?? "unknown"}`,
         );
         return;
       }

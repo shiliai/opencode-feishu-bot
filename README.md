@@ -20,7 +20,7 @@ Required:
 
 Common optional settings:
 
-- `FEISHU_BOT_OPEN_ID` — enables exact `@bot` matching in group chats
+- `FEISHU_BOT_OPEN_ID` — required for group-chat prompts and uploads; enables exact `@bot` matching
 - `FEISHU_CONNECTION_TYPE` — `ws` or `webhook` (default `ws`)
 - `FEISHU_CARD_CALLBACK_URL` — optional callback endpoint for Feishu card actions
 - `FEISHU_CARD_CALLBACK_VERIFICATION_TOKEN` — defaults to empty when callback is disabled; required when `FEISHU_CONNECTION_TYPE=webhook` or callback URL is configured
@@ -89,7 +89,7 @@ The bridge currently supports these slash commands in Feishu chat:
 - If no model/agent has been set yet, `/status` shows `Model: {ASSISTANT_NAME} default` / `Agent: {ASSISTANT_NAME} default` (configurable via `ASSISTANT_NAME` env var).
 - When `OPENCODE_WORKDIR` is set, `/projects` scans immediate subdirectories of that path from the bridge process. Selecting a new directory triggers auto-discovery on the OpenCode server, so the same path must also be meaningful there if the bridge and OpenCode server run on different hosts.
 - During busy periods, control commands such as `/status`, `/help`, and `/abort` are still allowed.
-- In group chats, normal prompt messages require `@bot` mention behavior configured by Feishu permissions and bridge settings.
+- In group chats, normal prompt messages and file/image uploads require an explicit `@bot` mention and a configured `FEISHU_BOT_OPEN_ID`.
 
 ## Response UX highlights
 
