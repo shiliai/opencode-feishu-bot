@@ -69,6 +69,13 @@ export interface ParsedFeishuPromptEvent {
   botMentioned: boolean;
 }
 
+export interface ParsedFeishuMessageAddressing {
+  chatType: string;
+  mentions: FeishuMention[];
+  isDirectMessage: boolean;
+  botMentioned: boolean;
+}
+
 export interface ParseFeishuPromptEventOptions {
   botOpenId?: string | null;
 }
@@ -83,6 +90,30 @@ interface RawFeishuMessage {
   message_type?: string;
   content?: string;
   mentions?: unknown;
+}
+
+function resolveFeishuMessageAddressing(
+  rawMessage: Pick<RawFeishuMessage, "chat_type" | "mentions">,
+  options: ParseFeishuPromptEventOptions = {},
+): ParsedFeishuMessageAddressing | null {
+  const chatType = getString(rawMessage.chat_type);
+  if (!chatType) {
+    return null;
+  }
+
+  const mentions = extractMentions(rawMessage.mentions);
+  const mentionedOpenIds = new Set(extractMentionedOpenIds(mentions));
+  const isDirectMessage = chatType === "p2p";
+  const botMentioned = options.botOpenId
+    ? mentionedOpenIds.has(options.botOpenId)
+    : false;
+
+  return {
+    chatType,
+    mentions,
+    isDirectMessage,
+    botMentioned,
+  };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -137,6 +168,20 @@ export function extractMentionedOpenIds(
       (openId): openId is string =>
         typeof openId === "string" && openId.length > 0,
     );
+}
+
+export function parseFeishuMessageAddressing(
+  event: FeishuMessageReceiveEvent,
+  options: ParseFeishuPromptEventOptions = {},
+): ParsedFeishuMessageAddressing | null {
+  const normalized = normalizeFeishuEvent(event);
+  const rawMessage = normalized.message;
+
+  if (!rawMessage) {
+    return null;
+  }
+
+  return resolveFeishuMessageAddressing(rawMessage, options);
 }
 
 function extractTextFromPostSegment(segment: unknown): string | null {
@@ -262,10 +307,10 @@ export function parseFeishuPromptEvent(
 
   const messageId = getString(rawMessage.message_id);
   const chatId = getString(rawMessage.chat_id);
-  const chatType = getString(rawMessage.chat_type);
   const rawContent = getString(rawMessage.content);
+  const addressing = resolveFeishuMessageAddressing(rawMessage, options);
 
-  if (!messageId || !chatId || !chatType || !rawContent) {
+  if (!messageId || !chatId || !rawContent || !addressing) {
     return null;
   }
 
@@ -274,14 +319,7 @@ export function parseFeishuPromptEvent(
     return null;
   }
 
-  const mentions = extractMentions(rawMessage.mentions);
-  const mentionedOpenIds = new Set(extractMentionedOpenIds(mentions));
-  const isDirectMessage = chatType === "p2p";
-  const botMentioned = options.botOpenId
-    ? mentionedOpenIds.has(options.botOpenId)
-    : mentions.length > 0;
-
-  if (!isDirectMessage && !botMentioned) {
+  if (!addressing.isDirectMessage && !addressing.botMentioned) {
     return null;
   }
 
@@ -292,7 +330,7 @@ export function parseFeishuPromptEvent(
     eventId: header?.event_id ?? null,
     messageId,
     chatId,
-    chatType,
+    chatType: addressing.chatType,
     messageType,
     text,
     rawContent,
@@ -300,8 +338,8 @@ export function parseFeishuPromptEvent(
     threadId: getString(rawMessage.thread_id),
     rootId: getString(rawMessage.root_id),
     parentId: getString(rawMessage.parent_id),
-    mentions,
-    isDirectMessage,
-    botMentioned,
+    mentions: addressing.mentions,
+    isDirectMessage: addressing.isDirectMessage,
+    botMentioned: addressing.botMentioned,
   };
 }
