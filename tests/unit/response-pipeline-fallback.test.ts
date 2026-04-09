@@ -149,6 +149,10 @@ function createHarness() {
         statusCardPatchRetryDelayMs: 10,
         statusCardPatchMaxAttempts: 3,
       },
+      statusCard: {
+        recreateInterval: 5,
+        recentUpdatesCount: 5,
+      },
     },
   });
 
