@@ -46,9 +46,11 @@ jobs:
       - name: Commit version bump on PR branch
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
+          GITHUB_RUN_ATTEMPT: ${{ github.run_attempt }}
         run: |
           NEW_VERSION=$(node -p "require('./package.json').version")
-          BRANCH_NAME="ci/version-bump-v${NEW_VERSION}"
+          BRANCH_NAME="ci/version-bump-v${NEW_VERSION}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
 
           git checkout -b "${BRANCH_NAME}"
           git add package.json package-lock.json
