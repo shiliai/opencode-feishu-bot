@@ -43,6 +43,7 @@ interface MockRenderer {
   sendCard: ReturnType<typeof vi.fn>;
   renderStatusCard: ReturnType<typeof vi.fn>;
   updateStatusCard: ReturnType<typeof vi.fn>;
+  deleteMessage: ReturnType<typeof vi.fn>;
   renderCompleteCard: ReturnType<typeof vi.fn>;
   updateCompleteCard: ReturnType<typeof vi.fn>;
   replyPost: ReturnType<typeof vi.fn>;
@@ -106,6 +107,7 @@ function createRenderer(): MockRenderer {
     sendCard: vi.fn().mockResolvedValue("control-card-1"),
     renderStatusCard: vi.fn().mockResolvedValue("status-card-1"),
     updateStatusCard: vi.fn().mockResolvedValue(undefined),
+    deleteMessage: vi.fn().mockResolvedValue(undefined),
     renderCompleteCard: vi.fn().mockResolvedValue("complete-card-1"),
     updateCompleteCard: vi.fn().mockResolvedValue(undefined),
     replyPost: vi.fn().mockResolvedValue("reply-message-1"),
@@ -400,6 +402,10 @@ export async function createBridgeHarness(): Promise<BridgeHarness> {
         statusCardUpdateIntervalMs: 1,
         statusCardPatchRetryDelayMs: 1,
         statusCardPatchMaxAttempts: 2,
+      },
+      statusCard: {
+        recreateInterval: 5,
+        recentUpdatesCount: 5,
       },
     },
   });
