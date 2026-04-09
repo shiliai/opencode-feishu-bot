@@ -85,14 +85,19 @@ function createHarness() {
   } satisfies EventSubscriber;
 
   const settingsManager = {
-    setStatusMessageId: vi.fn((messageId: string): void => {
+    setChatStatusMessageId: vi.fn((chatId: string, messageId: string): void => {
+      void chatId;
       void messageId;
     }),
-    clearStatusMessageId: vi.fn((): void => undefined),
+    clearChatStatusMessageId: vi.fn((chatId: string): void => {
+      void chatId;
+    }),
   } satisfies SettingsManager;
 
   const interactionManager = {
-    clearBusy: vi.fn((): void => undefined),
+    clearBusy: vi.fn((chatId: string): void => {
+      void chatId;
+    }),
   } satisfies InteractionManager;
 
   const info = vi.fn();
@@ -234,10 +239,12 @@ describe("ResponsePipelineController fallback behavior", () => {
     expect(harness.renderer.renderCompleteCard).toHaveBeenCalledTimes(1);
     expect(harness.renderer.replyPost).not.toHaveBeenCalled();
     expect(harness.renderer.sendPost).not.toHaveBeenCalled();
-    expect(harness.settingsManager.clearStatusMessageId).toHaveBeenCalledTimes(
-      1,
+    expect(
+      harness.settingsManager.clearChatStatusMessageId,
+    ).toHaveBeenCalledWith(context.receiveId);
+    expect(harness.interactionManager.clearBusy).toHaveBeenCalledWith(
+      context.receiveId,
     );
-    expect(harness.interactionManager.clearBusy).toHaveBeenCalledTimes(1);
   });
 
   it("breaks card updates on non-retryable patch failures and sends a standalone complete card", async () => {
@@ -338,9 +345,11 @@ describe("ResponsePipelineController fallback behavior", () => {
       "OpenCode reply",
       [["Fallback reply"]],
     );
-    expect(harness.settingsManager.clearStatusMessageId).toHaveBeenCalledTimes(
-      1,
+    expect(
+      harness.settingsManager.clearChatStatusMessageId,
+    ).toHaveBeenCalledWith(context.receiveId);
+    expect(harness.interactionManager.clearBusy).toHaveBeenCalledWith(
+      context.receiveId,
     );
-    expect(harness.interactionManager.clearBusy).toHaveBeenCalledTimes(1);
   });
 });

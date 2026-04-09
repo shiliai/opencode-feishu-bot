@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   ControlRouter,
   type ControlRouterOptions,
@@ -22,6 +22,9 @@ function createMockSettings() {
   return {
     getCurrentProject: vi.fn().mockReturnValue(undefined),
     setCurrentProject: vi.fn(),
+    getChatSession: vi.fn().mockReturnValue(undefined),
+    setChatSession: vi.fn(),
+    clearChatSession: vi.fn(),
     getCurrentSession: vi.fn().mockReturnValue(undefined),
     setCurrentSession: vi.fn(),
     clearSession: vi.fn(),
@@ -31,6 +34,9 @@ function createMockSettings() {
     getCurrentModel: vi.fn().mockReturnValue(undefined),
     setCurrentModel: vi.fn(),
     clearCurrentModel: vi.fn(),
+    getChatStatusMessageId: vi.fn().mockReturnValue(undefined),
+    setChatStatusMessageId: vi.fn(),
+    clearChatStatusMessageId: vi.fn(),
     getStatusMessageId: vi.fn().mockReturnValue(undefined),
     setStatusMessageId: vi.fn(),
     clearStatusMessageId: vi.fn(),
@@ -47,6 +53,9 @@ function createMockSettings() {
 
 function createMockSessionManager() {
   return {
+    getChatSession: vi.fn().mockReturnValue(undefined),
+    setChatSession: vi.fn(),
+    clearChatSession: vi.fn(),
     getCurrentSession: vi.fn().mockReturnValue(null),
     setCurrentSession: vi.fn(),
     clearSession: vi.fn(),
@@ -62,6 +71,8 @@ function createMockRenderer() {
     updateCard: vi.fn().mockResolvedValue(undefined),
     renderStatusCard: vi.fn().mockResolvedValue(undefined),
     updateStatusCard: vi.fn().mockResolvedValue(undefined),
+    renderCompleteCard: vi.fn().mockResolvedValue(undefined),
+    updateCompleteCard: vi.fn().mockResolvedValue(undefined),
     renderQuestionCard: vi.fn().mockResolvedValue(undefined),
     renderPermissionCard: vi.fn().mockResolvedValue(undefined),
     renderControlCard: vi.fn().mockResolvedValue(undefined),
@@ -142,6 +153,7 @@ function createMockInteractionManager() {
     isExpired: vi.fn().mockReturnValue(false),
     transition: vi.fn(),
     clear: vi.fn(),
+    clearAll: vi.fn(),
     startBusy: vi.fn(),
     clearBusy: vi.fn(),
     isBusy: vi.fn().mockReturnValue(false),
@@ -174,6 +186,11 @@ beforeEach(() => {
   getModelContextLimitMock.mockResolvedValue(400_000);
   scanWorkdirSubdirsMock.mockReset();
   scanWorkdirSubdirsMock.mockResolvedValue([]);
+  vi.useFakeTimers();
+});
+
+afterEach(() => {
+  vi.useRealTimers();
 });
 
 describe("ControlRouter — command dispatch", () => {
@@ -271,7 +288,8 @@ describe("ControlRouter — command dispatch", () => {
       "chat-1",
       "New session selected: New Session (new-session-1)",
     );
-    expect(sessionManager.setCurrentSession).toHaveBeenCalledWith(
+    expect(sessionManager.setChatSession).toHaveBeenCalledWith(
+      "chat-1",
       expect.objectContaining({ id: "new-session-1" }),
     );
   });
@@ -451,7 +469,8 @@ describe("ControlRouter — command dispatch", () => {
       worktree: "/workspace/project-2",
       name: "Project Two",
     });
-    expect(sessionManager.clearSession).toHaveBeenCalledTimes(1);
+    expect(sessionManager.clearChatSession).toHaveBeenCalledWith("chat-1");
+    expect(settings.clearChatStatusMessageId).toHaveBeenCalledWith("chat-1");
     expect(renderer.sendText).toHaveBeenCalledWith(
       "chat-1",
       expect.stringContaining("Project selected:"),
@@ -523,7 +542,8 @@ describe("ControlRouter — command dispatch", () => {
       worktree: "/workspace/project-3",
       name: "project-3",
     });
-    expect(sessionManager.clearSession).toHaveBeenCalledTimes(1);
+    expect(sessionManager.clearChatSession).toHaveBeenCalledWith("chat-1");
+    expect(settings.clearChatStatusMessageId).toHaveBeenCalledWith("chat-1");
     expect(renderer.sendText).toHaveBeenCalledWith(
       "chat-1",
       expect.stringContaining("Project discovered: project-3"),
@@ -595,10 +615,35 @@ describe("ControlRouter — command dispatch", () => {
     );
   });
 
+  it("confirm_write card action returns an error toast when receiveId is missing", async () => {
+    const renderer = createMockRenderer();
+    const openCodeClient = createMockOpenCodeClient();
+    const router = createRouter({ renderer, openCodeClient });
+
+    const result = await router.handleCardAction({
+      action: {
+        value: {
+          action: "confirm_write",
+          operationId: "create_new_session",
+        },
+      },
+    });
+
+    expect(result).toEqual({
+      toast: {
+        type: "error",
+        content:
+          "Unable to determine which chat should receive the new session. Please try again from the original chat.",
+      },
+    });
+    expect(openCodeClient.session.create).not.toHaveBeenCalled();
+    expect(renderer.sendText).not.toHaveBeenCalled();
+  });
+
   it("/session <id> switches to specified session", async () => {
     const renderer = createMockRenderer();
     const sessionManager = createMockSessionManager();
-    sessionManager.getCurrentSession.mockReturnValue({
+    sessionManager.getChatSession.mockReturnValue({
       id: "old-session",
       title: "Old",
       directory: "/workspace",
@@ -622,7 +667,8 @@ describe("ControlRouter — command dispatch", () => {
       "chat-1",
       expect.stringContaining("Session selected:"),
     );
-    expect(sessionManager.setCurrentSession).toHaveBeenCalledWith(
+    expect(sessionManager.setChatSession).toHaveBeenCalledWith(
+      "chat-1",
       expect.objectContaining({ id: "sess-42" }),
     );
   });
@@ -774,7 +820,7 @@ describe("ControlRouter — command dispatch", () => {
     });
     settings.getCurrentAgent.mockReturnValue("build");
     const sessionManager = createMockSessionManager();
-    sessionManager.getCurrentSession.mockReturnValue({
+    sessionManager.getChatSession.mockReturnValue({
       id: "sess-1",
       title: "Test",
       directory: "/workspace",
@@ -825,7 +871,7 @@ describe("ControlRouter — command dispatch", () => {
       name: "Project One",
     });
     const sessionManager = createMockSessionManager();
-    sessionManager.getCurrentSession.mockReturnValue({
+    sessionManager.getChatSession.mockReturnValue({
       id: "sess-1",
       title: "Test",
       directory: "/workspace/project-1",
@@ -892,7 +938,7 @@ describe("ControlRouter — command dispatch", () => {
     });
     settings.getCurrentAgent.mockReturnValue("build");
     const sessionManager = createMockSessionManager();
-    sessionManager.getCurrentSession.mockReturnValue({
+    sessionManager.getChatSession.mockReturnValue({
       id: "sess-1",
       title: "Test",
       directory: "/workspace/project-1",
@@ -930,37 +976,177 @@ describe("ControlRouter — command dispatch", () => {
 
   it("/abort aborts current session", async () => {
     const openCodeClient = createMockOpenCodeClient();
+    const settings = createMockSettings();
     const sessionManager = createMockSessionManager();
-    sessionManager.getCurrentSession.mockReturnValue({
+    sessionManager.getChatSession.mockReturnValue({
       id: "sess-1",
       title: "Test",
       directory: "/workspace",
     });
     const interactionManager = createMockInteractionManager();
+    const renderer = createMockRenderer();
     const router = createRouter({
       openCodeClient,
+      settingsManager: settings,
       sessionManager,
+      renderer,
       interactionManager,
     });
 
-    const result = await router.handleCommand("chat-1", "/abort");
+    const resultPromise = router.handleCommand("chat-1", "/abort");
+    await vi.runAllTimersAsync();
+    const result = await resultPromise;
 
     expect(result.success).toBe(true);
     expect(openCodeClient.session.abort).toHaveBeenCalledWith({
       sessionID: "sess-1",
+      directory: "/workspace",
     });
-    expect(interactionManager.clearBusy).toHaveBeenCalledTimes(1);
+    expect(openCodeClient.session.status).toHaveBeenCalledWith({
+      directory: "/workspace",
+    });
+    expect(settings.clearChatStatusMessageId).toHaveBeenCalledWith("chat-1");
+    expect(interactionManager.clearBusy).toHaveBeenCalledWith("chat-1");
+    expect(renderer.sendText).toHaveBeenCalledWith(
+      "chat-1",
+      "✅ 已取消当前操作",
+    );
+  });
+
+  it("/abort patches the active status card to an aborted state", async () => {
+    const openCodeClient = createMockOpenCodeClient();
+    const settings = createMockSettings();
+    const sessionManager = createMockSessionManager();
+    sessionManager.getChatSession.mockReturnValue({
+      id: "sess-1",
+      title: "Test",
+      directory: "/workspace",
+    });
+    const interactionManager = createMockInteractionManager();
+    const renderer = createMockRenderer();
+    const statusStore = new StatusStore();
+    const abortController = new AbortController();
+
+    statusStore.startTurn({
+      sessionId: "sess-1",
+      directory: "/workspace",
+      receiveId: "chat-1",
+      sourceMessageId: "source-1",
+    });
+    statusStore.update("sess-1", (state) => {
+      state.statusCardMessageId = "status-card-1";
+      state.subscriptionAbortController = abortController;
+    });
+
+    const router = createRouter({
+      openCodeClient,
+      settingsManager: settings,
+      sessionManager,
+      renderer,
+      interactionManager,
+      statusStore,
+    });
+
+    const resultPromise = router.handleCommand("chat-1", "/abort");
+    await vi.runAllTimersAsync();
+    const result = await resultPromise;
+
+    expect(result.success).toBe(true);
+    expect(statusStore.get("sess-1")).toBeUndefined();
+    expect(abortController.signal.aborted).toBe(true);
+    expect(renderer.updateCompleteCard).toHaveBeenCalledWith(
+      "status-card-1",
+      "OpenCode aborted",
+      "✅ 已取消当前操作",
+      expect.objectContaining({
+        template: "orange",
+      }),
+    );
+  });
+
+  it("/abort waits for the session to settle before clearing local busy state", async () => {
+    const openCodeClient = createMockOpenCodeClient();
+    openCodeClient.session.status
+      .mockResolvedValueOnce({ data: { "sess-1": { type: "busy" } } })
+      .mockResolvedValueOnce({ data: { "sess-1": { type: "idle" } } });
+    const settings = createMockSettings();
+    const sessionManager = createMockSessionManager();
+    sessionManager.getChatSession.mockReturnValue({
+      id: "sess-1",
+      title: "Test",
+      directory: "/workspace",
+    });
+    const interactionManager = createMockInteractionManager();
+    const renderer = createMockRenderer();
+    const router = createRouter({
+      openCodeClient,
+      settingsManager: settings,
+      sessionManager,
+      renderer,
+      interactionManager,
+    });
+
+    const resultPromise = router.handleCommand("chat-1", "/abort");
+    await vi.advanceTimersByTimeAsync(249);
+    expect(interactionManager.clearBusy).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(1);
+    const result = await resultPromise;
+
+    expect(result.success).toBe(true);
+    expect(openCodeClient.session.status).toHaveBeenCalledTimes(2);
+    expect(interactionManager.clearBusy).toHaveBeenCalledWith("chat-1");
+  });
+
+  it("/abort warns when the server stays busy and preserves local busy cleanup", async () => {
+    const openCodeClient = createMockOpenCodeClient();
+    openCodeClient.session.status.mockResolvedValue({
+      data: { "sess-1": { type: "busy" } },
+    });
+    const settings = createMockSettings();
+    const sessionManager = createMockSessionManager();
+    sessionManager.getChatSession.mockReturnValue({
+      id: "sess-1",
+      title: "Test",
+      directory: "/workspace",
+    });
+    const interactionManager = createMockInteractionManager();
+    const renderer = createMockRenderer();
+    const router = createRouter({
+      openCodeClient,
+      settingsManager: settings,
+      sessionManager,
+      renderer,
+      interactionManager,
+    });
+
+    const resultPromise = router.handleCommand("chat-1", "/abort");
+    await vi.advanceTimersByTimeAsync(5_000);
+    const result = await resultPromise;
+
+    expect(result.success).toBe(false);
+    expect(interactionManager.clearBusy).not.toHaveBeenCalled();
+    expect(settings.clearChatStatusMessageId).not.toHaveBeenCalled();
+    expect(renderer.sendText).toHaveBeenCalledWith(
+      "chat-1",
+      "⚠️ 已发送取消请求，但任务仍在处理中，请稍后再试 /abort 或用 /status 确认状态",
+    );
   });
 
   it("/abort returns failure when no active session", async () => {
+    const renderer = createMockRenderer();
     const sessionManager = createMockSessionManager();
-    sessionManager.getCurrentSession.mockReturnValue(null);
-    const router = createRouter({ sessionManager });
+    sessionManager.getChatSession.mockReturnValue(undefined);
+    const router = createRouter({ renderer, sessionManager });
 
     const result = await router.handleCommand("chat-1", "/abort");
 
     expect(result.success).toBe(false);
     expect(result.message).toContain("No active session");
+    expect(renderer.sendText).toHaveBeenCalledWith(
+      "chat-1",
+      "没有活跃的会话可以取消",
+    );
   });
 
   it("/status shows busy state when interaction manager is busy", async () => {
@@ -977,5 +1163,36 @@ describe("ControlRouter — command dispatch", () => {
       (el: { tag: string }) => el.tag === "markdown",
     );
     expect(markdownEl.content).toContain("busy");
+  });
+
+  it("/status suppresses transient server busy after local cleanup", async () => {
+    const renderer = createMockRenderer();
+    const sessionManager = createMockSessionManager();
+    sessionManager.getChatSession.mockReturnValue({
+      id: "sess-1",
+      title: "Test",
+      directory: "/workspace",
+    });
+    const openCodeClient = createMockOpenCodeClient();
+    openCodeClient.session.status.mockResolvedValue({
+      data: { "sess-1": { type: "busy" } },
+    });
+    const interactionManager = createMockInteractionManager();
+    interactionManager.isBusy.mockReturnValue(false);
+    const router = createRouter({
+      renderer,
+      sessionManager,
+      openCodeClient,
+      interactionManager,
+    });
+
+    const result = await router.handleCommand("chat-1", "/status");
+
+    expect(result.success).toBe(true);
+    const sentCard = renderer.sendCard.mock.calls[0][1];
+    const markdownEl = sentCard.elements.find(
+      (el: { tag: string }) => el.tag === "markdown",
+    );
+    expect(markdownEl.content).toContain("**State**: idle");
   });
 });

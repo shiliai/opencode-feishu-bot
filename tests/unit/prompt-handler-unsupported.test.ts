@@ -12,10 +12,10 @@ import {
 function createMockSettings(): SettingsManager {
   return {
     getCurrentProject: vi.fn().mockReturnValue(undefined),
-    getCurrentSession: vi.fn().mockReturnValue(undefined),
-    setCurrentSession: vi.fn(),
-    clearSession: vi.fn(),
-    clearStatusMessageId: vi.fn(),
+    getChatSession: vi.fn().mockReturnValue(undefined),
+    setChatSession: vi.fn(),
+    clearChatSession: vi.fn(),
+    clearChatStatusMessageId: vi.fn(),
     getCurrentModel: vi.fn().mockReturnValue(undefined),
     getCurrentAgent: vi.fn().mockReturnValue(undefined),
     __resetSettingsForTests: vi.fn(),
@@ -24,7 +24,9 @@ function createMockSettings(): SettingsManager {
 
 function createMockInteractionManager(): InteractionManager {
   return {
-    resolveGuardDecision: vi.fn().mockReturnValue({ allow: true, inputType: "text", state: null }),
+    resolveGuardDecision: vi
+      .fn()
+      .mockReturnValue({ allow: true, inputType: "text", state: null }),
     startBusy: vi.fn(),
     clearBusy: vi.fn(),
     get: vi.fn(),
@@ -34,12 +36,15 @@ function createMockInteractionManager(): InteractionManager {
     start: vi.fn(),
     transition: vi.fn(),
     clear: vi.fn(),
+    clearAll: vi.fn(),
     getSnapshot: vi.fn().mockReturnValue(null),
     isExpired: vi.fn().mockReturnValue(false),
   } as unknown as InteractionManager;
 }
 
-function makeEvent(overrides: Record<string, unknown>): FeishuMessageReceiveEvent {
+function makeEvent(
+  overrides: Record<string, unknown>,
+): FeishuMessageReceiveEvent {
   return {
     header: { event_id: "evt-1", event_type: "im.message.receive_v1" },
     event: overrides,
@@ -50,8 +55,12 @@ describe("PromptIngressHandler unsupported paths", () => {
   const settings = createMockSettings();
   const interactionManager = createMockInteractionManager();
   const openCodeSession: OpenCodeSessionClient = { create: vi.fn() };
-  const openCodeSessionStatus: OpenCodeSessionStatusClient = { status: vi.fn() };
-  const openCodePromptAsync: OpenCodePromptAsyncClient = { promptAsync: vi.fn() };
+  const openCodeSessionStatus: OpenCodeSessionStatusClient = {
+    status: vi.fn(),
+  };
+  const openCodePromptAsync: OpenCodePromptAsyncClient = {
+    promptAsync: vi.fn(),
+  };
 
   function createHandler(): PromptIngressHandler {
     return new PromptIngressHandler({

@@ -13,6 +13,7 @@ import type { StoredFile } from "../feishu/file-store.js";
 import type { ResponsePipelineController } from "../feishu/response-pipeline.js";
 import type { QuestionCardHandler } from "../feishu/handlers/question.js";
 import type { PermissionCardHandler } from "../feishu/handlers/permission.js";
+import type { FeishuRenderer } from "../feishu/renderer.js";
 import type {
   CardActionResponse,
   ControlRouter,
@@ -152,6 +153,7 @@ export interface RuntimeEventHandlersOptions {
     FileHandler,
     "isInboundFileMessage" | "handleInboundFile" | "downloadFile" | "cleanup"
   >;
+  renderer?: Pick<FeishuRenderer, "sendText">;
   botOpenId?: string | null;
   logger?: Logger;
   onPromptDispatched?: (
@@ -169,6 +171,18 @@ export function createRuntimeEventHandlers(
   const logger = options.logger ?? defaultLogger;
   const messageTasks = new Map<string, Promise<void>>();
   const cardActionTasks = new Map<string, Promise<void>>();
+
+  const sendBusyFeedback = async (receiveId: string): Promise<void> => {
+    if (!options.renderer) {
+      return;
+    }
+
+    try {
+      await options.renderer.sendText(receiveId, "⏳ 正在处理中，请稍候…");
+    } catch (error) {
+      logger.warn("[RuntimeEventHandlers] Failed to send busy feedback", error);
+    }
+  };
 
   const enqueueMessageTask = async (
     queueKey: string,
@@ -406,6 +420,16 @@ export function createRuntimeEventHandlers(
     storedFiles?: StoredFile[],
   ): Promise<void> => {
     if (result.kind !== "dispatched") {
+      if (result.kind === "blocked" && result.receiveId) {
+        const isBusyBlock =
+          result.reason === "session_busy" ||
+          result.reason === "expected_text" ||
+          result.guardDecision?.busy === true;
+        if (isBusyBlock) {
+          await sendBusyFeedback(result.receiveId);
+        }
+      }
+
       const identifiers = {
         kind: result.kind,
         ...(result.kind === "blocked" ? { reason: result.reason } : {}),

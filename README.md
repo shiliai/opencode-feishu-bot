@@ -96,6 +96,10 @@ The bridge currently supports these slash commands in Feishu chat:
 - Remote markdown image URLs are resolved to Feishu `img_xxx` keys when possible for better inline rendering.
 - Image messages sent in Feishu chat are accepted and forwarded to the OpenCode session.
 
+## Developer docs
+
+- [OpenCode session state](docs/opencode-session-state.md) — session lifecycle, `/status` and `/abort` semantics, module responsibilities, and same-project multi-session concurrency caveats.
+
 ## Manual test checklist (recommended order)
 
 Use this sequence for one-by-one validation:

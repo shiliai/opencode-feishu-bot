@@ -49,12 +49,12 @@ interface ResponsePipelineEventSubscriber {
 }
 
 interface ResponsePipelineSettingsManager {
-  setStatusMessageId(messageId: string): void;
-  clearStatusMessageId(): void;
+  setChatStatusMessageId(chatId: string, messageId: string): void;
+  clearChatStatusMessageId(chatId: string): void;
 }
 
 interface ResponsePipelineInteractionManager {
-  clearBusy(): void;
+  clearBusy(chatId: string): void;
 }
 
 export interface SessionMessageEntry {
@@ -105,6 +105,7 @@ const ACTIVE_STATUS_CARD_TEMPLATE = "blue" as const;
 const ACTIVE_STATUS_CARD_FALLBACK_TEXT = "Thinking…";
 const FINAL_REPLY_FALLBACK_TEXT = "Done.";
 const getFinalReplyTitle = () => `${getAssistantName()} reply`;
+const getAbortedReplyTitle = () => `${getAssistantName()} aborted`;
 const getErrorReplyTitle = () => `${getAssistantName()} error`;
 const STREAM_ENDED_MESSAGE = () =>
   `${getAssistantName()} stream ended before a final reply was delivered.`;
@@ -648,7 +649,10 @@ export class ResponsePipelineController {
       latestState.statusCardMessageId = messageId;
       latestState.lastPatchedText = initialContent;
       latestState.lastPatchedSignature = initialSignature;
-      this.settingsManager.setStatusMessageId(messageId);
+      this.settingsManager.setChatStatusMessageId(
+        latestState.receiveId,
+        messageId,
+      );
 
       if (
         latestState.lastPartialSignature &&
@@ -687,6 +691,13 @@ export class ResponsePipelineController {
   async handleSessionIdle(sessionId: string): Promise<void> {
     const state = this.statusStore.get(sessionId);
     if (!state || state.finalReplySent) {
+      return;
+    }
+
+    if (state.abortRequested) {
+      this.logger.info(
+        `[ResponsePipeline] Ignoring session idle finalization because abort is in progress: session=${sessionId}`,
+      );
       return;
     }
 
@@ -735,6 +746,13 @@ export class ResponsePipelineController {
   async handleSessionError(sessionId: string, message: string): Promise<void> {
     const state = this.statusStore.get(sessionId);
     if (!state || state.finalReplySent) {
+      return;
+    }
+
+    if (state.abortRequested) {
+      this.logger.info(
+        `[ResponsePipeline] Ignoring session error finalization because abort is in progress: session=${sessionId}, message=${message}`,
+      );
       return;
     }
 
@@ -892,7 +910,12 @@ export class ResponsePipelineController {
     const resolvedAnswer = this.imageResolver
       ? await this.imageResolver.resolveImagesAwait(answerContent, 15_000)
       : answerContent;
-    const completeTemplate = title === getErrorReplyTitle() ? "red" : "green";
+    const completeTemplate =
+      title === getErrorReplyTitle()
+        ? "red"
+        : title === getAbortedReplyTitle()
+          ? "orange"
+          : "green";
     const reasoningDurationMs = state.reasoningStartTime
       ? Math.max(0, Date.now() - state.reasoningStartTime)
       : undefined;
@@ -932,7 +955,10 @@ export class ResponsePipelineController {
         );
         if (messageId) {
           state.statusCardMessageId = messageId;
-          this.settingsManager.setStatusMessageId(messageId);
+          this.settingsManager.setChatStatusMessageId(
+            state.receiveId,
+            messageId,
+          );
         }
         this.logger.info(
           `[ResponsePipeline] Final reply delivered via complete-card render: session=${state.sessionId}, statusCardMessageId=${messageId ?? "unknown"}`,
@@ -989,8 +1015,8 @@ export class ResponsePipelineController {
     );
 
     this.disposeTurnResources(state);
-    this.settingsManager.clearStatusMessageId();
-    this.interactionManager.clearBusy();
+    this.settingsManager.clearChatStatusMessageId(state.receiveId);
+    this.interactionManager.clearBusy(state.receiveId);
   }
 
   private disposeTurnResources(state: StatusTurnState): void {

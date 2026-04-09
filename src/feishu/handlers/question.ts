@@ -24,14 +24,17 @@ export interface QuestionRenderer {
 }
 
 export interface QuestionInteractionManager {
-  clear(reason?: string): void;
-  transition(options: {
-    kind?: "question";
-    expectedInput?: "callback" | "text" | "mixed";
-    allowedCommands?: string[];
-    metadata?: Record<string, unknown>;
-    expiresInMs?: number | null;
-  }): void;
+  clear(chatId: string, reason?: string): void;
+  transition(
+    chatId: string,
+    options: {
+      kind?: "question";
+      expectedInput?: "callback" | "text" | "mixed";
+      allowedCommands?: string[];
+      metadata?: Record<string, unknown>;
+      expiresInMs?: number | null;
+    },
+  ): void;
 }
 
 export interface QuestionCardHandlerOptions {
@@ -257,13 +260,15 @@ export class QuestionCardHandler {
     }
 
     this.questionManager.clear();
-    this.interactionManager?.clear("question_answered");
+    if (this.interactionManager && this.activeReceiveId) {
+      this.interactionManager.clear(this.activeReceiveId, "question_answered");
+    }
     this.activeReceiveId = null;
     this.activeSourceMessageId = null;
   }
 
   private syncInteractionState(question: Question): void {
-    if (!this.interactionManager) {
+    if (!this.interactionManager || !this.activeReceiveId) {
       return;
     }
 
@@ -274,7 +279,7 @@ export class QuestionCardHandler {
           ? "callback"
           : "text";
 
-    this.interactionManager.transition({
+    this.interactionManager.transition(this.activeReceiveId, {
       kind: "question",
       expectedInput,
       allowedCommands: ["/help", "/status", "/abort"],

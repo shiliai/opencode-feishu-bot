@@ -1,21 +1,28 @@
 import { describe, expect, it, vi } from "vitest";
-import type { SessionInfo, SettingsManager } from "../../src/settings/manager.js";
+import type {
+  SessionInfo,
+  SettingsManager,
+} from "../../src/settings/manager.js";
 import {
   resolvePromptSession,
   type OpenCodeSessionClient,
 } from "../../src/feishu/handlers/session-resolution.js";
 
-function createMockSettings(overrides?: Partial<SettingsManager>): SettingsManager {
+function createMockSettings(
+  overrides?: Partial<SettingsManager>,
+): SettingsManager {
   return {
     getCurrentProject: vi.fn().mockReturnValue(undefined),
-    getCurrentSession: vi.fn().mockReturnValue(undefined),
-    setCurrentSession: vi.fn(),
-    clearSession: vi.fn(),
-    clearStatusMessageId: vi.fn(),
+    getChatSession: vi.fn().mockReturnValue(undefined),
+    setChatSession: vi.fn(),
+    clearChatSession: vi.fn(),
+    clearChatStatusMessageId: vi.fn(),
     __resetSettingsForTests: vi.fn(),
     ...overrides,
   } as unknown as SettingsManager;
 }
+
+const CHAT_ID = "chat-1";
 
 describe("resolvePromptSession", () => {
   it("returns no-project when no current project is set", async () => {
@@ -24,7 +31,11 @@ describe("resolvePromptSession", () => {
       create: vi.fn(),
     };
 
-    const result = await resolvePromptSession({ settings, openCodeSession });
+    const result = await resolvePromptSession({
+      chatId: CHAT_ID,
+      settings,
+      openCodeSession,
+    });
 
     expect(result).toEqual({ kind: "no-project" });
     expect(openCodeSession.create).not.toHaveBeenCalled();
@@ -36,7 +47,7 @@ describe("resolvePromptSession", () => {
         id: "proj-2",
         worktree: "/workspace/new-project",
       }),
-      getCurrentSession: vi.fn().mockReturnValue({
+      getChatSession: vi.fn().mockReturnValue({
         id: "session-1",
         title: "Old session",
         directory: "/workspace/old-project",
@@ -46,15 +57,19 @@ describe("resolvePromptSession", () => {
       create: vi.fn(),
     };
 
-    const result = await resolvePromptSession({ settings, openCodeSession });
+    const result = await resolvePromptSession({
+      chatId: CHAT_ID,
+      settings,
+      openCodeSession,
+    });
 
     expect(result).toEqual({
       kind: "session-reset",
       previousDirectory: "/workspace/old-project",
       currentDirectory: "/workspace/new-project",
     });
-    expect(settings.clearSession).toHaveBeenCalledTimes(1);
-    expect(settings.clearStatusMessageId).toHaveBeenCalledTimes(1);
+    expect(settings.clearChatSession).toHaveBeenCalledWith(CHAT_ID);
+    expect(settings.clearChatStatusMessageId).toHaveBeenCalledWith(CHAT_ID);
     expect(openCodeSession.create).not.toHaveBeenCalled();
   });
 
@@ -69,13 +84,17 @@ describe("resolvePromptSession", () => {
         id: "proj-1",
         worktree: "/workspace/project",
       }),
-      getCurrentSession: vi.fn().mockReturnValue(existingSession),
+      getChatSession: vi.fn().mockReturnValue(existingSession),
     });
     const openCodeSession: OpenCodeSessionClient = {
       create: vi.fn(),
     };
 
-    const result = await resolvePromptSession({ settings, openCodeSession });
+    const result = await resolvePromptSession({
+      chatId: CHAT_ID,
+      settings,
+      openCodeSession,
+    });
 
     expect(result).toEqual({
       kind: "session-ready",
@@ -93,12 +112,20 @@ describe("resolvePromptSession", () => {
         worktree: "/workspace/project",
       }),
     });
-    const newSession = { id: "session-new", title: "New session", directory: "/workspace/project" };
+    const newSession = {
+      id: "session-new",
+      title: "New session",
+      directory: "/workspace/project",
+    };
     const openCodeSession: OpenCodeSessionClient = {
       create: vi.fn().mockResolvedValue({ data: newSession, error: undefined }),
     };
 
-    const result = await resolvePromptSession({ settings, openCodeSession });
+    const result = await resolvePromptSession({
+      chatId: CHAT_ID,
+      settings,
+      openCodeSession,
+    });
 
     expect(result.kind).toBe("session-ready");
     if (result.kind !== "session-ready") {
@@ -110,7 +137,7 @@ describe("resolvePromptSession", () => {
     expect(openCodeSession.create).toHaveBeenCalledWith({
       directory: "/workspace/project",
     });
-    expect(settings.setCurrentSession).toHaveBeenCalledWith({
+    expect(settings.setChatSession).toHaveBeenCalledWith(CHAT_ID, {
       id: "session-new",
       title: "New session",
       directory: "/workspace/project",
@@ -125,11 +152,16 @@ describe("resolvePromptSession", () => {
       }),
     });
     const openCodeSession: OpenCodeSessionClient = {
-      create: vi.fn().mockResolvedValue({ data: undefined, error: new Error("server down") }),
+      create: vi
+        .fn()
+        .mockResolvedValue({
+          data: undefined,
+          error: new Error("server down"),
+        }),
     };
 
     await expect(
-      resolvePromptSession({ settings, openCodeSession }),
+      resolvePromptSession({ chatId: CHAT_ID, settings, openCodeSession }),
     ).rejects.toThrow("Failed to create OpenCode session");
   });
 
@@ -149,7 +181,11 @@ describe("resolvePromptSession", () => {
       create: vi.fn().mockResolvedValue({ data: newSession, error: undefined }),
     };
 
-    const result = await resolvePromptSession({ settings, openCodeSession });
+    const result = await resolvePromptSession({
+      chatId: CHAT_ID,
+      settings,
+      openCodeSession,
+    });
 
     expect(result.kind).toBe("session-ready");
     if (result.kind !== "session-ready") {

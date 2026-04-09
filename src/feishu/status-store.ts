@@ -12,6 +12,7 @@ export interface ResponsePipelineTurnContext {
 }
 
 export interface StatusTurnState extends ResponsePipelineTurnContext {
+  abortRequested?: boolean;
   statusCardMessageId?: string;
   lastPartialSignature?: string;
   lastPartialText?: string;
