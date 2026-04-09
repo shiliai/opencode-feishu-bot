@@ -38,6 +38,10 @@ function createMockSettings() {
     getSessionDirectoryCache: vi.fn().mockReturnValue(undefined),
     setSessionDirectoryCache: vi.fn().mockResolvedValue(undefined),
     clearSessionDirectoryCache: vi.fn(),
+    getChatSession: vi.fn().mockReturnValue(undefined),
+    setChatSession: vi.fn(),
+    clearChatSession: vi.fn(),
+    clearChatStatusMessageId: vi.fn(),
   };
 }
 
@@ -46,6 +50,9 @@ function createMockSessionManager() {
     getCurrentSession: vi.fn().mockReturnValue(null),
     setCurrentSession: vi.fn(),
     clearSession: vi.fn(),
+    getChatSession: vi.fn().mockReturnValue(undefined),
+    setChatSession: vi.fn(),
+    clearChatSession: vi.fn(),
   };
 }
 
@@ -505,7 +512,7 @@ describe("Selection card builders", () => {
         ),
       },
     });
-    expect(sessionManager.setCurrentSession).toHaveBeenCalledWith({
+    expect(sessionManager.setChatSession).toHaveBeenCalledWith("chat-1", {
       id: "sess-42",
       title: "Target Session",
       directory: "/workspace/project",
@@ -645,7 +652,7 @@ describe("Selection card builders", () => {
       worktree: "/workspace/project-1",
       name: "Project One",
     });
-    expect(sessionManager.clearSession).toHaveBeenCalledTimes(1);
+    expect(sessionManager.clearChatSession).toHaveBeenCalledWith("chat-1");
     expect(renderer.sendText).toHaveBeenCalledWith(
       "chat-1",
       expect.stringContaining("Project selected: Project One"),

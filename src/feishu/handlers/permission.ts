@@ -25,8 +25,17 @@ export interface PermissionCardHandlerOptions {
   permissionManager: PermissionManager;
   renderer: PermissionRenderer;
   openCodeClient: OpenCodePermissionClient;
-  interactionManager?: { clear(reason?: string): void };
+  interactionManager?: { clear(chatId: string, reason?: string): void };
   logger?: Logger;
+}
+
+function extractReceiveId(event: Record<string, unknown>): string | null {
+  const context = isRecord(event.context) ? event.context : null;
+  return typeof event.open_chat_id === "string"
+    ? event.open_chat_id
+    : typeof context?.open_chat_id === "string"
+      ? context.open_chat_id
+      : null;
 }
 
 function mapPermissionReply(cardReply: string): OpenCodeReplyValue {
@@ -50,7 +59,9 @@ export class PermissionCardHandler {
   private readonly permissionManager: PermissionManager;
   private readonly renderer: PermissionRenderer;
   private readonly openCodeClient: OpenCodePermissionClient;
-  private readonly interactionManager?: { clear(reason?: string): void };
+  private readonly interactionManager?: {
+    clear(chatId: string, reason?: string): void;
+  };
   private readonly logger: Logger;
   private readonly emptyResponse: Record<string, never> = {};
 
@@ -172,7 +183,10 @@ export class PermissionCardHandler {
     }
 
     this.permissionManager.removeByMessageId(messageId);
-    this.interactionManager?.clear("permission_resolved");
+    const receiveId = extractReceiveId(event);
+    if (receiveId) {
+      this.interactionManager?.clear(receiveId, "permission_resolved");
+    }
 
     this.logger.info(
       `[PermissionCardHandler] Permission resolved: id=${request.id}, reply=${reply}`,

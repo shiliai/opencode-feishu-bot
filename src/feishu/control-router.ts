@@ -199,6 +199,10 @@ export type ControlRouterSettingsStore = Pick<
   SettingsManager,
   | "getCurrentProject"
   | "setCurrentProject"
+  | "getChatSession"
+  | "setChatSession"
+  | "clearChatSession"
+  | "clearChatStatusMessageId"
   | "getCurrentSession"
   | "setCurrentSession"
   | "getCurrentAgent"
@@ -209,7 +213,12 @@ export type ControlRouterSettingsStore = Pick<
 
 export type ControlRouterSessionStore = Pick<
   SessionManager,
-  "getCurrentSession" | "setCurrentSession" | "clearSession"
+  | "getCurrentSession"
+  | "setCurrentSession"
+  | "clearSession"
+  | "getChatSession"
+  | "setChatSession"
+  | "clearChatSession"
 >;
 
 export type ControlRouterRenderer = Pick<
@@ -554,7 +563,12 @@ export class ControlRouter {
           );
         }
         case "control_cancel":
-          this.interactionManager.clearBusy();
+          {
+            const receiveId = getCardActionReceiveId(event);
+            if (receiveId) {
+              this.interactionManager.clearBusy(receiveId);
+            }
+          }
           return buildCardActionToast("Operation cancelled", "info");
         case "confirm_write": {
           const operationId =
@@ -565,7 +579,7 @@ export class ControlRouter {
 
           const receiveId = getCardActionReceiveId(event);
           try {
-            const result = await this.executeCreateSession();
+            const result = await this.executeCreateSession(receiveId);
             if (receiveId && result.message) {
               await this.renderer.sendText(receiveId, result.message);
             }
@@ -745,7 +759,9 @@ export class ControlRouter {
       return { success: false, message: "Unable to reopen session picker" };
     }
 
-    const sessions = await this.listSessionSummaries();
+    const sessions = await this.listSessionSummaries(
+      this.sessionManager.getChatSession(receiveId),
+    );
     const card = buildSessionListCard(sessions, page);
     const messageId = await this.renderer.sendCard(receiveId, card);
     return { success: true, cardMessageId: messageId ?? undefined };
@@ -859,10 +875,12 @@ export class ControlRouter {
     return { success: true, cardMessageId: messageId ?? undefined };
   }
 
-  private async listSessionSummaries(): Promise<SessionSummary[]> {
+  private async listSessionSummaries(
+    currentSession?: SessionInfo,
+  ): Promise<SessionSummary[]> {
     const directory = resolveDirectoryScope(
       this.settings.getCurrentProject(),
-      this.settings.getCurrentSession(),
+      currentSession,
     );
     const result = await this.openCodeSession.list({
       directory,
@@ -904,7 +922,7 @@ export class ControlRouter {
   }
 
   private async handleNew(receiveId: string): Promise<ControlCommandResult> {
-    if (this.interactionManager.isBusy()) {
+    if (this.interactionManager.isBusy(receiveId)) {
       const message =
         "A session is currently active. Use /abort first or wait for it to finish.";
       await this.renderer.sendText(receiveId, message);
@@ -915,7 +933,7 @@ export class ControlRouter {
       this.logger.warn(
         "[ControlRouter] Card callbacks are disabled; /new will create a session immediately",
       );
-      const result = await this.executeCreateSession();
+      const result = await this.executeCreateSession(receiveId);
       if (result.message) {
         await this.renderer.sendText(receiveId, result.message);
       }
@@ -971,11 +989,14 @@ export class ControlRouter {
     }
   }
 
-  private async executeCreateSession(): Promise<ControlCommandResult> {
+  private async executeCreateSession(
+    receiveId: string,
+  ): Promise<ControlCommandResult> {
     try {
+      const currentSession = this.sessionManager.getChatSession(receiveId);
       const directory = resolveDirectoryScope(
         this.settings.getCurrentProject(),
-        this.sessionManager.getCurrentSession() ?? undefined,
+        currentSession,
       );
       const result = await this.openCodeSession.create({ directory });
       if (result.error) {
@@ -987,7 +1008,7 @@ export class ControlRouter {
         return { success: false, message: "Failed to create session" };
       }
 
-      this.sessionManager.setCurrentSession(sessionInfo);
+      this.sessionManager.setChatSession(receiveId, sessionInfo);
       this.logger.info(
         `[ControlRouter] Created new session: ${sessionInfo.id}`,
       );
@@ -1011,7 +1032,9 @@ export class ControlRouter {
     receiveId: string,
   ): Promise<ControlCommandResult> {
     try {
-      const summaries = await this.listSessionSummaries();
+      const summaries = await this.listSessionSummaries(
+        this.sessionManager.getChatSession(receiveId),
+      );
       const card = buildSessionListCard(summaries);
       const messageId = await this.renderer.sendCard(receiveId, card);
       return { success: true, cardMessageId: messageId ?? undefined };
@@ -1035,7 +1058,7 @@ export class ControlRouter {
     try {
       const directory = resolveDirectoryScope(
         this.settings.getCurrentProject(),
-        this.sessionManager.getCurrentSession() ?? undefined,
+        this.sessionManager.getChatSession(receiveId),
       );
       const result = await this.openCodeSession.get({
         sessionID: sessionId,
@@ -1054,7 +1077,7 @@ export class ControlRouter {
         return { success: false, message };
       }
 
-      this.sessionManager.setCurrentSession(sessionInfo);
+      this.sessionManager.setChatSession(receiveId, sessionInfo);
       this.logger.info(
         `[ControlRouter] Switched to session: ${sessionInfo.id}`,
       );
@@ -1265,7 +1288,8 @@ export class ControlRouter {
         worktree: discoveredDirectory,
         name: projectName,
       });
-      this.sessionManager.clearSession();
+      this.sessionManager.clearChatSession(receiveId);
+      this.settings.clearChatStatusMessageId(receiveId);
       this.logger.info(
         `[ControlRouter] Discovered project via session.create: ${discoveredDirectory}`,
       );
@@ -1289,6 +1313,7 @@ export class ControlRouter {
   }
 
   private async selectProject(
+    receiveId: string,
     projectId: string,
   ): Promise<ProjectSummary | null> {
     const projects = await this.listProjects();
@@ -1304,7 +1329,8 @@ export class ControlRouter {
       worktree: selectedProject.worktree,
       name: selectedProject.name,
     });
-    this.sessionManager.clearSession();
+    this.sessionManager.clearChatSession(receiveId);
+    this.settings.clearChatStatusMessageId(receiveId);
 
     return selectedProject;
   }
@@ -1316,7 +1342,10 @@ export class ControlRouter {
     const requestedProjectId = args?.trim();
     if (requestedProjectId) {
       try {
-        const selectedProject = await this.selectProject(requestedProjectId);
+        const selectedProject = await this.selectProject(
+          receiveId,
+          requestedProjectId,
+        );
         if (!selectedProject) {
           const message = `Unknown project: ${requestedProjectId}`;
           if (receiveId) {
@@ -1576,7 +1605,7 @@ export class ControlRouter {
 
   private async handleStatus(receiveId: string): Promise<ControlCommandResult> {
     const currentProject = this.settings.getCurrentProject();
-    const currentSession = this.sessionManager.getCurrentSession() ?? undefined;
+    const currentSession = this.sessionManager.getChatSession(receiveId);
     const fallbackModel = this.settings.getCurrentModel();
     const fallbackAgent = this.settings.getCurrentAgent();
     const directory = resolveDirectoryScope(currentProject, currentSession);
@@ -1692,7 +1721,7 @@ export class ControlRouter {
       }
     }
 
-    let state = this.interactionManager.isBusy() ? "busy" : "idle";
+    let state = this.interactionManager.isBusy(receiveId) ? "busy" : "idle";
     try {
       const statusResponse = await this.openCodeSession.status({ directory });
       const statusMap = isRecord(statusResponse.data)
@@ -1947,22 +1976,39 @@ export class ControlRouter {
     return { success: true, cardMessageId: messageId ?? undefined };
   }
 
-  private async handleAbort(_receiveId: string): Promise<ControlCommandResult> {
-    const currentSession = this.sessionManager.getCurrentSession();
+  private async handleAbort(receiveId: string): Promise<ControlCommandResult> {
+    const currentSession = this.sessionManager.getChatSession(receiveId);
     if (!currentSession) {
+      await this.renderer.sendText(receiveId, "没有活跃的会话可以取消");
       return { success: false, message: "No active session to abort" };
     }
 
     try {
       await this.openCodeSession.abort({ sessionID: currentSession.id });
-      this.interactionManager.clearBusy();
+
+      if (this.statusStore) {
+        const turnState = this.statusStore.clear(currentSession.id);
+        if (turnState) {
+          if (turnState.statusUpdateTimer) {
+            clearTimeout(turnState.statusUpdateTimer);
+            turnState.statusUpdateTimer = undefined;
+          }
+          turnState.subscriptionAbortController?.abort();
+        }
+      }
+
+      this.settings.clearChatStatusMessageId(receiveId);
+      this.interactionManager.clearBusy(receiveId);
+
       this.logger.info(`[ControlRouter] Aborted session: ${currentSession.id}`);
+      await this.renderer.sendText(receiveId, "✅ 已取消当前操作");
       return {
         success: true,
         message: `Session aborted: ${currentSession.id}`,
       };
     } catch (error) {
       this.logger.error("[ControlRouter] Failed to abort session", error);
+      await this.renderer.sendText(receiveId, "❌ 取消操作失败，请重试");
       return { success: false, message: "Failed to abort session" };
     }
   }

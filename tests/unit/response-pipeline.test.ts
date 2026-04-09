@@ -99,14 +99,19 @@ function createHarness() {
   } satisfies EventSubscriber;
 
   const settingsManager = {
-    setStatusMessageId: vi.fn((messageId: string): void => {
+    setChatStatusMessageId: vi.fn((chatId: string, messageId: string): void => {
+      void chatId;
       void messageId;
     }),
-    clearStatusMessageId: vi.fn((): void => undefined),
+    clearChatStatusMessageId: vi.fn((chatId: string): void => {
+      void chatId;
+    }),
   } satisfies SettingsManager;
 
   const interactionManager = {
-    clearBusy: vi.fn((): void => undefined),
+    clearBusy: vi.fn((chatId: string): void => {
+      void chatId;
+    }),
   } satisfies InteractionManager;
 
   const fetchLastAssistantMessage = vi
@@ -259,7 +264,8 @@ describe("ResponsePipelineController", () => {
     expect(state?.statusCardMessageId).toBe("status-card-1");
     expect(state?.lastPatchedText).toBe("Thinking…");
     expect(state?.lastPatchedSignature).toBeDefined();
-    expect(harness.settingsManager.setStatusMessageId).toHaveBeenCalledWith(
+    expect(harness.settingsManager.setChatStatusMessageId).toHaveBeenCalledWith(
+      context.receiveId,
       "status-card-1",
     );
   });
@@ -309,10 +315,12 @@ describe("ResponsePipelineController", () => {
     );
     expect(harness.renderer.replyPost).not.toHaveBeenCalled();
     expect(harness.renderer.sendPost).not.toHaveBeenCalled();
-    expect(harness.settingsManager.clearStatusMessageId).toHaveBeenCalledTimes(
-      1,
+    expect(
+      harness.settingsManager.clearChatStatusMessageId,
+    ).toHaveBeenCalledWith(context.receiveId);
+    expect(harness.interactionManager.clearBusy).toHaveBeenCalledWith(
+      context.receiveId,
     );
-    expect(harness.interactionManager.clearBusy).toHaveBeenCalledTimes(1);
     expect(harness.statusStore.get(context.sessionId)).toBeUndefined();
     expect(startedState?.subscriptionAbortController?.signal.aborted).toBe(
       true,
@@ -384,10 +392,12 @@ describe("ResponsePipelineController", () => {
     expect(harness.renderer.replyPost).not.toHaveBeenCalled();
     expect(harness.renderer.updateStatusCard).not.toHaveBeenCalled();
     expect(harness.clearTimeoutFn).toHaveBeenCalledTimes(1);
-    expect(harness.settingsManager.clearStatusMessageId).toHaveBeenCalledTimes(
-      1,
+    expect(
+      harness.settingsManager.clearChatStatusMessageId,
+    ).toHaveBeenCalledWith(context.receiveId);
+    expect(harness.interactionManager.clearBusy).toHaveBeenCalledWith(
+      context.receiveId,
     );
-    expect(harness.interactionManager.clearBusy).toHaveBeenCalledTimes(1);
     expect(harness.statusStore.get(context.sessionId)).toBeUndefined();
   });
 

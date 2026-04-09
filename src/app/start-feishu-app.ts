@@ -237,6 +237,7 @@ export async function startFeishuApp(): Promise<void> {
     permissionCardHandler,
     controlRouter,
     fileHandler,
+    renderer,
     botOpenId: config.feishu.botOpenId || null,
     logger,
     onPromptDispatched: async (

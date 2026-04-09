@@ -19,9 +19,14 @@ import {
 
 export type PromptIngressResult =
   | ({ kind: "dispatched"; text: string } & ResponsePipelineTurnContext)
-  | { kind: "blocked"; reason: string; guardDecision?: GuardDecision }
+  | {
+      kind: "blocked";
+      reason: string;
+      guardDecision?: GuardDecision;
+      receiveId?: string;
+    }
   | { kind: "unsupported"; messageType: string }
-  | { kind: "no-project" }
+  | { kind: "no-project"; receiveId?: string }
   | {
       kind: "session-reset";
       previousDirectory: string;
@@ -394,10 +399,13 @@ export class PromptIngressHandler {
   private async handlePromptDispatch(
     input: PromptIngressInput,
   ): Promise<PromptIngressResult> {
-    const guardDecision = this.interactionManager.resolveGuardDecision({
-      text: input.text,
-      type: "text",
-    });
+    const guardDecision = this.interactionManager.resolveGuardDecision(
+      input.chatId,
+      {
+        text: input.text,
+        type: "text",
+      },
+    );
 
     if (!guardDecision.allow) {
       this.logger.info(
@@ -407,10 +415,12 @@ export class PromptIngressHandler {
         kind: "blocked",
         reason: guardDecision.reason ?? "guard_blocked",
         guardDecision,
+        receiveId: input.chatId,
       };
     }
 
     const sessionDeps: SessionResolutionDependencies = {
+      chatId: input.chatId,
       settings: this.settings,
       openCodeSession: this.openCodeSession,
       logger: this.logger,
@@ -424,11 +434,12 @@ export class PromptIngressHandler {
       return {
         kind: "blocked",
         reason: "session_creation_failed",
+        receiveId: input.chatId,
       };
     }
 
     if (resolution.kind === "no-project") {
-      return { kind: "no-project" };
+      return { kind: "no-project", receiveId: input.chatId };
     }
 
     if (resolution.kind === "session-reset") {
@@ -451,8 +462,8 @@ export class PromptIngressHandler {
         `[PromptIngress] Resetting poisoned session before file prompt: session=${resolution.sessionInfo.id}, offenderCount=${poisonedHistoryInspection.offenderCount}, firstOffenderMessage=${poisonedHistoryInspection.firstOffender?.messageId ?? "unknown"}, firstOffenderMime=${poisonedHistoryInspection.firstOffender?.mime ?? "unknown"}, firstOffenderUrlScheme=${poisonedHistoryInspection.firstOffender?.urlScheme ?? "unknown"}`,
       );
       const previousSessionId = resolution.sessionInfo.id;
-      this.settings.clearSession();
-      this.settings.clearStatusMessageId();
+      this.settings.clearChatSession(input.chatId);
+      this.settings.clearChatStatusMessageId(input.chatId);
 
       try {
         resolution = await resolvePromptSession(sessionDeps);
@@ -464,11 +475,12 @@ export class PromptIngressHandler {
         return {
           kind: "blocked",
           reason: "session_creation_failed",
+          receiveId: input.chatId,
         };
       }
 
       if (resolution.kind === "no-project") {
-        return { kind: "no-project" };
+        return { kind: "no-project", receiveId: input.chatId };
       }
 
       if (resolution.kind === "session-reset") {
@@ -497,13 +509,16 @@ export class PromptIngressHandler {
       return {
         kind: "blocked",
         reason: "session_busy",
+        receiveId: input.chatId,
       };
     }
 
     const model = this.settings.getCurrentModel();
     const agent = this.settings.getCurrentAgent();
 
-    this.interactionManager.startBusy({ messageId: input.messageId });
+    this.interactionManager.startBusy(input.chatId, {
+      messageId: input.messageId,
+    });
 
     this.scheduleAsync(async () => {
       try {
@@ -566,7 +581,7 @@ export class PromptIngressHandler {
           `[PromptIngress] Async prompt error: sourceMessageId=${input.messageId}, chatId=${input.chatId}, session=${resolution.sessionInfo.id}, directory=${resolution.directory}`,
           error,
         );
-        this.interactionManager.clearBusy();
+        this.interactionManager.clearBusy(input.chatId);
       }
     });
 

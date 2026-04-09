@@ -83,14 +83,19 @@ function createHarness(options?: { imageResolver?: ImageResolverLike }) {
   } satisfies EventSubscriber;
 
   const settingsManager = {
-    setStatusMessageId: vi.fn((messageId: string): void => {
+    setChatStatusMessageId: vi.fn((chatId: string, messageId: string): void => {
+      void chatId;
       void messageId;
     }),
-    clearStatusMessageId: vi.fn((): void => undefined),
+    clearChatStatusMessageId: vi.fn((chatId: string): void => {
+      void chatId;
+    }),
   } satisfies SettingsManager;
 
   const interactionManager = {
-    clearBusy: vi.fn((): void => undefined),
+    clearBusy: vi.fn((chatId: string): void => {
+      void chatId;
+    }),
   } satisfies InteractionManager;
 
   const info = vi.fn();

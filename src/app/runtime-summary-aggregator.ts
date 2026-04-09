@@ -85,11 +85,17 @@ export class RuntimeSummaryAggregator {
       },
       onQuestionError: (sessionId) => {
         callbacks.onQuestionError?.(sessionId);
-        this.options.interactionManager.clear("question_error");
+        const turn = this.options.statusStore.get(sessionId);
+        if (turn) {
+          this.options.interactionManager.clear(
+            turn.receiveId,
+            "question_error",
+          );
+        }
       },
       onCleared: () => {
         callbacks.onCleared?.();
-        this.options.interactionManager.clear("aggregator_cleared");
+        this.options.interactionManager.clearAll("aggregator_cleared");
       },
     });
   }
@@ -113,6 +119,11 @@ export class RuntimeSummaryAggregator {
       return;
     }
 
+    const turn = this.options.statusStore.get(event.sessionId);
+    if (!turn) {
+      return;
+    }
+
     const expectedInput =
       firstQuestion.options.length > 0 && firstQuestion.custom
         ? "mixed"
@@ -120,7 +131,7 @@ export class RuntimeSummaryAggregator {
           ? "callback"
           : "text";
 
-    this.options.interactionManager.start({
+    this.options.interactionManager.start(turn.receiveId, {
       kind: "question",
       expectedInput,
       allowedCommands: ["/help", "/status", "/abort"],
@@ -131,11 +142,6 @@ export class RuntimeSummaryAggregator {
       },
       expiresInMs: null,
     });
-
-    const turn = this.options.statusStore.get(event.sessionId);
-    if (!turn) {
-      return;
-    }
 
     runAsync(
       this.options.questionCardHandler.handleQuestionEvent(
@@ -149,7 +155,12 @@ export class RuntimeSummaryAggregator {
   }
 
   private handlePermission(event: SummaryPermissionEvent): void {
-    this.options.interactionManager.start({
+    const turn = this.options.statusStore.get(event.sessionId);
+    if (!turn) {
+      return;
+    }
+
+    this.options.interactionManager.start(turn.receiveId, {
       kind: "permission",
       expectedInput: "callback",
       allowedCommands: ["/help", "/status", "/abort"],
@@ -159,11 +170,6 @@ export class RuntimeSummaryAggregator {
       },
       expiresInMs: null,
     });
-
-    const turn = this.options.statusStore.get(event.sessionId);
-    if (!turn) {
-      return;
-    }
 
     runAsync(
       this.options.permissionCardHandler.handlePermissionEvent(

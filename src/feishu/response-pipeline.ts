@@ -49,12 +49,12 @@ interface ResponsePipelineEventSubscriber {
 }
 
 interface ResponsePipelineSettingsManager {
-  setStatusMessageId(messageId: string): void;
-  clearStatusMessageId(): void;
+  setChatStatusMessageId(chatId: string, messageId: string): void;
+  clearChatStatusMessageId(chatId: string): void;
 }
 
 interface ResponsePipelineInteractionManager {
-  clearBusy(): void;
+  clearBusy(chatId: string): void;
 }
 
 export interface SessionMessageEntry {
@@ -648,7 +648,10 @@ export class ResponsePipelineController {
       latestState.statusCardMessageId = messageId;
       latestState.lastPatchedText = initialContent;
       latestState.lastPatchedSignature = initialSignature;
-      this.settingsManager.setStatusMessageId(messageId);
+      this.settingsManager.setChatStatusMessageId(
+        latestState.receiveId,
+        messageId,
+      );
 
       if (
         latestState.lastPartialSignature &&
@@ -932,7 +935,10 @@ export class ResponsePipelineController {
         );
         if (messageId) {
           state.statusCardMessageId = messageId;
-          this.settingsManager.setStatusMessageId(messageId);
+          this.settingsManager.setChatStatusMessageId(
+            state.receiveId,
+            messageId,
+          );
         }
         this.logger.info(
           `[ResponsePipeline] Final reply delivered via complete-card render: session=${state.sessionId}, statusCardMessageId=${messageId ?? "unknown"}`,
@@ -989,8 +995,8 @@ export class ResponsePipelineController {
     );
 
     this.disposeTurnResources(state);
-    this.settingsManager.clearStatusMessageId();
-    this.interactionManager.clearBusy();
+    this.settingsManager.clearChatStatusMessageId(state.receiveId);
+    this.interactionManager.clearBusy(state.receiveId);
   }
 
   private disposeTurnResources(state: StatusTurnState): void {

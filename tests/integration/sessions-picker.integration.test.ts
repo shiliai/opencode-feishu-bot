@@ -47,7 +47,7 @@ describe("sessions picker integration", () => {
         "Session selected: Recovered Session (session-2)",
       ),
     );
-    expect(harness.sessionManager.getCurrentSession()).toEqual({
+    expect(harness.sessionManager.getChatSession("chat-session-1")).toEqual({
       id: "session-2",
       title: "Recovered Session",
       directory: "/workspace/project",

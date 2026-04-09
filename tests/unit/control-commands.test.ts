@@ -22,6 +22,9 @@ function createMockSettings() {
   return {
     getCurrentProject: vi.fn().mockReturnValue(undefined),
     setCurrentProject: vi.fn(),
+    getChatSession: vi.fn().mockReturnValue(undefined),
+    setChatSession: vi.fn(),
+    clearChatSession: vi.fn(),
     getCurrentSession: vi.fn().mockReturnValue(undefined),
     setCurrentSession: vi.fn(),
     clearSession: vi.fn(),
@@ -31,6 +34,9 @@ function createMockSettings() {
     getCurrentModel: vi.fn().mockReturnValue(undefined),
     setCurrentModel: vi.fn(),
     clearCurrentModel: vi.fn(),
+    getChatStatusMessageId: vi.fn().mockReturnValue(undefined),
+    setChatStatusMessageId: vi.fn(),
+    clearChatStatusMessageId: vi.fn(),
     getStatusMessageId: vi.fn().mockReturnValue(undefined),
     setStatusMessageId: vi.fn(),
     clearStatusMessageId: vi.fn(),
@@ -47,6 +53,9 @@ function createMockSettings() {
 
 function createMockSessionManager() {
   return {
+    getChatSession: vi.fn().mockReturnValue(undefined),
+    setChatSession: vi.fn(),
+    clearChatSession: vi.fn(),
     getCurrentSession: vi.fn().mockReturnValue(null),
     setCurrentSession: vi.fn(),
     clearSession: vi.fn(),
@@ -142,6 +151,7 @@ function createMockInteractionManager() {
     isExpired: vi.fn().mockReturnValue(false),
     transition: vi.fn(),
     clear: vi.fn(),
+    clearAll: vi.fn(),
     startBusy: vi.fn(),
     clearBusy: vi.fn(),
     isBusy: vi.fn().mockReturnValue(false),
@@ -271,7 +281,8 @@ describe("ControlRouter — command dispatch", () => {
       "chat-1",
       "New session selected: New Session (new-session-1)",
     );
-    expect(sessionManager.setCurrentSession).toHaveBeenCalledWith(
+    expect(sessionManager.setChatSession).toHaveBeenCalledWith(
+      "chat-1",
       expect.objectContaining({ id: "new-session-1" }),
     );
   });
@@ -451,7 +462,8 @@ describe("ControlRouter — command dispatch", () => {
       worktree: "/workspace/project-2",
       name: "Project Two",
     });
-    expect(sessionManager.clearSession).toHaveBeenCalledTimes(1);
+    expect(sessionManager.clearChatSession).toHaveBeenCalledWith("chat-1");
+    expect(settings.clearChatStatusMessageId).toHaveBeenCalledWith("chat-1");
     expect(renderer.sendText).toHaveBeenCalledWith(
       "chat-1",
       expect.stringContaining("Project selected:"),
@@ -523,7 +535,8 @@ describe("ControlRouter — command dispatch", () => {
       worktree: "/workspace/project-3",
       name: "project-3",
     });
-    expect(sessionManager.clearSession).toHaveBeenCalledTimes(1);
+    expect(sessionManager.clearChatSession).toHaveBeenCalledWith("chat-1");
+    expect(settings.clearChatStatusMessageId).toHaveBeenCalledWith("chat-1");
     expect(renderer.sendText).toHaveBeenCalledWith(
       "chat-1",
       expect.stringContaining("Project discovered: project-3"),
@@ -598,7 +611,7 @@ describe("ControlRouter — command dispatch", () => {
   it("/session <id> switches to specified session", async () => {
     const renderer = createMockRenderer();
     const sessionManager = createMockSessionManager();
-    sessionManager.getCurrentSession.mockReturnValue({
+    sessionManager.getChatSession.mockReturnValue({
       id: "old-session",
       title: "Old",
       directory: "/workspace",
@@ -622,7 +635,8 @@ describe("ControlRouter — command dispatch", () => {
       "chat-1",
       expect.stringContaining("Session selected:"),
     );
-    expect(sessionManager.setCurrentSession).toHaveBeenCalledWith(
+    expect(sessionManager.setChatSession).toHaveBeenCalledWith(
+      "chat-1",
       expect.objectContaining({ id: "sess-42" }),
     );
   });
@@ -774,7 +788,7 @@ describe("ControlRouter — command dispatch", () => {
     });
     settings.getCurrentAgent.mockReturnValue("build");
     const sessionManager = createMockSessionManager();
-    sessionManager.getCurrentSession.mockReturnValue({
+    sessionManager.getChatSession.mockReturnValue({
       id: "sess-1",
       title: "Test",
       directory: "/workspace",
@@ -825,7 +839,7 @@ describe("ControlRouter — command dispatch", () => {
       name: "Project One",
     });
     const sessionManager = createMockSessionManager();
-    sessionManager.getCurrentSession.mockReturnValue({
+    sessionManager.getChatSession.mockReturnValue({
       id: "sess-1",
       title: "Test",
       directory: "/workspace/project-1",
@@ -892,7 +906,7 @@ describe("ControlRouter — command dispatch", () => {
     });
     settings.getCurrentAgent.mockReturnValue("build");
     const sessionManager = createMockSessionManager();
-    sessionManager.getCurrentSession.mockReturnValue({
+    sessionManager.getChatSession.mockReturnValue({
       id: "sess-1",
       title: "Test",
       directory: "/workspace/project-1",
@@ -930,16 +944,20 @@ describe("ControlRouter — command dispatch", () => {
 
   it("/abort aborts current session", async () => {
     const openCodeClient = createMockOpenCodeClient();
+    const settings = createMockSettings();
     const sessionManager = createMockSessionManager();
-    sessionManager.getCurrentSession.mockReturnValue({
+    sessionManager.getChatSession.mockReturnValue({
       id: "sess-1",
       title: "Test",
       directory: "/workspace",
     });
     const interactionManager = createMockInteractionManager();
+    const renderer = createMockRenderer();
     const router = createRouter({
       openCodeClient,
+      settingsManager: settings,
       sessionManager,
+      renderer,
       interactionManager,
     });
 
@@ -949,18 +967,28 @@ describe("ControlRouter — command dispatch", () => {
     expect(openCodeClient.session.abort).toHaveBeenCalledWith({
       sessionID: "sess-1",
     });
-    expect(interactionManager.clearBusy).toHaveBeenCalledTimes(1);
+    expect(settings.clearChatStatusMessageId).toHaveBeenCalledWith("chat-1");
+    expect(interactionManager.clearBusy).toHaveBeenCalledWith("chat-1");
+    expect(renderer.sendText).toHaveBeenCalledWith(
+      "chat-1",
+      "✅ 已取消当前操作",
+    );
   });
 
   it("/abort returns failure when no active session", async () => {
+    const renderer = createMockRenderer();
     const sessionManager = createMockSessionManager();
-    sessionManager.getCurrentSession.mockReturnValue(null);
-    const router = createRouter({ sessionManager });
+    sessionManager.getChatSession.mockReturnValue(undefined);
+    const router = createRouter({ renderer, sessionManager });
 
     const result = await router.handleCommand("chat-1", "/abort");
 
     expect(result.success).toBe(false);
     expect(result.message).toContain("No active session");
+    expect(renderer.sendText).toHaveBeenCalledWith(
+      "chat-1",
+      "没有活跃的会话可以取消",
+    );
   });
 
   it("/status shows busy state when interaction manager is busy", async () => {

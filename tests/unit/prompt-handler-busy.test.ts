@@ -10,13 +10,15 @@ import {
   type OpenCodeSessionStatusClient,
 } from "../../src/feishu/handlers/prompt.js";
 
-function createMockSettings(overrides?: Partial<SettingsManager>): SettingsManager {
+function createMockSettings(
+  overrides?: Partial<SettingsManager>,
+): SettingsManager {
   return {
     getCurrentProject: vi.fn().mockReturnValue(undefined),
-    getCurrentSession: vi.fn().mockReturnValue(undefined),
-    setCurrentSession: vi.fn(),
-    clearSession: vi.fn(),
-    clearStatusMessageId: vi.fn(),
+    getChatSession: vi.fn().mockReturnValue(undefined),
+    setChatSession: vi.fn(),
+    clearChatSession: vi.fn(),
+    clearChatStatusMessageId: vi.fn(),
     getCurrentModel: vi.fn().mockReturnValue(undefined),
     getCurrentAgent: vi.fn().mockReturnValue(undefined),
     __resetSettingsForTests: vi.fn(),
@@ -24,9 +26,13 @@ function createMockSettings(overrides?: Partial<SettingsManager>): SettingsManag
   } as unknown as SettingsManager;
 }
 
-function createMockInteractionManager(overrides?: Partial<InteractionManager>): InteractionManager {
+function createMockInteractionManager(
+  overrides?: Partial<InteractionManager>,
+): InteractionManager {
   return {
-    resolveGuardDecision: vi.fn().mockReturnValue({ allow: true, inputType: "text", state: null }),
+    resolveGuardDecision: vi
+      .fn()
+      .mockReturnValue({ allow: true, inputType: "text", state: null }),
     startBusy: vi.fn(),
     clearBusy: vi.fn(),
     get: vi.fn(),
@@ -36,6 +42,7 @@ function createMockInteractionManager(overrides?: Partial<InteractionManager>): 
     start: vi.fn(),
     transition: vi.fn(),
     clear: vi.fn(),
+    clearAll: vi.fn(),
     getSnapshot: vi.fn().mockReturnValue(null),
     isExpired: vi.fn().mockReturnValue(false),
     ...overrides,
@@ -75,7 +82,14 @@ describe("isOpenCodeSessionBusy", () => {
   it("returns true when any session has type retry", async () => {
     const client: OpenCodeSessionStatusClient = {
       status: vi.fn().mockResolvedValue({
-        data: { "sess-1": { type: "retry", attempt: 3, message: "waiting", next: 5000 } },
+        data: {
+          "sess-1": {
+            type: "retry",
+            attempt: 3,
+            message: "waiting",
+            next: 5000,
+          },
+        },
         error: undefined,
       }),
     };
@@ -127,8 +141,12 @@ describe("PromptIngressHandler busy paths", () => {
       }),
     });
     const openCodeSession: OpenCodeSessionClient = { create: vi.fn() };
-    const openCodeSessionStatus: OpenCodeSessionStatusClient = { status: vi.fn() };
-    const openCodePromptAsync: OpenCodePromptAsyncClient = { promptAsync: vi.fn() };
+    const openCodeSessionStatus: OpenCodeSessionStatusClient = {
+      status: vi.fn(),
+    };
+    const openCodePromptAsync: OpenCodePromptAsyncClient = {
+      promptAsync: vi.fn(),
+    };
 
     const handler = new PromptIngressHandler({
       settings,
@@ -138,7 +156,9 @@ describe("PromptIngressHandler busy paths", () => {
       openCodePromptAsync,
     });
 
-    const result = await handler.handleMessageEvent(makeDmTextEvent("blocked by guard"));
+    const result = await handler.handleMessageEvent(
+      makeDmTextEvent("blocked by guard"),
+    );
 
     expect(result.kind).toBe("blocked");
     if (result.kind !== "blocked") {
@@ -146,6 +166,7 @@ describe("PromptIngressHandler busy paths", () => {
     }
     expect(result.reason).toBe("expected_text");
     expect(result.guardDecision?.busy).toBe(true);
+    expect(result.receiveId).toBe("chat-1");
     expect(openCodePromptAsync.promptAsync).not.toHaveBeenCalled();
   });
 
@@ -155,7 +176,7 @@ describe("PromptIngressHandler busy paths", () => {
         id: "proj-1",
         worktree: "/workspace/project",
       }),
-      getCurrentSession: vi.fn().mockReturnValue({
+      getChatSession: vi.fn().mockReturnValue({
         id: "sess-1",
         title: "S",
         directory: "/workspace/project",
@@ -169,7 +190,9 @@ describe("PromptIngressHandler busy paths", () => {
         error: undefined,
       }),
     };
-    const openCodePromptAsync: OpenCodePromptAsyncClient = { promptAsync: vi.fn() };
+    const openCodePromptAsync: OpenCodePromptAsyncClient = {
+      promptAsync: vi.fn(),
+    };
 
     const handler = new PromptIngressHandler({
       settings,
@@ -179,13 +202,16 @@ describe("PromptIngressHandler busy paths", () => {
       openCodePromptAsync,
     });
 
-    const result = await handler.handleMessageEvent(makeDmTextEvent("while busy"));
+    const result = await handler.handleMessageEvent(
+      makeDmTextEvent("while busy"),
+    );
 
     expect(result.kind).toBe("blocked");
     if (result.kind !== "blocked") {
       throw new Error("unexpected result kind");
     }
     expect(result.reason).toBe("session_busy");
+    expect(result.receiveId).toBe("chat-1");
     expect(interactionManager.startBusy).not.toHaveBeenCalled();
     expect(openCodePromptAsync.promptAsync).not.toHaveBeenCalled();
   });
@@ -196,7 +222,7 @@ describe("PromptIngressHandler busy paths", () => {
         id: "proj-1",
         worktree: "/workspace/project",
       }),
-      getCurrentSession: vi.fn().mockReturnValue({
+      getChatSession: vi.fn().mockReturnValue({
         id: "sess-1",
         title: "S",
         directory: "/workspace/project",
@@ -227,7 +253,9 @@ describe("PromptIngressHandler busy paths", () => {
       scheduleAsync: (task) => scheduledTasks.push(task),
     });
 
-    const result = await handler.handleMessageEvent(makeDmTextEvent("fail-open"));
+    const result = await handler.handleMessageEvent(
+      makeDmTextEvent("fail-open"),
+    );
 
     expect(result.kind).toBe("dispatched");
     for (const task of scheduledTasks) {
@@ -250,8 +278,12 @@ describe("PromptIngressHandler busy paths", () => {
         error: new Error("server error"),
       }),
     };
-    const openCodeSessionStatus: OpenCodeSessionStatusClient = { status: vi.fn() };
-    const openCodePromptAsync: OpenCodePromptAsyncClient = { promptAsync: vi.fn() };
+    const openCodeSessionStatus: OpenCodeSessionStatusClient = {
+      status: vi.fn(),
+    };
+    const openCodePromptAsync: OpenCodePromptAsyncClient = {
+      promptAsync: vi.fn(),
+    };
 
     const handler = new PromptIngressHandler({
       settings,
@@ -261,13 +293,16 @@ describe("PromptIngressHandler busy paths", () => {
       openCodePromptAsync,
     });
 
-    const result = await handler.handleMessageEvent(makeDmTextEvent("create fails"));
+    const result = await handler.handleMessageEvent(
+      makeDmTextEvent("create fails"),
+    );
 
     expect(result.kind).toBe("blocked");
     if (result.kind !== "blocked") {
       throw new Error("unexpected result kind");
     }
     expect(result.reason).toBe("session_creation_failed");
+    expect(result.receiveId).toBe("chat-1");
     expect(openCodePromptAsync.promptAsync).not.toHaveBeenCalled();
   });
 });

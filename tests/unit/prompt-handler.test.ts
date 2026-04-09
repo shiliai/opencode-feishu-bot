@@ -21,10 +21,10 @@ function createMockSettings(
 ): SettingsManager {
   return {
     getCurrentProject: vi.fn().mockReturnValue(undefined),
-    getCurrentSession: vi.fn().mockReturnValue(undefined),
-    setCurrentSession: vi.fn(),
-    clearSession: vi.fn(),
-    clearStatusMessageId: vi.fn(),
+    getChatSession: vi.fn().mockReturnValue(undefined),
+    setChatSession: vi.fn(),
+    clearChatSession: vi.fn(),
+    clearChatStatusMessageId: vi.fn(),
     getCurrentModel: vi.fn().mockReturnValue(undefined),
     getCurrentAgent: vi.fn().mockReturnValue(undefined),
     __resetSettingsForTests: vi.fn(),
@@ -46,6 +46,7 @@ function createMockInteractionManager(): InteractionManager {
     start: vi.fn(),
     transition: vi.fn(),
     clear: vi.fn(),
+    clearAll: vi.fn(),
     getSnapshot: vi.fn().mockReturnValue(null),
     isExpired: vi.fn().mockReturnValue(false),
   } as unknown as InteractionManager;
@@ -185,7 +186,7 @@ describe("PromptIngressHandler", () => {
 
     expect(promptAsyncCalled).toBe(true);
     expect(promptAsyncResolved).toBe(true);
-    expect(interactionManager.startBusy).toHaveBeenCalledWith({
+    expect(interactionManager.startBusy).toHaveBeenCalledWith("chat-1", {
       messageId: "msg-1",
     });
   });
@@ -196,7 +197,7 @@ describe("PromptIngressHandler", () => {
         id: "proj-1",
         worktree: "/workspace/project",
       }),
-      getCurrentSession: vi.fn().mockReturnValue({
+      getChatSession: vi.fn().mockReturnValue({
         id: "sess-existing",
         title: "Existing",
         directory: "/workspace/project",
@@ -260,7 +261,7 @@ describe("PromptIngressHandler", () => {
         id: "proj-1",
         worktree: "/workspace/project",
       }),
-      getCurrentSession: vi.fn().mockReturnValue({
+      getChatSession: vi.fn().mockReturnValue({
         id: "sess-1",
         title: "Existing",
         directory: "/workspace/project",
@@ -371,11 +372,11 @@ describe("PromptIngressHandler", () => {
         id: "proj-1",
         worktree: "/workspace/project",
       }),
-      getCurrentSession: vi.fn().mockImplementation(() => currentSession),
-      clearSession: vi.fn().mockImplementation(() => {
+      getChatSession: vi.fn().mockImplementation(() => currentSession),
+      clearChatSession: vi.fn().mockImplementation(() => {
         currentSession = undefined;
       }),
-      setCurrentSession: vi.fn().mockImplementation((session) => {
+      setChatSession: vi.fn().mockImplementation((session) => {
         currentSession = session as {
           id: string;
           title: string;
@@ -455,8 +456,8 @@ describe("PromptIngressHandler", () => {
       throw new Error("unexpected result kind");
     }
     expect(result.sessionId).toBe("sess-fresh");
-    expect(settings.clearSession).toHaveBeenCalledTimes(1);
-    expect(settings.clearStatusMessageId).toHaveBeenCalledTimes(1);
+    expect(settings.clearChatSession).toHaveBeenCalledTimes(1);
+    expect(settings.clearChatStatusMessageId).toHaveBeenCalledTimes(1);
     expect(openCodeSession.create).toHaveBeenCalledTimes(1);
 
     await runScheduledTasks(scheduledTasks);
@@ -485,7 +486,7 @@ describe("PromptIngressHandler", () => {
         id: "proj-1",
         worktree: "/workspace/project",
       }),
-      getCurrentSession: vi.fn().mockReturnValue({
+      getChatSession: vi.fn().mockReturnValue({
         id: "sess-1",
         title: "Existing",
         directory: "/workspace/project",
@@ -561,7 +562,7 @@ describe("PromptIngressHandler", () => {
         id: "proj-1",
         worktree: "/workspace/project",
       }),
-      getCurrentSession: vi.fn().mockReturnValue({
+      getChatSession: vi.fn().mockReturnValue({
         id: "sess-1",
         title: "Existing",
         directory: "/workspace/project",
@@ -630,7 +631,7 @@ describe("PromptIngressHandler", () => {
         id: "proj-1",
         worktree: "/workspace/project",
       }),
-      getCurrentSession: vi.fn().mockReturnValue({
+      getChatSession: vi.fn().mockReturnValue({
         id: "sess-1",
         title: "Existing",
         directory: "/workspace/project",
@@ -687,7 +688,7 @@ describe("PromptIngressHandler", () => {
         id: "proj-1",
         worktree: "/workspace/project",
       }),
-      getCurrentSession: vi.fn().mockReturnValue({
+      getChatSession: vi.fn().mockReturnValue({
         id: "sess-1",
         title: "Existing",
         directory: "/workspace/project",
@@ -753,7 +754,7 @@ describe("PromptIngressHandler", () => {
         id: "proj-1",
         worktree: "/workspace/project",
       }),
-      getCurrentSession: vi.fn().mockReturnValue({
+      getChatSession: vi.fn().mockReturnValue({
         id: "sess-1",
         title: "S",
         directory: "/workspace/project",
@@ -815,7 +816,7 @@ describe("PromptIngressHandler", () => {
         id: "proj-1",
         worktree: "/workspace/project",
       }),
-      getCurrentSession: vi.fn().mockReturnValue({
+      getChatSession: vi.fn().mockReturnValue({
         id: "sess-1",
         title: "S",
         directory: "/workspace/project",
@@ -853,7 +854,7 @@ describe("PromptIngressHandler", () => {
       await task();
     }
 
-    expect(interactionManager.clearBusy).toHaveBeenCalledTimes(1);
+    expect(interactionManager.clearBusy).toHaveBeenCalledWith("chat-1");
   });
 
   it("returns no-project when no current project is configured", async () => {
@@ -879,7 +880,7 @@ describe("PromptIngressHandler", () => {
       makeDmTextEvent("no project"),
     );
 
-    expect(result).toEqual({ kind: "no-project" });
+    expect(result).toEqual({ kind: "no-project", receiveId: "chat-1" });
   });
 
   it("returns session-reset when directory mismatches and does not dispatch", async () => {
@@ -888,7 +889,7 @@ describe("PromptIngressHandler", () => {
         id: "proj-new",
         worktree: "/workspace/new",
       }),
-      getCurrentSession: vi.fn().mockReturnValue({
+      getChatSession: vi.fn().mockReturnValue({
         id: "sess-old",
         title: "Old",
         directory: "/workspace/old",

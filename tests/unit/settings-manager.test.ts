@@ -4,9 +4,9 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   SettingsManager,
-  type Logger,
   type SessionDirectoryCacheInfo,
 } from "../../src/settings/manager.js";
+import type { Logger } from "../../src/utils/logger.js";
 
 const tempDirectories: string[] = [];
 
@@ -20,14 +20,18 @@ function createSilentLogger(): Logger {
 }
 
 async function createSettingsFilePath(): Promise<string> {
-  const directory = await mkdtemp(path.join(os.tmpdir(), "opencode-feishu-settings-"));
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "opencode-feishu-settings-"),
+  );
   tempDirectories.push(directory);
   return path.join(directory, "settings.json");
 }
 
 afterEach(async () => {
   await Promise.all(
-    tempDirectories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })),
+    tempDirectories
+      .splice(0)
+      .map((directory) => rm(directory, { recursive: true, force: true })),
   );
 });
 
@@ -42,10 +46,22 @@ describe("SettingsManager", () => {
       directories: [{ worktree: "/workspace", lastUpdated: 456 }],
     };
 
-    manager.setCurrentProject({ id: "project-1", worktree: "/workspace", name: "Bridge" });
-    manager.setCurrentSession({ id: "session-1", title: "Main", directory: "/workspace" });
+    manager.setCurrentProject({
+      id: "project-1",
+      worktree: "/workspace",
+      name: "Bridge",
+    });
+    manager.setCurrentSession({
+      id: "session-1",
+      title: "Main",
+      directory: "/workspace",
+    });
     manager.setCurrentAgent("builder");
-    manager.setCurrentModel({ providerID: "openai", modelID: "gpt-5", variant: "fast" });
+    manager.setCurrentModel({
+      providerID: "openai",
+      modelID: "gpt-5",
+      variant: "fast",
+    });
     manager.setStatusMessageId("status-42");
     await manager.setSessionDirectoryCache(cache);
     await manager.waitForPendingWrites();
@@ -53,8 +69,16 @@ describe("SettingsManager", () => {
     expect(JSON.parse(await readFile(settingsFilePath, "utf-8"))).toEqual({
       currentAgent: "builder",
       currentModel: { providerID: "openai", modelID: "gpt-5", variant: "fast" },
-      currentProject: { id: "project-1", worktree: "/workspace", name: "Bridge" },
-      currentSession: { id: "session-1", title: "Main", directory: "/workspace" },
+      currentProject: {
+        id: "project-1",
+        worktree: "/workspace",
+        name: "Bridge",
+      },
+      currentSession: {
+        id: "session-1",
+        title: "Main",
+        directory: "/workspace",
+      },
       sessionDirectoryCache: cache,
       statusMessageId: "status-42",
     });
@@ -89,7 +113,11 @@ describe("SettingsManager", () => {
     await writeFile(
       settingsFilePath,
       JSON.stringify({
-        currentSession: { id: "session-1", title: "Migrated", directory: "/workspace" },
+        currentSession: {
+          id: "session-1",
+          title: "Migrated",
+          directory: "/workspace",
+        },
         pinnedMessageId: 99,
         scheduledTasks: [{ id: "legacy-task" }],
         serverProcess: { pid: 42 },
@@ -102,7 +130,11 @@ describe("SettingsManager", () => {
     await manager.loadSettings();
 
     expect(manager.getSettingsSnapshot()).toEqual({
-      currentSession: { id: "session-1", title: "Migrated", directory: "/workspace" },
+      currentSession: {
+        id: "session-1",
+        title: "Migrated",
+        directory: "/workspace",
+      },
       statusMessageId: "status-1",
     });
   });
@@ -123,5 +155,64 @@ describe("SettingsManager", () => {
     expect(JSON.parse(await readFile(settingsFilePath, "utf-8"))).toEqual({
       currentAgent: "gamma",
     });
+  });
+
+  it("stores chat sessions and status message ids only in memory", async () => {
+    const settingsFilePath = await createSettingsFilePath();
+    const manager = new SettingsManager({
+      logger: createSilentLogger(),
+      settingsFilePath,
+    });
+
+    // Set a global property first so the settings file gets created on disk
+    manager.setCurrentAgent("test-agent");
+    await manager.waitForPendingWrites();
+
+    manager.setChatSession("chat-1", {
+      id: "session-chat-1",
+      title: "Chat Session",
+      directory: "/workspace/chat-1",
+    });
+    manager.setChatStatusMessageId("chat-1", "status-chat-1");
+    await manager.waitForPendingWrites();
+
+    expect(manager.getChatSession("chat-1")).toEqual({
+      id: "session-chat-1",
+      title: "Chat Session",
+      directory: "/workspace/chat-1",
+    });
+    expect(manager.getChatStatusMessageId("chat-1")).toBe("status-chat-1");
+
+    const persisted = JSON.parse(await readFile(settingsFilePath, "utf-8"));
+    expect(persisted.currentSession).toBeUndefined();
+    expect(persisted.statusMessageId).toBeUndefined();
+
+    manager.clearChatSession("chat-1");
+    manager.clearChatStatusMessageId("chat-1");
+    expect(manager.getChatSession("chat-1")).toBeUndefined();
+    expect(manager.getChatStatusMessageId("chat-1")).toBeUndefined();
+  });
+
+  it("resets chat-only state for tests without touching persisted settings", async () => {
+    const settingsFilePath = await createSettingsFilePath();
+    const manager = new SettingsManager({
+      logger: createSilentLogger(),
+      settingsFilePath,
+    });
+
+    manager.setCurrentAgent("builder");
+    manager.setChatSession("chat-1", {
+      id: "session-chat-1",
+      title: "Chat Session",
+      directory: "/workspace/chat-1",
+    });
+    manager.setChatStatusMessageId("chat-1", "status-chat-1");
+    await manager.waitForPendingWrites();
+
+    manager.__resetChatStateForTests();
+
+    expect(manager.getChatSession("chat-1")).toBeUndefined();
+    expect(manager.getChatStatusMessageId("chat-1")).toBeUndefined();
+    expect(manager.getCurrentAgent()).toBe("builder");
   });
 });

@@ -25,6 +25,7 @@ export type SessionResolutionResult =
     };
 
 export interface SessionResolutionDependencies {
+  chatId: string;
   settings: SettingsManager;
   openCodeSession: OpenCodeSessionClient;
   logger?: Logger;
@@ -33,7 +34,12 @@ export interface SessionResolutionDependencies {
 export async function resolvePromptSession(
   dependencies: SessionResolutionDependencies,
 ): Promise<SessionResolutionResult> {
-  const { settings, openCodeSession, logger = defaultLogger } = dependencies;
+  const {
+    chatId,
+    settings,
+    openCodeSession,
+    logger = defaultLogger,
+  } = dependencies;
 
   const currentProject = settings.getCurrentProject();
   if (!currentProject) {
@@ -41,7 +47,7 @@ export async function resolvePromptSession(
   }
 
   const currentDirectory = currentProject.worktree;
-  const existingSession = settings.getCurrentSession();
+  const existingSession = settings.getChatSession(chatId);
 
   if (existingSession && existingSession.directory !== currentDirectory) {
     logger.info(
@@ -49,8 +55,8 @@ export async function resolvePromptSession(
     );
 
     const previousDirectory = existingSession.directory;
-    settings.clearSession();
-    settings.clearStatusMessageId();
+    settings.clearChatSession(chatId);
+    settings.clearChatStatusMessageId(chatId);
 
     return {
       kind: "session-reset",
@@ -95,7 +101,7 @@ export async function resolvePromptSession(
     directory: data.directory ?? currentDirectory,
   };
 
-  settings.setCurrentSession(sessionInfo);
+  settings.setChatSession(chatId, sessionInfo);
 
   logger.info(
     `[SessionResolution] Created new session: id=${sessionInfo.id}, directory=${sessionInfo.directory}`,

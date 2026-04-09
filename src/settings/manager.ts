@@ -186,6 +186,8 @@ function sanitizeSettings(raw: unknown): Settings {
 
 export class SettingsManager {
   private currentSettings: Settings = {};
+  private readonly chatSessions = new Map<string, SessionInfo>();
+  private readonly chatStatusMessageIds = new Map<string, string>();
   private settingsWriteQueue: Promise<void> = Promise.resolve();
   private writeSequence = 0;
   private readonly fileSystem: SettingsFileSystem;
@@ -220,8 +222,14 @@ export class SettingsManager {
 
   __resetSettingsForTests(): void {
     this.currentSettings = {};
+    this.__resetChatStateForTests();
     this.settingsWriteQueue = Promise.resolve();
     this.writeSequence = 0;
+  }
+
+  __resetChatStateForTests(): void {
+    this.chatSessions.clear();
+    this.chatStatusMessageIds.clear();
   }
 
   private async readSettingsFile(): Promise<Settings> {
@@ -318,6 +326,21 @@ export class SettingsManager {
     void this.writeSettingsFile(this.currentSettings);
   }
 
+  getChatSession(chatId: string): SessionInfo | undefined {
+    return cloneSessionInfo(this.chatSessions.get(chatId));
+  }
+
+  setChatSession(chatId: string, session: SessionInfo): void {
+    const clonedSession = cloneSessionInfo(session);
+    if (clonedSession) {
+      this.chatSessions.set(chatId, clonedSession);
+    }
+  }
+
+  clearChatSession(chatId: string): void {
+    this.chatSessions.delete(chatId);
+  }
+
   getCurrentAgent(): string | undefined {
     return this.currentSettings.currentAgent;
   }
@@ -358,6 +381,18 @@ export class SettingsManager {
   clearStatusMessageId(): void {
     this.currentSettings.statusMessageId = undefined;
     void this.writeSettingsFile(this.currentSettings);
+  }
+
+  getChatStatusMessageId(chatId: string): string | undefined {
+    return this.chatStatusMessageIds.get(chatId);
+  }
+
+  setChatStatusMessageId(chatId: string, messageId: string): void {
+    this.chatStatusMessageIds.set(chatId, messageId);
+  }
+
+  clearChatStatusMessageId(chatId: string): void {
+    this.chatStatusMessageIds.delete(chatId);
   }
 
   getSessionDirectoryCache(): SessionDirectoryCacheInfo | undefined {
@@ -412,6 +447,18 @@ export function clearSession(): void {
   settingsManager.clearSession();
 }
 
+export function getChatSession(chatId: string): SessionInfo | undefined {
+  return settingsManager.getChatSession(chatId);
+}
+
+export function setChatSession(chatId: string, sessionInfo: SessionInfo): void {
+  settingsManager.setChatSession(chatId, sessionInfo);
+}
+
+export function clearChatSession(chatId: string): void {
+  settingsManager.clearChatSession(chatId);
+}
+
 export function getCurrentAgent(): string | undefined {
   return settingsManager.getCurrentAgent();
 }
@@ -448,6 +495,21 @@ export function clearStatusMessageId(): void {
   settingsManager.clearStatusMessageId();
 }
 
+export function getChatStatusMessageId(chatId: string): string | undefined {
+  return settingsManager.getChatStatusMessageId(chatId);
+}
+
+export function setChatStatusMessageId(
+  chatId: string,
+  messageId: string,
+): void {
+  settingsManager.setChatStatusMessageId(chatId, messageId);
+}
+
+export function clearChatStatusMessageId(chatId: string): void {
+  settingsManager.clearChatStatusMessageId(chatId);
+}
+
 export function getSessionDirectoryCache():
   | SessionDirectoryCacheInfo
   | undefined {
@@ -470,4 +532,8 @@ export async function waitForPendingSettingsWrites(): Promise<void> {
 
 export function __resetSettingsForTests(): void {
   settingsManager.__resetSettingsForTests();
+}
+
+export function __resetChatStateForTests(): void {
+  settingsManager.__resetChatStateForTests();
 }
