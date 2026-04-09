@@ -89,6 +89,7 @@ function createMockOpenCodeClient() {
       status: vi.fn().mockResolvedValue({ data: {} }),
       abort: vi.fn().mockResolvedValue({ data: true }),
       messages: vi.fn().mockResolvedValue({ data: [] }),
+      prompt: vi.fn().mockResolvedValue(undefined),
     },
     app: {
       agents: vi.fn().mockResolvedValue({
@@ -711,7 +712,7 @@ describe("Selection card builders", () => {
         open_chat_id: "chat-1",
         action: { value: { action: "selection_cancel" } },
       }),
-    ).resolves.toEqual({});
+    ).resolves.toEqual({ toast: { type: "info", content: "Cancelled" } });
 
     await expect(
       router.handleCardAction({

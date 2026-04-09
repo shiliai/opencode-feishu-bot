@@ -10,20 +10,12 @@ const { getModelContextLimitMock, scanWorkdirSubdirsMock } = vi.hoisted(() => ({
   scanWorkdirSubdirsMock: vi.fn(),
 }));
 
-const { handleUpdateCommandMock } = vi.hoisted(() => ({
-  handleUpdateCommandMock: vi.fn(),
-}));
-
 vi.mock("../../src/model/context-limit.js", () => ({
   getModelContextLimit: getModelContextLimitMock,
 }));
 
 vi.mock("../../src/feishu/workdir-scanner.js", () => ({
   scanWorkdirSubdirs: scanWorkdirSubdirsMock,
-}));
-
-vi.mock("../../src/feishu/handlers/update-handler.js", () => ({
-  handleUpdateCommand: handleUpdateCommandMock,
 }));
 
 function createMockSettings() {
@@ -102,6 +94,7 @@ function createMockOpenCodeClient() {
         .mockResolvedValue({ data: { "sess-1": { type: "idle" } } }),
       abort: vi.fn().mockResolvedValue({ data: true }),
       messages: vi.fn().mockResolvedValue({ data: [] }),
+      prompt: vi.fn().mockResolvedValue(undefined),
     },
     app: {
       agents: vi.fn().mockResolvedValue({
@@ -181,12 +174,6 @@ beforeEach(() => {
   getModelContextLimitMock.mockResolvedValue(400_000);
   scanWorkdirSubdirsMock.mockReset();
   scanWorkdirSubdirsMock.mockResolvedValue([]);
-  handleUpdateCommandMock.mockReset();
-  handleUpdateCommandMock.mockResolvedValue({
-    success: true,
-    message: "Already up to date (v0.1.0). No updates available.",
-    needsRestart: false,
-  });
 });
 
 describe("ControlRouter — command dispatch", () => {
@@ -417,45 +404,17 @@ describe("ControlRouter — command dispatch", () => {
     expect(markdownContent).toContain("✨ New");
   });
 
-  it("/task and /tasklist require task infrastructure", async () => {
+  it("/task without args shows usage guide, /tasklist shows empty message", async () => {
     const renderer = createMockRenderer();
     const router = createRouter({ renderer });
 
     const taskResult = await router.handleCommand("chat-1", "/task");
     expect(taskResult.success).toBe(false);
-    expect(taskResult.message).toContain("not available");
+    expect(taskResult.message).toContain("Scheduled Task — Usage");
 
     const tasklistResult = await router.handleCommand("chat-1", "/tasklist");
-    expect(tasklistResult.success).toBe(false);
-    expect(tasklistResult.message).toContain("not available");
-  });
-
-  it("/update delegates to the update handler and sends the result text", async () => {
-    const renderer = createMockRenderer();
-    const logger = {
-      debug: vi.fn(),
-      info: vi.fn(),
-      warn: vi.fn(),
-      error: vi.fn(),
-    };
-    handleUpdateCommandMock.mockResolvedValueOnce({
-      success: true,
-      message: "Update successful: v0.1.0 → v0.1.1",
-      needsRestart: true,
-    });
-    const router = createRouter({ renderer, logger });
-
-    const result = await router.handleCommand("chat-1", "/update");
-
-    expect(handleUpdateCommandMock).toHaveBeenCalledWith(logger);
-    expect(renderer.sendText).toHaveBeenCalledWith(
-      "chat-1",
-      "Update successful: v0.1.0 → v0.1.1",
-    );
-    expect(result).toEqual({
-      success: true,
-      message: "Update successful: v0.1.0 → v0.1.1",
-    });
+    expect(tasklistResult.success).toBe(true);
+    expect(tasklistResult.message).toContain("No scheduled tasks");
   });
 
   it("/project alias renders the same picker as /projects", async () => {

@@ -5,22 +5,26 @@ function parseCommonSchedule(text: string): ParsedTaskSchedule {
   const lower = text.toLowerCase().trim();
   const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
 
-  const everyMinutesMatch = lower.match(/every\s+(\d+)\s*min/);
+  const everyMinutesMatch = lower.match(
+    /^every\s+([1-9]\d*)\s*(?:m|min|mins|minute|minutes)\b/,
+  );
   if (everyMinutesMatch) {
     const mins = Number.parseInt(everyMinutesMatch[1], 10);
-    const cron = `*/${Math.max(5, mins)} * * * *`;
-    const nextRun = computeNextCronRunAt(cron, timezone);
-    return {
-      kind: "cron",
-      cron,
-      runAt: null,
-      timezone,
-      summary:
-        mins >= 60
-          ? `every ${Math.floor(mins / 60)}h${mins % 60 ? ` ${mins % 60}m` : ""}`
-          : `every ${mins}m`,
-      nextRunAt: nextRun?.toISOString() ?? new Date().toISOString(),
-    };
+    if (Number.isFinite(mins) && mins > 0) {
+      const cron = `*/${Math.max(5, mins)} * * * *`;
+      const nextRun = computeNextCronRunAt(cron, timezone);
+      return {
+        kind: "cron",
+        cron,
+        runAt: null,
+        timezone,
+        summary:
+          mins >= 60
+            ? `every ${Math.floor(mins / 60)}h${mins % 60 ? ` ${mins % 60}m` : ""}`
+            : `every ${mins}m`,
+        nextRunAt: nextRun?.toISOString() ?? new Date().toISOString(),
+      };
+    }
   }
 
   if (lower.includes("hour") || lower.includes("hourly")) {

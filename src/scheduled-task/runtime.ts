@@ -140,6 +140,11 @@ export class ScheduledTaskRuntime {
     } else {
       updates.nextRunAt = null;
       this.callbacks.onTaskUpdate(taskId, updates);
+      this.store.removeTask(taskId);
+      this.cancelTask(taskId);
+      this.logger.info(
+        `[TaskRuntime] One-time task ${taskId} completed and removed`,
+      );
     }
   }
 }

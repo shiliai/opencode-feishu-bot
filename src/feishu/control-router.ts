@@ -43,6 +43,8 @@ import {
 } from "./selection-card/index.js";
 import type { StatusStore } from "./status-store.js";
 import { scanWorkdirSubdirs, type WorkdirEntry } from "./workdir-scanner.js";
+import { InMemoryTaskStore } from "../scheduled-task/store.js";
+import { ScheduledTaskRuntime } from "../scheduled-task/runtime.js";
 
 export type ControlCommand =
   | "/help"
@@ -55,7 +57,6 @@ export type ControlCommand =
   | "/agent"
   | "/task"
   | "/tasklist"
-  | "/update"
   | "/status"
   | "/version"
   | "/abort";
@@ -79,7 +80,6 @@ const SUPPORTED_COMMANDS = new Set<string>([
   "/agent",
   "/task",
   "/tasklist",
-  "/update",
   "/status",
   "/version",
   "/abort",
@@ -175,6 +175,7 @@ export interface OpenCodeSessionClient {
     directory?: string;
     limit?: number;
   }): Promise<{ data?: unknown; error?: unknown }>;
+  prompt(parameters: Record<string, unknown>): Promise<unknown>;
 }
 
 export interface OpenCodeGlobalClient {
@@ -443,8 +444,6 @@ export class ControlRouter {
         return this.handleTask(receiveId, args);
       case "/tasklist":
         return this.handleTasklist(receiveId);
-      case "/update":
-        return this.handleUpdate(receiveId);
       case "/status":
         return this.handleStatus(receiveId);
       case "/version":
@@ -698,7 +697,7 @@ export class ControlRouter {
         }
       }
       case "selection_cancel":
-        return {};
+        return buildCardActionToast("Cancelled", "info");
       case "selection_back":
       case "selection_page": {
         const page = action.action === "selection_page" ? action.page : 0;
@@ -1770,27 +1769,56 @@ export class ControlRouter {
     | import("../scheduled-task/runtime.js").ScheduledTaskRuntime
     | null = null;
 
-  setTaskInfrastructure(
-    store: import("../scheduled-task/store.js").InMemoryTaskStore,
-    runtime: import("../scheduled-task/runtime.js").ScheduledTaskRuntime,
-  ): void {
-    this.taskStore = store;
-    this.taskRuntime = runtime;
+  private ensureTaskInfrastructure(): void {
+    if (this.taskStore && this.taskRuntime) {
+      return;
+    }
+
+    this.taskStore = new InMemoryTaskStore();
+    const store = this.taskStore;
+    const logger = this.logger;
+    const sessionClient = this.openCodeSession;
+    this.taskRuntime = new ScheduledTaskRuntime(
+      store,
+      {
+        async executeTask(
+          task: import("../scheduled-task/types.js").ScheduledTask,
+        ) {
+          const { executeTask } = await import("../scheduled-task/executor.js");
+          return executeTask({ sessionClient, logger }, task);
+        },
+        onTaskUpdate(
+          taskId: string,
+          updates: Partial<import("../scheduled-task/types.js").ScheduledTask>,
+        ) {
+          store.updateTask(taskId, updates);
+        },
+      },
+      logger,
+    );
+    this.taskRuntime.start();
   }
 
   private async handleTask(
     receiveId: string,
     args?: string,
   ): Promise<ControlCommandResult> {
-    if (!this.taskStore || !this.taskRuntime) {
-      const message = "Scheduled tasks not available";
-      await this.renderer.sendText(receiveId, message);
-      return { success: false, message };
-    }
+    this.ensureTaskInfrastructure();
 
     if (!args) {
-      const message =
-        "Usage: /task <schedule> <prompt>\nExample: /task every 30m, Check the build status";
+      const message = [
+        "**Scheduled Task — Usage**",
+        "",
+        "`/task <schedule>, <prompt>`",
+        "",
+        "**Examples:**",
+        "• `/task every 30m, check build status`",
+        "• `/task daily at 9:00, run tests and report`",
+        "• `/task hourly, review open PRs`",
+        "• `/task weekdays 10:00, generate standup summary`",
+        "",
+        "Use `/tasklist` to view and manage scheduled tasks.",
+      ].join("\n");
       await this.renderer.sendText(receiveId, message);
       return { success: false, message };
     }
@@ -1823,7 +1851,8 @@ export class ControlRouter {
     scheduleText: string,
     prompt: string,
   ): Promise<ControlCommandResult> {
-    const TASK_LIMIT = 10;
+    const { getConfig } = await import("../config.js");
+    const TASK_LIMIT = getConfig().scheduledTaskLimit;
     const currentTasks = this.taskStore!.listTasks();
     if (currentTasks.length >= TASK_LIMIT) {
       const message = `Task limit reached (${TASK_LIMIT}). Remove tasks with /tasklist first.`;
@@ -1893,13 +1922,9 @@ export class ControlRouter {
   private async handleTasklist(
     receiveId: string,
   ): Promise<ControlCommandResult> {
-    if (!this.taskStore) {
-      const message = "Scheduled tasks not available";
-      await this.renderer.sendText(receiveId, message);
-      return { success: false, message };
-    }
+    this.ensureTaskInfrastructure();
 
-    const tasks = this.taskStore.listTasks();
+    const tasks = this.taskStore!.listTasks();
 
     if (tasks.length === 0) {
       const message = "No scheduled tasks. Use /task to create one.";

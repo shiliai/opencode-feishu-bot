@@ -57,13 +57,13 @@ export async function loadContextFromHistory(
       }
 
       const info = msg.info;
+      const role = getTrimmedString(info.role);
 
-      if (
-        getTrimmedString(info.role) === "assistant" &&
-        info.summary !== true
-      ) {
+      if ((role === "user" || role === "assistant") && info.summary !== true) {
         messageCount++;
+      }
 
+      if (role === "assistant" && info.summary !== true) {
         const tokens = isRecord(info.tokens) ? info.tokens : null;
         if (tokens) {
           const input = getNumber(tokens.input) ?? 0;
@@ -78,9 +78,13 @@ export async function loadContextFromHistory(
         }
       }
 
-      const createdAt = getTrimmedString(info.createdAt);
-      if (createdAt && (!lastActiveAt || createdAt > lastActiveAt)) {
-        lastActiveAt = createdAt;
+      const timeObj = isRecord(info.time) ? info.time : null;
+      const created = getNumber(timeObj?.created);
+      if (created !== null && created > 0) {
+        const ts = new Date(created * 1000).toISOString();
+        if (!lastActiveAt || ts > lastActiveAt) {
+          lastActiveAt = ts;
+        }
       }
     }
   } catch (error) {
@@ -122,11 +126,9 @@ export async function loadSessionPreview(
 
       if ((role === "user" || role === "assistant") && info.summary !== true) {
         let content = "";
-        if (typeof info.text === "string") {
-          content = info.text;
-        } else if (Array.isArray(info.parts)) {
+        if (Array.isArray(msg.parts)) {
           const textParts: string[] = [];
-          for (const part of info.parts) {
+          for (const part of msg.parts) {
             if (isRecord(part) && typeof part.text === "string") {
               textParts.push(part.text);
             }

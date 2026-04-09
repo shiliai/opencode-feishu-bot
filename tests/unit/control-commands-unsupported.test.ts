@@ -56,10 +56,12 @@ function createMockOpenCodeClient() {
   return {
     session: {
       create: vi.fn().mockResolvedValue({ data: { id: "new-session-1" } }),
+      get: vi.fn().mockResolvedValue({ data: null, error: undefined }),
       list: vi.fn().mockResolvedValue({ data: [] }),
       status: vi.fn().mockResolvedValue({ data: {} }),
       abort: vi.fn().mockResolvedValue({ data: true }),
       messages: vi.fn().mockResolvedValue({ data: [] }),
+      prompt: vi.fn().mockResolvedValue(undefined),
     },
     app: {
       agents: vi.fn().mockResolvedValue({ data: [] }),

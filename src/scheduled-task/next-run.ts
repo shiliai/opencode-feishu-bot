@@ -92,9 +92,18 @@ function parseField(
   return Array.from(values).sort((a, b) => a - b);
 }
 
+/**
+ * Compute the next run time for a 5-field cron expression.
+ *
+ * NOTE: The `timezone` parameter is currently accepted but not applied;
+ * scheduling uses the server's local timezone. This is sufficient for
+ * single-server deployments where the bridge and cron share the same TZ.
+ * Implement timezone-aware scheduling (e.g. via Intl timezone offsets) if
+ * multi-TZ deployments are needed.
+ */
 export function computeNextCronRunAt(
   cronExpression: string,
-  _timezone: string,
+  timezone: string,
   after?: Date,
 ): Date | null {
   const fields = cronExpression.trim().split(/\s+/);

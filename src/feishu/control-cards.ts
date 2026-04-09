@@ -43,7 +43,6 @@ const COMMAND_HELP: Array<{ command: string; description: string }> = [
   { command: "/agent [name]", description: "Switch agent (or show picker)" },
   { command: "/task", description: "Create a scheduled task" },
   { command: "/tasklist", description: "List and manage scheduled tasks" },
-  { command: "/update", description: "Check for updates and restart" },
   { command: "/status", description: "Show current status" },
   { command: "/version", description: "Show bridge version" },
   { command: "/abort", description: "Abort the current session" },
