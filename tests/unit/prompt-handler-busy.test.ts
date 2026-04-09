@@ -170,7 +170,7 @@ describe("PromptIngressHandler busy paths", () => {
     expect(openCodePromptAsync.promptAsync).not.toHaveBeenCalled();
   });
 
-  it("blocks when OpenCode session status is busy", async () => {
+  it("appends follow-up text when the current OpenCode session is busy", async () => {
     const settings = createMockSettings({
       getCurrentProject: vi.fn().mockReturnValue({
         id: "proj-1",
@@ -190,6 +190,71 @@ describe("PromptIngressHandler busy paths", () => {
         error: undefined,
       }),
     };
+    const promptAsyncCalls: Array<unknown[]> = [];
+    const openCodePromptAsync: OpenCodePromptAsyncClient = {
+      promptAsync: vi.fn().mockImplementation(async (params) => {
+        promptAsyncCalls.push(params);
+      }),
+    };
+
+    const scheduledTasks: Array<() => void> = [];
+
+    const handler = new PromptIngressHandler({
+      settings,
+      interactionManager,
+      openCodeSession,
+      openCodeSessionStatus,
+      openCodePromptAsync,
+      scheduleAsync: (task) => scheduledTasks.push(task),
+    });
+
+    const result = await handler.handleMessageEvent(
+      makeDmTextEvent("while busy"),
+    );
+
+    expect(result.kind).toBe("appended");
+    if (result.kind !== "appended") {
+      throw new Error("unexpected result kind");
+    }
+    expect(result.receiveId).toBe("chat-1");
+    expect(result.sessionId).toBe("sess-1");
+    expect(result.followUpSummary).toBe("📥 Follow-up added: while busy");
+    expect(interactionManager.startBusy).not.toHaveBeenCalled();
+    for (const task of scheduledTasks) {
+      await task();
+    }
+    expect(promptAsyncCalls).toEqual([
+      {
+        sessionID: "sess-1",
+        directory: "/workspace/project",
+        parts: [{ type: "text", text: "while busy" }],
+      },
+    ]);
+  });
+
+  it("still blocks when another session in the directory is busy", async () => {
+    const settings = createMockSettings({
+      getCurrentProject: vi.fn().mockReturnValue({
+        id: "proj-1",
+        worktree: "/workspace/project",
+      }),
+      getChatSession: vi.fn().mockReturnValue({
+        id: "sess-1",
+        title: "S",
+        directory: "/workspace/project",
+      }),
+    });
+    const interactionManager = createMockInteractionManager();
+    const openCodeSession: OpenCodeSessionClient = { create: vi.fn() };
+    const openCodeSessionStatus: OpenCodeSessionStatusClient = {
+      status: vi.fn().mockResolvedValue({
+        data: {
+          "sess-1": { type: "idle" },
+          "sess-2": { type: "busy" },
+        },
+        error: undefined,
+      }),
+    };
     const openCodePromptAsync: OpenCodePromptAsyncClient = {
       promptAsync: vi.fn(),
     };
@@ -203,7 +268,7 @@ describe("PromptIngressHandler busy paths", () => {
     });
 
     const result = await handler.handleMessageEvent(
-      makeDmTextEvent("while busy"),
+      makeDmTextEvent("blocked by other session"),
     );
 
     expect(result.kind).toBe("blocked");
@@ -211,8 +276,6 @@ describe("PromptIngressHandler busy paths", () => {
       throw new Error("unexpected result kind");
     }
     expect(result.reason).toBe("session_busy");
-    expect(result.receiveId).toBe("chat-1");
-    expect(interactionManager.startBusy).not.toHaveBeenCalled();
     expect(openCodePromptAsync.promptAsync).not.toHaveBeenCalled();
   });
 

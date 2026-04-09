@@ -358,6 +358,88 @@ describe("PromptIngressHandler", () => {
     });
   });
 
+  it("appends busy follow-up text without prepending history or overriding model settings", async () => {
+    const settings = createMockSettings({
+      getCurrentProject: vi.fn().mockReturnValue({
+        id: "proj-1",
+        worktree: "/workspace/project",
+      }),
+      getChatSession: vi.fn().mockReturnValue({
+        id: "sess-1",
+        title: "Existing",
+        directory: "/workspace/project",
+      }),
+      getCurrentModel: vi.fn().mockReturnValue({
+        providerID: "anthropic",
+        modelID: "claude-sonnet-4-20250514",
+        variant: "beta",
+      }),
+      getCurrentAgent: vi.fn().mockReturnValue("build"),
+    });
+    const interactionManager = createMockInteractionManager();
+    const openCodeSession: OpenCodeSessionClient = { create: vi.fn() };
+    const openCodeSessionStatus: OpenCodeSessionStatusClient = {
+      status: vi.fn().mockResolvedValue({
+        data: { "sess-1": { type: "busy" } },
+        error: undefined,
+      }),
+    };
+    const openCodePromptAsync: OpenCodePromptAsyncClient = {
+      promptAsync: vi.fn().mockResolvedValue(undefined),
+    };
+    const messageReader = createMockMessageReader();
+    vi.mocked(messageReader.getChatMessages).mockResolvedValue([
+      {
+        messageId: "msg-current",
+        senderId: "user-1",
+        senderType: "user",
+        content: "Busy follow-up",
+        messageType: "text",
+        createdAt: "2026-04-07T10:01:00.000Z",
+      },
+      {
+        messageId: "msg-prior",
+        senderId: "user-2",
+        senderType: "user",
+        content: "Prior context only",
+        messageType: "text",
+        createdAt: "2026-04-07T10:00:00.000Z",
+      },
+    ]);
+
+    const scheduledTasks: Array<() => void> = [];
+    const handler = new PromptIngressHandler({
+      settings,
+      interactionManager,
+      openCodeSession,
+      openCodeSessionStatus,
+      openCodePromptAsync,
+      messageReader,
+      scheduleAsync: (task) => scheduledTasks.push(task),
+    });
+
+    const result = await handler.handlePromptInput({
+      messageId: "msg-current",
+      chatId: "chat-1",
+      text: "Busy follow-up",
+    });
+
+    expect(result.kind).toBe("appended");
+    if (result.kind !== "appended") {
+      throw new Error("unexpected result kind");
+    }
+    expect(result.followUpSummary).toBe("📥 Follow-up added: Busy follow-up");
+    await runScheduledTasks(scheduledTasks);
+
+    expect(messageReader.getChatMessages).not.toHaveBeenCalled();
+    expect(interactionManager.startBusy).not.toHaveBeenCalled();
+    expect(openCodePromptAsync.promptAsync).toHaveBeenCalledWith({
+      sessionID: "sess-1",
+      directory: "/workspace/project",
+      parts: [{ type: "text", text: "Busy follow-up" }],
+    });
+  });
+
   it("resets poisoned session history before dispatching a file prompt", async () => {
     let currentSession:
       | { id: string; title: string; directory: string }

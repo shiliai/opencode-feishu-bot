@@ -179,6 +179,16 @@ export class FeishuRenderer {
     assertFeishuApiSuccess("patch card message", response);
   }
 
+  async deleteMessage(messageId: string): Promise<void> {
+    const response = (await this.client.im.message.delete({
+      path: {
+        message_id: messageId,
+      },
+    })) as FeishuApiResponse;
+
+    assertFeishuApiSuccess("delete message", response);
+  }
+
   // Pre-bound card senders
   async renderStatusCard(
     receiveId: string,

@@ -37,6 +37,8 @@ Common optional settings:
 - `THROTTLE_STATUS_CARD_UPDATE_INTERVAL_MS`
 - `THROTTLE_STATUS_CARD_PATCH_RETRY_DELAY_MS`
 - `THROTTLE_STATUS_CARD_PATCH_MAX_ATTEMPTS`
+- `STATUS_CARD_RECENT_UPDATES_COUNT` — defaults to `5`; set `0` to hide recent progress history
+- `STATUS_CARD_RECREATE_INTERVAL` — defaults to `5`; set `0` to disable periodic status-card recreation
 - `CONTROL_CATALOG_CACHE_TTL_MS` — defaults to `600000` (10 minutes)
 - `CONTROL_CATALOG_MODEL_STATE_PATH` — defaults to `${HOME}/.local/state/opencode/model.json` for favorites/recent enrichment ordering (when overriding, use an absolute path like `/home/your-user/.local/state/opencode/model.json`)
 
@@ -91,7 +93,8 @@ The bridge currently supports these slash commands in Feishu chat:
 
 ## Response UX highlights
 
-- Streaming status card now includes extracted reasoning lane, tool usage hints, and compact footer metrics.
+- Streaming status card now includes extracted reasoning, a live todo section, recent progress history, and compact footer metrics.
+- Long-running status cards can be periodically recreated at the latest timeline position so progress stays visible in busy chats.
 - Final replies are markdown-optimized for card/post readability (headings/tables/code blocks).
 - Remote markdown image URLs are resolved to Feishu `img_xxx` keys when possible for better inline rendering.
 - Image messages sent in Feishu chat are accepted and forwarded to the OpenCode session.

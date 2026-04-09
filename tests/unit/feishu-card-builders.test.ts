@@ -39,6 +39,27 @@ describe("Feishu Card Builders", () => {
           status: "completed",
         },
       ],
+      todos: [
+        { id: "1", content: "Done item", status: "completed" },
+        { id: "2", content: "Active item", status: "in_progress" },
+      ],
+      recentUpdates: [
+        {
+          kind: "partial",
+          key: "partial:1",
+          summary: "💬 Installing dependencies...",
+        },
+        {
+          kind: "tool",
+          key: "tool:c1:completed",
+          summary: "⚙️ npm install · done",
+        },
+        {
+          kind: "follow_up",
+          key: "follow-up:1",
+          summary: "📥 Follow-up added: use the staging environment",
+        },
+      ],
       lastPartialText: "Installing dependencies...",
       latestTokens: {
         input: 10,
@@ -54,6 +75,12 @@ describe("Feishu Card Builders", () => {
     expect(cardStr).toContain("Agent Working");
     expect(cardStr).toContain("I should use bash.");
     expect(cardStr).toContain("Installing dependencies...");
+    expect(cardStr).toContain("📝 Todo");
+    expect(cardStr).toContain("🕒 Recent updates");
+    expect(cardStr).toContain(
+      "📥 Follow-up added: use the staging environment",
+    );
+    expect(cardStr).toContain("🧮");
   });
 
   it("buildCompleteCard", () => {
@@ -80,6 +107,7 @@ describe("Feishu Card Builders", () => {
       },
       template: "green",
     });
+    expect(JSON.stringify(card)).toContain("🧮");
     expect(card).toMatchSnapshot();
   });
 

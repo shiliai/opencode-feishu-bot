@@ -19,6 +19,11 @@ import {
 
 export type PromptIngressResult =
   | ({ kind: "dispatched"; text: string } & ResponsePipelineTurnContext)
+  | ({
+      kind: "appended";
+      text: string;
+      followUpSummary: string;
+    } & ResponsePipelineTurnContext)
   | {
       kind: "blocked";
       reason: string;
@@ -116,8 +121,19 @@ export interface PromptIngressDependencies {
   scheduleAsync?: (task: () => void) => void;
 }
 
+type ReadyPromptSessionResolution = Extract<
+  SessionResolutionResult,
+  { kind: "session-ready" }
+>;
+
+interface OpenCodeBusyState {
+  anyBusy: boolean;
+  currentSessionBusy: boolean;
+}
+
 const HISTORY_CONTEXT_PREFIX =
   "Recent chat context (oldest to newest, excluding the current message):";
+const FOLLOW_UP_SUMMARY_MAX_CHARS = 80;
 
 function summarizeMessageTypes(messages: ChatMessage[]): string {
   const counts = new Map<string, number>();
@@ -128,11 +144,33 @@ function summarizeMessageTypes(messages: ChatMessage[]): string {
   return JSON.stringify(Object.fromEntries(counts));
 }
 
+function normalizeInlineText(text: string): string {
+  return text.replace(/\s+/g, " ").trim();
+}
+
+function truncateInlineText(text: string, maxLength: number): string {
+  if (text.length <= maxLength) {
+    return text;
+  }
+
+  return `${text.slice(0, Math.max(0, maxLength - 1)).trimEnd()}…`;
+}
+
 export async function isOpenCodeSessionBusy(
   client: OpenCodeSessionStatusClient,
   directory: string,
   logger?: Logger,
 ): Promise<boolean> {
+  const busyState = await getOpenCodeBusyState(client, directory, null, logger);
+  return busyState.anyBusy;
+}
+
+async function getOpenCodeBusyState(
+  client: OpenCodeSessionStatusClient,
+  directory: string,
+  sessionId: string | null,
+  logger?: Logger,
+): Promise<OpenCodeBusyState> {
   try {
     const { data, error } = await client.status({ directory });
     if (error || !data) {
@@ -140,22 +178,27 @@ export async function isOpenCodeSessionBusy(
         `[PromptIngress] session.status() API error for directory=${directory}, fail-open (treating as not busy)`,
         error,
       );
-      return false;
+      return { anyBusy: false, currentSessionBusy: false };
     }
 
-    for (const status of Object.values(data)) {
+    let anyBusy = false;
+    let currentSessionBusy = false;
+    for (const [statusSessionId, status] of Object.entries(data)) {
       if (status.type === "busy" || status.type === "retry") {
-        return true;
+        anyBusy = true;
+        if (sessionId && statusSessionId === sessionId) {
+          currentSessionBusy = true;
+        }
       }
     }
 
-    return false;
+    return { anyBusy, currentSessionBusy };
   } catch (error) {
     (logger ?? defaultLogger).warn(
       `[PromptIngress] session.status() threw for directory=${directory}, fail-open (treating as not busy)`,
       error,
     );
-    return false;
+    return { anyBusy: false, currentSessionBusy: false };
   }
 }
 
@@ -187,6 +230,33 @@ export class PromptIngressHandler {
 
   private getBasePromptParts(input: PromptIngressInput): PromptPartInput[] {
     return [...(input.parts ?? [{ type: "text", text: input.text }])];
+  }
+
+  private buildFollowUpSummary(input: PromptIngressInput): string {
+    const baseParts = this.getBasePromptParts(input);
+    const textContent = normalizeInlineText(
+      baseParts
+        .filter((part): part is PromptTextPart => part.type === "text")
+        .map((part) => part.text)
+        .join(" "),
+    );
+    const fileCount = baseParts.filter((part) => part.type === "file").length;
+
+    const preview = textContent
+      ? truncateInlineText(textContent, FOLLOW_UP_SUMMARY_MAX_CHARS)
+      : undefined;
+    const fileSuffix =
+      fileCount > 0 ? ` (+${fileCount} file${fileCount === 1 ? "" : "s"})` : "";
+
+    if (preview) {
+      return `📥 Follow-up added: ${preview}${fileSuffix}`;
+    }
+
+    if (fileCount > 0) {
+      return `📥 Follow-up added${fileSuffix}`;
+    }
+
+    return "📥 Follow-up added";
   }
 
   private formatHistorySender(message: ChatMessage): string {
@@ -256,6 +326,15 @@ export class PromptIngressHandler {
       );
       return baseParts;
     }
+  }
+
+  private async resolvePromptParts(
+    input: PromptIngressInput,
+    includeHistory: boolean,
+  ): Promise<PromptPartInput[]> {
+    return includeHistory
+      ? this.buildPromptParts(input)
+      : this.getBasePromptParts(input);
   }
 
   private hasFileParts(input: PromptIngressInput): boolean {
@@ -396,6 +475,92 @@ export class PromptIngressHandler {
     return { kind: "unsupported", messageType: messageType ?? "unknown" };
   }
 
+  private schedulePromptDispatch(
+    input: PromptIngressInput,
+    resolution: ReadyPromptSessionResolution,
+    options: {
+      includeHistory: boolean;
+      includeModelSettings: boolean;
+      clearBusyOnError: boolean;
+      mode: "dispatched" | "appended";
+    },
+  ): void {
+    this.scheduleAsync(async () => {
+      try {
+        const parts = await this.resolvePromptParts(
+          input,
+          options.includeHistory,
+        );
+        const historyIncluded = parts.some(
+          (part) =>
+            part.type === "text" &&
+            part.text.startsWith(HISTORY_CONTEXT_PREFIX),
+        );
+
+        const fileParts = parts.filter(
+          (p): p is Extract<PromptPartInput, { type: "file" }> =>
+            p.type === "file",
+        );
+        if (fileParts.length > 0) {
+          for (const fp of fileParts) {
+            this.logger.debug(
+              `[PromptIngress] HOP-4 prompt file part: mime=${fp.mime}, filename=${fp.filename ?? "N/A"}, urlScheme=${fp.url.slice(0, 40)}..., urlLength=${fp.url.length}`,
+            );
+          }
+        }
+
+        const promptParams: {
+          sessionID: string;
+          directory: string;
+          parts: PromptPartInput[];
+          model?: { providerID: string; modelID: string };
+          agent?: string;
+          variant?: string;
+        } = {
+          sessionID: resolution.sessionInfo.id,
+          directory: resolution.directory,
+          parts,
+        };
+
+        if (options.includeModelSettings) {
+          const model = this.settings.getCurrentModel();
+          const agent = this.settings.getCurrentAgent();
+
+          if (model) {
+            promptParams.model = {
+              providerID: model.providerID,
+              modelID: model.modelID,
+            };
+          }
+          if (agent) {
+            promptParams.agent = agent;
+          }
+          if (model?.variant) {
+            promptParams.variant = model.variant;
+          }
+        }
+
+        this.logger.info(
+          `[PromptIngress] ${options.mode === "appended" ? "Appending follow-up" : "Dispatching prompt"}: sourceMessageId=${input.messageId}, chatId=${input.chatId}, session=${resolution.sessionInfo.id}, directory=${resolution.directory}, historyIncluded=${historyIncluded}, totalParts=${parts.length}, fileParts=${fileParts.length}, includeModelSettings=${options.includeModelSettings}`,
+        );
+
+        await this.openCodePromptAsync.promptAsync(promptParams);
+
+        this.logger.info(
+          `[PromptIngress] ${options.mode === "appended" ? "Follow-up appended" : "Prompt dispatched"}: sourceMessageId=${input.messageId}, session=${resolution.sessionInfo.id}, directory=${resolution.directory}, fileParts=${fileParts.length}`,
+        );
+      } catch (error) {
+        this.logger.error(
+          `[PromptIngress] Async ${options.mode === "appended" ? "append" : "prompt"} error: sourceMessageId=${input.messageId}, chatId=${input.chatId}, session=${resolution.sessionInfo.id}, directory=${resolution.directory}`,
+          error,
+        );
+        if (options.clearBusyOnError) {
+          this.interactionManager.clearBusy(input.chatId);
+        }
+      }
+    });
+  }
+
   private async handlePromptDispatch(
     input: PromptIngressInput,
   ): Promise<PromptIngressResult> {
@@ -496,15 +661,37 @@ export class PromptIngressHandler {
       );
     }
 
-    const busy = await isOpenCodeSessionBusy(
+    const busyState = await getOpenCodeBusyState(
       this.openCodeSessionStatus,
       resolution.directory,
+      resolution.sessionInfo.id,
       this.logger,
     );
 
-    if (busy) {
+    if (busyState.currentSessionBusy) {
       this.logger.info(
-        `[PromptIngress] Blocked: OpenCode session is busy for directory=${resolution.directory}`,
+        `[PromptIngress] Appending follow-up to busy session: session=${resolution.sessionInfo.id}, directory=${resolution.directory}`,
+      );
+      this.schedulePromptDispatch(input, resolution, {
+        includeHistory: false,
+        includeModelSettings: false,
+        clearBusyOnError: false,
+        mode: "appended",
+      });
+      return {
+        kind: "appended",
+        sessionId: resolution.sessionInfo.id,
+        directory: resolution.directory,
+        receiveId: input.chatId,
+        sourceMessageId: input.messageId,
+        text: input.text,
+        followUpSummary: this.buildFollowUpSummary(input),
+      };
+    }
+
+    if (busyState.anyBusy) {
+      this.logger.info(
+        `[PromptIngress] Blocked: another OpenCode session is busy for directory=${resolution.directory}`,
       );
       return {
         kind: "blocked",
@@ -513,76 +700,15 @@ export class PromptIngressHandler {
       };
     }
 
-    const model = this.settings.getCurrentModel();
-    const agent = this.settings.getCurrentAgent();
-
     this.interactionManager.startBusy(input.chatId, {
       messageId: input.messageId,
     });
 
-    this.scheduleAsync(async () => {
-      try {
-        const parts = await this.buildPromptParts(input);
-        const historyIncluded = parts.some(
-          (part) =>
-            part.type === "text" &&
-            part.text.startsWith(HISTORY_CONTEXT_PREFIX),
-        );
-
-        const fileParts = parts.filter(
-          (p): p is Extract<PromptPartInput, { type: "file" }> =>
-            p.type === "file",
-        );
-        if (fileParts.length > 0) {
-          for (const fp of fileParts) {
-            this.logger.debug(
-              `[PromptIngress] HOP-4 prompt file part: mime=${fp.mime}, filename=${fp.filename ?? "N/A"}, urlScheme=${fp.url.slice(0, 40)}..., urlLength=${fp.url.length}`,
-            );
-          }
-        }
-
-        const promptParams: {
-          sessionID: string;
-          directory: string;
-          parts: PromptPartInput[];
-          model?: { providerID: string; modelID: string };
-          agent?: string;
-          variant?: string;
-        } = {
-          sessionID: resolution.sessionInfo.id,
-          directory: resolution.directory,
-          parts,
-        };
-
-        if (model) {
-          promptParams.model = {
-            providerID: model.providerID,
-            modelID: model.modelID,
-          };
-        }
-        if (agent) {
-          promptParams.agent = agent;
-        }
-        if (model?.variant) {
-          promptParams.variant = model.variant;
-        }
-
-        this.logger.info(
-          `[PromptIngress] Dispatching prompt: sourceMessageId=${input.messageId}, chatId=${input.chatId}, session=${resolution.sessionInfo.id}, directory=${resolution.directory}, historyIncluded=${historyIncluded}, totalParts=${parts.length}, fileParts=${fileParts.length}, model=${model ? `${model.providerID}/${model.modelID}` : "default"}, agent=${agent ?? "default"}, variant=${model?.variant ?? "default"}`,
-        );
-
-        await this.openCodePromptAsync.promptAsync(promptParams);
-
-        this.logger.info(
-          `[PromptIngress] Prompt dispatched: sourceMessageId=${input.messageId}, session=${resolution.sessionInfo.id}, directory=${resolution.directory}, fileParts=${fileParts.length}`,
-        );
-      } catch (error) {
-        this.logger.error(
-          `[PromptIngress] Async prompt error: sourceMessageId=${input.messageId}, chatId=${input.chatId}, session=${resolution.sessionInfo.id}, directory=${resolution.directory}`,
-          error,
-        );
-        this.interactionManager.clearBusy(input.chatId);
-      }
+    this.schedulePromptDispatch(input, resolution, {
+      includeHistory: true,
+      includeModelSettings: true,
+      clearBusyOnError: true,
+      mode: "dispatched",
     });
 
     return {

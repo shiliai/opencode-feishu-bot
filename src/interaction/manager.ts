@@ -391,6 +391,10 @@ export class InteractionManager {
         );
       }
 
+      if (!state && inputType === "text") {
+        return createAllowDecision(inputType, null, command, true);
+      }
+
       if (state) {
         return createBlockDecision(
           inputType,

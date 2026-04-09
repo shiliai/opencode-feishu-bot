@@ -7,12 +7,14 @@ describe("FeishuRenderer", () => {
     .fn()
     .mockResolvedValue({ data: { message_id: "msg-123" } });
   const patchMock = vi.fn().mockResolvedValue({});
+  const deleteMock = vi.fn().mockResolvedValue({});
 
   const mockClient = {
     im: {
       message: {
         create: createMock,
         patch: patchMock,
+        delete: deleteMock,
       },
     },
   } as unknown as Client;
@@ -107,6 +109,17 @@ describe("FeishuRenderer", () => {
     const parsed = JSON.parse(args.data.content);
     expect(parsed.header.template).toBe("green");
     expect(parsed.config.update_multi).toBe(true);
+  });
+
+  it("deletes message", async () => {
+    deleteMock.mockReset();
+    deleteMock.mockResolvedValue({});
+
+    await renderer.deleteMessage("msg-1");
+
+    expect(deleteMock).toHaveBeenCalledWith({
+      path: { message_id: "msg-1" },
+    });
   });
 
   it("throws when sendCard API returns a non-zero code", async () => {

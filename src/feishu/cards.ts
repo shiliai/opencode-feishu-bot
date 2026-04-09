@@ -149,7 +149,8 @@ export function buildStreamingStatusContent(
     reasoningText = resolveImages(reasoningText);
   }
 
-  const toolSummary = formatToolSummary(state.toolEvents);
+  const todoSummary = formatTodoSummary(state);
+  const recentUpdatesSummary = formatRecentUpdatesSummary(state);
 
   let answerContent = state.lastPartialText?.trim() ?? "";
   if (answerContent && resolveImages) {
@@ -161,7 +162,11 @@ export function buildStreamingStatusContent(
     : "";
 
   const shouldShowFooter = Boolean(
-    reasoningText || toolSummary || state.latestTokens,
+    reasoningText ||
+    todoSummary ||
+    recentUpdatesSummary ||
+    optimizedAnswer ||
+    state.latestTokens,
   );
   const footer = shouldShowFooter
     ? buildFooterLine(Date.now() - state.turnStartTime, state.latestTokens)
@@ -176,14 +181,18 @@ export function buildStreamingStatusContent(
     );
   }
 
-  if (toolSummary) {
-    sections.push(`<font size="1" color="grey">${toolSummary}</font>`);
-  }
-
   if (optimizedAnswer) {
     sections.push(optimizedAnswer);
-  } else if (!reasoningText) {
+  } else if (!reasoningText && !todoSummary && !recentUpdatesSummary) {
     sections.push("Thinking…");
+  }
+
+  if (todoSummary) {
+    sections.push(`<font size="1" color="grey">${todoSummary}</font>`);
+  }
+
+  if (recentUpdatesSummary) {
+    sections.push(`<font size="1" color="grey">${recentUpdatesSummary}</font>`);
   }
 
   if (footer) {
@@ -191,6 +200,67 @@ export function buildStreamingStatusContent(
   }
 
   return sections.join("\n\n") || "Thinking…";
+}
+
+function formatTodoSummary(state: StatusTurnState): string | undefined {
+  if (!state.todos || state.todos.length === 0) {
+    return undefined;
+  }
+
+  const lines = state.todos
+    .map((todo) => {
+      const content = normalizeInlineText(todo.content);
+      if (!content) {
+        return undefined;
+      }
+
+      return `- ${getTodoStatusIcon(todo.status)} ${content}`;
+    })
+    .filter((line): line is string => Boolean(line));
+
+  if (lines.length === 0) {
+    return undefined;
+  }
+
+  return ["📝 Todo", ...lines].join("\n");
+}
+
+function formatRecentUpdatesSummary(
+  state: StatusTurnState,
+): string | undefined {
+  if (!state.recentUpdates || state.recentUpdates.length === 0) {
+    return undefined;
+  }
+
+  const lines = state.recentUpdates
+    .map((update) => normalizeInlineText(update.summary))
+    .filter((summary): summary is string => Boolean(summary))
+    .map((summary) => `- ${summary}`);
+
+  if (lines.length === 0) {
+    return undefined;
+  }
+
+  return ["🕒 Recent updates", ...lines].join("\n");
+}
+
+function getTodoStatusIcon(status: string): string {
+  switch (status.trim().toLowerCase()) {
+    case "completed":
+      return "✅";
+    case "in_progress":
+    case "running":
+      return "🔄";
+    case "cancelled":
+      return "⏹️";
+    case "pending":
+    default:
+      return "🔲";
+  }
+}
+
+function normalizeInlineText(text: string): string {
+  return text.replace(/\s+/g, " ").trim();
 }
 
 function formatToolSummary(
@@ -278,9 +348,16 @@ function buildFooterLine(
   }
 
   if (tokens) {
-    parts.push(
-      `↑ ${compactNumber(tokens.input)} ↓ ${compactNumber(tokens.output)}`,
-    );
+    const totalTokens =
+      tokens.input +
+      tokens.output +
+      tokens.reasoning +
+      tokens.cacheRead +
+      tokens.cacheWrite;
+
+    if (totalTokens > 0) {
+      parts.push(`🧮 ${compactNumber(totalTokens)} tok`);
+    }
 
     if (tokens.reasoning > 0) {
       parts.push(`💭 ${compactNumber(tokens.reasoning)}`);
@@ -288,7 +365,7 @@ function buildFooterLine(
 
     if (tokens.cacheRead > 0 || tokens.cacheWrite > 0) {
       parts.push(
-        `cache ${compactNumber(tokens.cacheRead)}/${compactNumber(tokens.cacheWrite)}`,
+        `🗂️ ${compactNumber(tokens.cacheRead)}/${compactNumber(tokens.cacheWrite)}`,
       );
     }
   }

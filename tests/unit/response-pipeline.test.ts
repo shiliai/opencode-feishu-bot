@@ -52,6 +52,9 @@ function createHarness() {
   const updateStatusCard = vi
     .fn<Renderer["updateStatusCard"]>()
     .mockResolvedValue(undefined);
+  const deleteMessage = vi
+    .fn<Renderer["deleteMessage"]>()
+    .mockResolvedValue(undefined);
   const renderCompleteCard = vi
     .fn<Renderer["renderCompleteCard"]>()
     .mockResolvedValue("complete-card-1");
@@ -68,6 +71,7 @@ function createHarness() {
   const renderer = {
     renderStatusCard,
     updateStatusCard,
+    deleteMessage,
     renderCompleteCard,
     updateCompleteCard,
     replyPost,
@@ -167,6 +171,10 @@ function createHarness() {
         statusCardUpdateIntervalMs: 1_000,
         statusCardPatchRetryDelayMs: 25,
         statusCardPatchMaxAttempts: 3,
+      },
+      statusCard: {
+        recreateInterval: 5,
+        recentUpdatesCount: 5,
       },
     },
   });
@@ -325,6 +333,56 @@ describe("ResponsePipelineController", () => {
     expect(startedState?.subscriptionAbortController?.signal.aborted).toBe(
       true,
     );
+  });
+
+  it("defers idle finalization until a newer assistant message appears after a follow-up", async () => {
+    const harness = createHarness();
+    const context = makeTurnContext();
+
+    harness.controller.startTurn(context);
+    harness.callbacks.onTypingStart?.(context.sessionId);
+    await drainSession(harness.controller, context.sessionId);
+
+    harness.callbacks.onComplete?.(
+      context.sessionId,
+      "assistant-msg-1",
+      "Initial reply",
+    );
+    await drainSession(harness.controller, context.sessionId);
+
+    await harness.controller.recordFollowUpAppended(
+      context.sessionId,
+      "📥 Follow-up added: please also cover edge cases",
+    );
+    await drainSession(harness.controller, context.sessionId);
+
+    harness.callbacks.onSessionIdle?.(context.sessionId);
+    await drainSession(harness.controller, context.sessionId);
+
+    expect(harness.renderer.updateCompleteCard).not.toHaveBeenCalled();
+    expect(harness.interactionManager.clearBusy).not.toHaveBeenCalled();
+    expect(harness.statusStore.get(context.sessionId)).toBeDefined();
+
+    harness.callbacks.onComplete?.(
+      context.sessionId,
+      "assistant-msg-2",
+      "Follow-up reply",
+    );
+    await drainSession(harness.controller, context.sessionId);
+
+    harness.callbacks.onSessionIdle?.(context.sessionId);
+    await drainSession(harness.controller, context.sessionId);
+
+    expect(harness.renderer.updateCompleteCard).toHaveBeenCalledWith(
+      "status-card-1",
+      "OpenCode reply",
+      "Follow-up reply",
+      expect.objectContaining({ template: "green" }),
+    );
+    expect(harness.interactionManager.clearBusy).toHaveBeenCalledWith(
+      context.receiveId,
+    );
+    expect(harness.statusStore.get(context.sessionId)).toBeUndefined();
   });
 
   it("ignores session idle finalization while abort is in progress", async () => {
@@ -494,7 +552,7 @@ describe("ResponsePipelineController", () => {
     ).not.toBe(firstSignature);
   });
 
-  it("stores tool events, session diffs, and token updates in the turn state", () => {
+  it("stores tool events, todos, recent updates, session diffs, and token updates in the turn state", () => {
     const harness = createHarness();
     const context = makeTurnContext();
     const toolEventOne: SummaryToolEvent = {
@@ -508,8 +566,14 @@ describe("ResponsePipelineController", () => {
       sessionId: context.sessionId,
       messageId: "assistant-msg-2",
       callId: "call-2",
-      tool: "write",
+      tool: "todowrite",
       status: "completed",
+      metadata: {
+        todos: [
+          { id: "1", content: "Done item", status: "completed" },
+          { id: "2", content: "Active item", status: "in_progress" },
+        ],
+      },
     };
     const diffEvent: SummarySessionDiffEvent = {
       sessionId: context.sessionId,
@@ -529,6 +593,11 @@ describe("ResponsePipelineController", () => {
     };
 
     harness.controller.startTurn(context);
+    harness.callbacks.onPartial?.(
+      context.sessionId,
+      "assistant-msg-0",
+      "Initial draft",
+    );
     harness.callbacks.onTool?.(toolEventOne);
     harness.callbacks.onTool?.(toolEventTwo);
     harness.callbacks.onSessionDiff?.(diffEvent);
@@ -536,9 +605,26 @@ describe("ResponsePipelineController", () => {
 
     expect(harness.statusStore.get(context.sessionId)).toMatchObject({
       toolEvents: [toolEventOne, toolEventTwo],
+      todos: toolEventTwo.metadata?.todos,
       diffs: diffEvent.diffs,
       latestTokens: tokenEvent.tokens,
     });
+    expect(harness.statusStore.get(context.sessionId)?.recentUpdates).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "partial",
+          summary: "💬 Initial draft",
+        }),
+        expect.objectContaining({
+          kind: "tool",
+          summary: expect.stringContaining("apply_patch"),
+        }),
+        expect.objectContaining({
+          kind: "todo",
+          summary: expect.stringContaining("Todo list"),
+        }),
+      ]),
+    );
   });
 
   it("handleAggregatorCleared clears all turn state and disposes turn resources", async () => {

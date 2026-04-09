@@ -11,9 +11,25 @@ export interface ResponsePipelineTurnContext {
   sourceMessageId: string;
 }
 
+export interface StatusCardTodoItem {
+  id: string;
+  content: string;
+  status: string;
+  priority?: string;
+}
+
+export interface StatusCardRecentUpdate {
+  kind: "partial" | "tool" | "todo" | "follow_up";
+  summary: string;
+  key: string;
+}
+
 export interface StatusTurnState extends ResponsePipelineTurnContext {
   abortRequested?: boolean;
   statusCardMessageId?: string;
+  statusCardUpdateCount: number;
+  lastAssistantMessageId?: string;
+  awaitingFollowUpAfterMessageId?: string | null;
   lastPartialSignature?: string;
   lastPartialText?: string;
   lastPatchedSignature?: string;
@@ -26,6 +42,8 @@ export interface StatusTurnState extends ResponsePipelineTurnContext {
   cardUpdatesBroken: boolean;
   finalReplySent: boolean;
   finalReplyUuid?: string;
+  todos: StatusCardTodoItem[];
+  recentUpdates: StatusCardRecentUpdate[];
   toolEvents: SummaryToolEvent[];
   diffs: SummaryFileChange[];
   latestTokens?: SummaryTokensInfo;
@@ -43,6 +61,9 @@ export class StatusStore {
       pendingCompletion: false,
       cardUpdatesBroken: false,
       finalReplySent: false,
+      statusCardUpdateCount: 0,
+      todos: [],
+      recentUpdates: [],
       toolEvents: [],
       diffs: [],
     };

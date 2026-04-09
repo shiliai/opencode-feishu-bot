@@ -3,6 +3,8 @@ import {
   ConfigValidationError,
   DEFAULT_CONTROL_CATALOG_MODEL_STATE_PATH,
   DEFAULT_FEISHU_EVENT_DEDUP_PERSIST_PATH,
+  DEFAULT_STATUS_CARD_RECREATE_INTERVAL,
+  DEFAULT_STATUS_CARD_RECENT_UPDATES_COUNT,
   getConfig,
   loadConfig,
   resetConfig,
@@ -51,6 +53,8 @@ function clearAllConfigKeys(): void {
     "OPENCODE_API_KEY",
     "OPENCODE_WORKDIR",
     "THROTTLE_STATUS_CARD_UPDATE_INTERVAL_MS",
+    "STATUS_CARD_RECENT_UPDATES_COUNT",
+    "STATUS_CARD_RECREATE_INTERVAL",
     "CONTROL_CATALOG_CACHE_TTL_MS",
     "CONTROL_CATALOG_MODEL_STATE_PATH",
     "FEISHU_EVENT_DEDUP_PERSIST_PATH",
@@ -90,6 +94,12 @@ describe("loadConfig", () => {
     expect(config.logLevel).toBe("info");
     expect(config.cardCallback).toBeNull();
     expect(config.throttle.statusCardUpdateIntervalMs).toBe(2000);
+    expect(config.statusCard.recentUpdatesCount).toBe(
+      DEFAULT_STATUS_CARD_RECENT_UPDATES_COUNT,
+    );
+    expect(config.statusCard.recreateInterval).toBe(
+      DEFAULT_STATUS_CARD_RECREATE_INTERVAL,
+    );
     expect(config.controlCatalog.cacheTtlMs).toBe(600000);
     expect(config.controlCatalog.modelStatePath).toBe(
       DEFAULT_CONTROL_CATALOG_MODEL_STATE_PATH,
@@ -198,6 +208,32 @@ describe("loadConfig", () => {
     );
   });
 
+  it("reads optional STATUS_CARD_RECENT_UPDATES_COUNT", () => {
+    setEnv({ ...VALID_ENV, STATUS_CARD_RECENT_UPDATES_COUNT: "8" });
+    const config = loadConfig();
+
+    expect(config.statusCard.recentUpdatesCount).toBe(8);
+  });
+
+  it("reads optional STATUS_CARD_RECREATE_INTERVAL", () => {
+    setEnv({ ...VALID_ENV, STATUS_CARD_RECREATE_INTERVAL: "9" });
+    const config = loadConfig();
+
+    expect(config.statusCard.recreateInterval).toBe(9);
+  });
+
+  it("allows zero for status card UX controls", () => {
+    setEnv({
+      ...VALID_ENV,
+      STATUS_CARD_RECENT_UPDATES_COUNT: "0",
+      STATUS_CARD_RECREATE_INTERVAL: "0",
+    });
+    const config = loadConfig();
+
+    expect(config.statusCard.recentUpdatesCount).toBe(0);
+    expect(config.statusCard.recreateInterval).toBe(0);
+  });
+
   it("reads optional CONTROL_CATALOG_CACHE_TTL_MS", () => {
     setEnv({ ...VALID_ENV, CONTROL_CATALOG_CACHE_TTL_MS: "120000" });
     const config = loadConfig();
@@ -239,6 +275,24 @@ describe("loadConfig", () => {
     const config = loadConfig();
 
     expect(config.feishu.eventDedupTtlMs).toBe(300000);
+  });
+
+  it("falls back to default for invalid recent updates count", () => {
+    setEnv({ ...VALID_ENV, STATUS_CARD_RECENT_UPDATES_COUNT: "abc" });
+    const config = loadConfig();
+
+    expect(config.statusCard.recentUpdatesCount).toBe(
+      DEFAULT_STATUS_CARD_RECENT_UPDATES_COUNT,
+    );
+  });
+
+  it("falls back to default for negative recreate interval", () => {
+    setEnv({ ...VALID_ENV, STATUS_CARD_RECREATE_INTERVAL: "-1" });
+    const config = loadConfig();
+
+    expect(config.statusCard.recreateInterval).toBe(
+      DEFAULT_STATUS_CARD_RECREATE_INTERVAL,
+    );
   });
 
   it("falls back to default for invalid catalog cache ttl", () => {
