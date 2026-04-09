@@ -1,15 +1,18 @@
-import type {
-  InteractiveCard,
-  InteractiveCardActionItem,
-  InteractiveCardElement,
-} from "@larksuiteoapi/node-sdk";
+import type { InteractiveCard } from "@larksuiteoapi/node-sdk";
 import { getConfig } from "../config.js";
 import { plainText } from "./cards.js";
 import type { ChatMessage } from "./message-reader.js";
+import {
+  buildButtonGridCard,
+  buildSelectionCard,
+  buildTwoLevelCard,
+} from "./selection-card/index.js";
 
 export interface SessionSummary {
   id: string;
   title?: string;
+  createdAt?: string;
+  messageCount?: number;
   [key: string]: unknown;
 }
 
@@ -38,45 +41,33 @@ const COMMAND_HELP: Array<{ command: string; description: string }> = [
   { command: "/history [count]", description: "Show recent chat messages" },
   { command: "/model [name]", description: "Switch model (or show picker)" },
   { command: "/agent [name]", description: "Switch agent (or show picker)" },
+  { command: "/task", description: "Create a scheduled task" },
+  { command: "/tasklist", description: "List and manage scheduled tasks" },
   { command: "/status", description: "Show current status" },
   { command: "/version", description: "Show bridge version" },
   { command: "/abort", description: "Abort the current session" },
 ];
 
 const HISTORY_PREVIEW_LIMIT = 200;
-const MAX_ACTIONS_PER_ROW = 5;
-const MAX_SESSION_CHOICES = 10;
-const MAX_MODEL_CHOICES = 20;
+const MAX_FLAT_MODEL_CHOICES = 20;
 const MAX_AGENT_CHOICES = 20;
-const MAX_PROJECT_CHOICES = 20;
-const MAX_BUTTON_LABEL_LENGTH = 58;
+const SESSION_PAGE_SIZE = 10;
+const MODEL_PAGE_SIZE = 10;
+const PROJECT_PAGE_SIZE = 20;
 
-function truncateLabel(label: string, limit = MAX_BUTTON_LABEL_LENGTH): string {
-  if (label.length <= limit) {
-    return label;
-  }
-
-  if (limit <= 1) {
-    return label.slice(0, limit);
-  }
-
-  return `${label.slice(0, limit - 1)}…`;
-}
-
-function buildActionRows(
-  actions: InteractiveCardActionItem[],
-): InteractiveCardElement[] {
-  const rows: InteractiveCardElement[] = [];
-
-  for (let index = 0; index < actions.length; index += MAX_ACTIONS_PER_ROW) {
-    rows.push({
-      tag: "action",
-      actions: actions.slice(index, index + MAX_ACTIONS_PER_ROW),
-    });
-  }
-
-  return rows;
-}
+const MODEL_PROVIDER_ICONS: Record<string, string> = {
+  anthropic: "🟠",
+  deepseek: "🐋",
+  gemini: "✨",
+  google: "🔵",
+  groq: "⚙️",
+  mistral: "🌪️",
+  ollama: "🦙",
+  openai: "🟢",
+  openrouter: "🧭",
+  relay: "🔁",
+  xai: "⚡",
+};
 
 export function getPathLeaf(pathValue: string): string {
   const normalized = pathValue.replace(/[\\/]+$/g, "");
@@ -155,214 +146,152 @@ export function buildHelpCard(): InteractiveCard {
 
 export function buildSessionListCard(
   sessions: SessionSummary[],
+  page = 0,
 ): InteractiveCard {
-  const elements: InteractiveCardElement[] = [];
-
-  if (sessions.length === 0) {
-    elements.push({
-      tag: "markdown",
-      content: "No recent sessions found.",
-    });
-  } else {
-    const visibleSessions = sessions.slice(0, MAX_SESSION_CHOICES);
-
-    elements.push({
-      tag: "markdown",
-      content: "Select a session:",
-    });
-
-    const buttons: InteractiveCardActionItem[] = visibleSessions.map(
-      (session, index) => {
-        const baseLabel = session.title?.trim().length
-          ? `${session.title.trim()} (${session.id})`
-          : session.id;
-        return {
-          tag: "button",
-          text: plainText(truncateLabel(`${index + 1}. ${baseLabel}`)),
-          value: { action: "select_session", sessionId: session.id },
-        };
-      },
-    );
-
-    elements.push(...buildActionRows(buttons));
-
-    if (sessions.length > visibleSessions.length) {
-      elements.push({
-        tag: "markdown",
-        content: `Showing ${visibleSessions.length} of ${sessions.length} sessions. Use /session <id> to switch by id.`,
-      });
-    }
-  }
-
-  return {
-    header: {
-      title: plainText("Sessions"),
-      template: "blue",
-    },
-    elements,
-  };
+  return buildSelectionCard({
+    command: "session",
+    title: "Sessions",
+    template: "blue",
+    items: sessions.map((session) => ({
+      label: session.title?.trim() || session.id,
+      value: session.id,
+      description: session.id,
+      badge: undefined,
+    })),
+    page,
+    pageSize: SESSION_PAGE_SIZE,
+    totalItems: sessions.length,
+    instruction: "Select a session:",
+    emptyMessage: "No recent sessions found.",
+  });
 }
 
-export function buildModelPickerCard(models: string[]): InteractiveCard {
-  const elements: InteractiveCardElement[] = [];
+function getModelProviderIcon(providerName: string): string {
+  const normalized = providerName.trim().toLowerCase();
+  return MODEL_PROVIDER_ICONS[normalized] ?? "🤖";
+}
 
-  if (models.length === 0) {
-    elements.push({
-      tag: "markdown",
-      content: "No models available.",
-    });
-  } else {
-    const visibleModels = models.slice(0, MAX_MODEL_CHOICES);
+export function buildModelProviderCard(
+  providers: Array<{ name: string; modelCount: number }>,
+  page = 0,
+): InteractiveCard {
+  return buildTwoLevelCard({
+    title: "Model Picker",
+    template: "purple",
+    instruction: "Select a model provider:",
+    emptyMessage: "No models available.",
+    items: providers.map((provider) => ({
+      label: provider.name,
+      value: provider.name,
+      icon: getModelProviderIcon(provider.name),
+      count: provider.modelCount,
+    })),
+    command: "model",
+    context: { level: "provider" },
+    page,
+    pageSize: MODEL_PAGE_SIZE,
+  });
+}
 
-    elements.push({
-      tag: "markdown",
-      content: "Select a model:",
-    });
+export function buildModelListCard(
+  providerName: string,
+  models: string[],
+  page = 0,
+): InteractiveCard {
+  return buildTwoLevelCard({
+    title: "Model Picker",
+    template: "purple",
+    instruction: `Select a model from **${providerName}**:`,
+    emptyMessage: `No models available for **${providerName}**.`,
+    items: models.map((modelName) => ({
+      label: modelName,
+      value: modelName,
+    })),
+    command: "model",
+    context: { level: "model", provider: providerName },
+    page,
+    pageSize: MODEL_PAGE_SIZE,
+    backEnabled: true,
+  });
+}
 
-    const buttons: InteractiveCardActionItem[] = visibleModels.map(
-      (modelName) => ({
-        tag: "button",
-        text: plainText(truncateLabel(modelName)),
-        value: { action: "select_model", modelName },
-      }),
-    );
-
-    elements.push(...buildActionRows(buttons));
-
-    if (models.length > visibleModels.length) {
-      elements.push({
-        tag: "markdown",
-        content: `Showing ${visibleModels.length} of ${models.length} models. Use /model provider/model to select any specific model.`,
-      });
-    }
-  }
-
-  return {
-    header: {
-      title: plainText("Model Picker"),
-      template: "blue",
-    },
-    elements,
-  };
+export function buildModelPickerCard(
+  models: string[],
+  page = 0,
+): InteractiveCard {
+  return buildSelectionCard({
+    command: "model",
+    title: "Model Picker",
+    template: "purple",
+    items: models.map((modelName) => ({
+      label: modelName,
+      value: modelName,
+    })),
+    page,
+    pageSize: MAX_FLAT_MODEL_CHOICES,
+    totalItems: models.length,
+    instruction: "Select a model:",
+    emptyMessage: "No models available.",
+    context: { level: "flat" },
+  });
 }
 
 export function buildAgentPickerCard(agents: string[]): InteractiveCard {
-  const elements: InteractiveCardElement[] = [];
+  const visibleAgents = agents.slice(0, MAX_AGENT_CHOICES);
+  const instruction =
+    visibleAgents.length === 0
+      ? "No agents available."
+      : agents.length > visibleAgents.length
+        ? `Select an agent:\nShowing ${visibleAgents.length} of ${agents.length} agents.`
+        : "Select an agent:";
 
-  if (agents.length === 0) {
-    elements.push({
-      tag: "markdown",
-      content: "No agents available.",
-    });
-  } else {
-    const visibleAgents = agents.slice(0, MAX_AGENT_CHOICES);
-
-    elements.push({
-      tag: "markdown",
-      content: "Select an agent:",
-    });
-
-    const buttons: InteractiveCardActionItem[] = visibleAgents.map(
-      (agentName) => ({
-        tag: "button",
-        text: plainText(truncateLabel(agentName)),
-        value: { action: "select_agent", agentName },
-      }),
-    );
-
-    elements.push(...buildActionRows(buttons));
-
-    if (agents.length > visibleAgents.length) {
-      elements.push({
-        tag: "markdown",
-        content: `Showing ${visibleAgents.length} of ${agents.length} agents.`,
-      });
-    }
-  }
-
-  return {
-    header: {
-      title: plainText("Agent Picker"),
-      template: "blue",
-    },
-    elements,
-  };
+  return buildButtonGridCard({
+    title: "Agent Picker",
+    template: "blue",
+    instruction,
+    buttons: visibleAgents.map((agentName) => ({
+      label: agentName,
+      value: {
+        action: "selection_pick",
+        command: "agent",
+        value: agentName,
+      },
+    })),
+  });
 }
 
 export function buildProjectPickerCard(
   entries: ProjectPickerEntry[],
   currentProjectId?: string,
+  page = 0,
 ): InteractiveCard {
-  const elements: InteractiveCardElement[] = [];
+  const currentProject =
+    currentProjectId && entries.find((entry) => entry.id === currentProjectId);
+  const currentLabel = currentProject
+    ? (currentProject.name ?? currentProject.worktree)
+    : (currentProjectId ?? "none");
 
-  if (entries.length === 0) {
-    elements.push({
-      tag: "markdown",
-      content: "No projects available.",
-    });
-  } else {
-    const visibleProjects = entries.slice(0, MAX_PROJECT_CHOICES);
-    const currentProject =
-      currentProjectId &&
-      entries.find((entry) => entry.id === currentProjectId);
-    const currentLabel = currentProject
-      ? (currentProject.name ?? currentProject.worktree)
-      : (currentProjectId ?? "none");
-
-    elements.push({
-      tag: "markdown",
-      content: `Select a project:\nCurrent: ${currentLabel}`,
-    });
-
-    const buttons: InteractiveCardActionItem[] = visibleProjects.map(
-      (entry, index) => {
-        const labelRoot = entry.name?.trim().length
-          ? entry.name.trim()
-          : getPathLeaf(entry.worktree);
-        if (entry.isNew || !entry.id) {
-          return {
-            tag: "button",
-            text: plainText(truncateLabel(`${index + 1}. ✨ ${labelRoot}`)),
-            value: {
-              action: "discover_project",
-              directory: entry.worktree,
-            },
-          };
-        }
-
-        const indexedLabel = `${index + 1}. ${labelRoot}`;
-        const label =
-          entry.id === currentProjectId
-            ? `[Current] ${indexedLabel}`
-            : indexedLabel;
-        return {
-          tag: "button",
-          text: plainText(truncateLabel(label)),
-          value: {
-            action: "select_project",
-            projectId: entry.id,
-          },
-        };
-      },
-    );
-
-    elements.push(...buildActionRows(buttons));
-
-    if (entries.length > visibleProjects.length) {
-      elements.push({
-        tag: "markdown",
-        content: `Showing ${visibleProjects.length} of ${entries.length} projects. Use /projects <id> to select any specific known project.`,
-      });
-    }
-  }
-
-  return {
-    header: {
-      title: plainText("Projects"),
-      template: "blue",
-    },
-    elements,
-  };
+  return buildSelectionCard({
+    command: "project",
+    title: "Projects",
+    template: "green",
+    items: entries.map((entry) => ({
+      label: entry.name?.trim() || getPathLeaf(entry.worktree),
+      value: entry.id || entry.worktree,
+      description: entry.worktree,
+      badge:
+        entry.id && currentProjectId && entry.id === currentProjectId
+          ? "[Current]"
+          : entry.isNew
+            ? "✨ New"
+            : undefined,
+    })),
+    page,
+    pageSize: PROJECT_PAGE_SIZE,
+    totalItems: entries.length,
+    instruction: `Select a project:\nCurrent: ${currentLabel}`,
+    emptyMessage: "No projects available.",
+  });
 }
 
 export function buildHistoryCard(

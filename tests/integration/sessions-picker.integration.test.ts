@@ -36,12 +36,16 @@ describe("sessions picker integration", () => {
     expect(result).toEqual({
       toast: {
         type: "success",
-        content: "Session selected: Recovered Session (session-2)",
+        content: expect.stringContaining(
+          "Session selected: Recovered Session (session-2)",
+        ),
       },
     });
     expect(harness.renderer.sendText).toHaveBeenCalledWith(
       "chat-session-1",
-      "Session selected: Recovered Session (session-2)",
+      expect.stringContaining(
+        "Session selected: Recovered Session (session-2)",
+      ),
     );
     expect(harness.sessionManager.getCurrentSession()).toEqual({
       id: "session-2",

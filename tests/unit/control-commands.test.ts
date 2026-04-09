@@ -94,6 +94,7 @@ function createMockOpenCodeClient() {
         .mockResolvedValue({ data: { "sess-1": { type: "idle" } } }),
       abort: vi.fn().mockResolvedValue({ data: true }),
       messages: vi.fn().mockResolvedValue({ data: [] }),
+      prompt: vi.fn().mockResolvedValue(undefined),
     },
     app: {
       agents: vi.fn().mockResolvedValue({
@@ -327,8 +328,10 @@ describe("ControlRouter — command dispatch", () => {
       actionEl as { actions: Array<{ value: Record<string, unknown> }> }
     ).actions;
     expect(actions[0].value).toEqual({
-      action: "select_project",
-      projectId: "project-1",
+      action: "selection_pick",
+      command: "project",
+      context: undefined,
+      value: "project-1",
     });
   });
 
@@ -376,19 +379,42 @@ describe("ControlRouter — command dispatch", () => {
     ).actions;
     expect(actions.map((action) => action.value)).toEqual([
       {
-        action: "select_project",
-        projectId: "project-1",
+        action: "selection_pick",
+        command: "project",
+        context: undefined,
+        value: "project-1",
       },
       {
-        action: "discover_project",
-        directory: "/workspace/project-3",
+        action: "selection_pick",
+        command: "project",
+        context: undefined,
+        value: "/workspace/project-3",
       },
       {
-        action: "select_project",
-        projectId: "project-2",
+        action: "selection_pick",
+        command: "project",
+        context: undefined,
+        value: "project-2",
       },
     ]);
-    expect(actions[1].text.content).toContain("✨");
+    const markdownContent = sentCard.elements
+      .filter((el: { tag: string }) => el.tag === "markdown")
+      .map((el: { content: string }) => el.content)
+      .join("\n");
+    expect(markdownContent).toContain("✨ New");
+  });
+
+  it("/task without args shows usage guide, /tasklist shows empty message", async () => {
+    const renderer = createMockRenderer();
+    const router = createRouter({ renderer });
+
+    const taskResult = await router.handleCommand("chat-1", "/task");
+    expect(taskResult.success).toBe(false);
+    expect(taskResult.message).toContain("Scheduled Task — Usage");
+
+    const tasklistResult = await router.handleCommand("chat-1", "/tasklist");
+    expect(tasklistResult.success).toBe(true);
+    expect(tasklistResult.message).toContain("No scheduled tasks");
   });
 
   it("/project alias renders the same picker as /projects", async () => {

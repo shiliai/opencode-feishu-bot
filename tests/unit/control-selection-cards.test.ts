@@ -1,14 +1,16 @@
 import { describe, expect, it, vi } from "vitest";
 import {
-  ControlRouter,
-  type ControlRouterOptions,
-} from "../../src/feishu/control-router.js";
-import {
   buildAgentPickerCard,
+  buildModelListCard,
   buildModelPickerCard,
+  buildModelProviderCard,
   buildProjectPickerCard,
   buildSessionListCard,
 } from "../../src/feishu/control-cards.js";
+import {
+  ControlRouter,
+  type ControlRouterOptions,
+} from "../../src/feishu/control-router.js";
 
 function createMockSettings() {
   return {
@@ -87,6 +89,7 @@ function createMockOpenCodeClient() {
       status: vi.fn().mockResolvedValue({ data: {} }),
       abort: vi.fn().mockResolvedValue({ data: true }),
       messages: vi.fn().mockResolvedValue({ data: [] }),
+      prompt: vi.fn().mockResolvedValue(undefined),
     },
     app: {
       agents: vi.fn().mockResolvedValue({
@@ -206,8 +209,10 @@ describe("ControlRouter — selection cards (no args)", () => {
       actionEl as { actions: Array<{ value: Record<string, unknown> }> }
     ).actions;
     expect(actions[0].value).toEqual({
-      action: "select_model",
-      modelName: "openai/gpt-4",
+      action: "selection_pick",
+      command: "model",
+      context: { level: "provider" },
+      value: "openai",
     });
   });
 
@@ -231,8 +236,9 @@ describe("ControlRouter — selection cards (no args)", () => {
       actionEl as { actions: Array<{ value: Record<string, unknown> }> }
     ).actions;
     expect(actions[0].value).toEqual({
-      action: "select_agent",
-      agentName: "build",
+      action: "selection_pick",
+      command: "agent",
+      value: "build",
     });
   });
 
@@ -286,12 +292,16 @@ describe("Selection card builders", () => {
     ).actions;
     expect(actions).toHaveLength(2);
     expect(actions[0].value).toEqual({
-      action: "select_session",
-      sessionId: "sess-1",
+      action: "selection_pick",
+      command: "session",
+      context: undefined,
+      value: "sess-1",
     });
     expect(actions[1].value).toEqual({
-      action: "select_session",
-      sessionId: "sess-2",
+      action: "selection_pick",
+      command: "session",
+      context: undefined,
+      value: "sess-2",
     });
 
     const markdownEl = card.elements?.find(
@@ -320,8 +330,10 @@ describe("Selection card builders", () => {
     ).actions;
     expect(actions).toHaveLength(2);
     expect(actions[0].value).toEqual({
-      action: "select_model",
-      modelName: "openai/gpt-4",
+      action: "selection_pick",
+      command: "model",
+      context: { level: "flat" },
+      value: "openai/gpt-4",
     });
   });
 
@@ -334,10 +346,13 @@ describe("Selection card builders", () => {
 
     const actionElements = card.elements?.filter(
       (el: { tag: string }) => el.tag === "action",
-    ) as Array<{ actions: Array<{ value: { modelName?: string } }> }>;
-    const modelNames = actionElements.flatMap((el) =>
-      el.actions.map((action) => action.value.modelName),
-    );
+    ) as Array<{
+      actions: Array<{ value: { action?: string; value?: string } }>;
+    }>;
+    const modelNames = actionElements
+      .flatMap((el) => el.actions.map((action) => action.value))
+      .filter((value) => value.action === "selection_pick")
+      .map((value) => value.value);
 
     expect(modelNames).toHaveLength(20);
     expect(modelNames).toContain("provider/model-0");
@@ -357,8 +372,48 @@ describe("Selection card builders", () => {
     ).actions;
     expect(actions).toHaveLength(2);
     expect(actions[0].value).toEqual({
-      action: "select_agent",
-      agentName: "build",
+      action: "selection_pick",
+      command: "agent",
+      value: "build",
+    });
+  });
+
+  it("buildModelProviderCard renders provider buttons with provider context", () => {
+    const card = buildModelProviderCard([
+      { name: "openai", modelCount: 2 },
+      { name: "anthropic", modelCount: 1 },
+    ]);
+
+    expect(card.header?.title?.content).toBe("Model Picker");
+    const actionEl = card.elements?.find(
+      (el: { tag: string }) => el.tag === "action",
+    );
+    const actions = (
+      actionEl as { actions: Array<{ value: Record<string, unknown> }> }
+    ).actions;
+    expect(actions[0].value).toEqual({
+      action: "selection_pick",
+      command: "model",
+      context: { level: "provider" },
+      value: "openai",
+    });
+  });
+
+  it("buildModelListCard renders model buttons with provider-specific context", () => {
+    const card = buildModelListCard("openai", ["gpt-4", "gpt-4.1"]);
+
+    expect(card.header?.title?.content).toBe("Model Picker");
+    const actionEl = card.elements?.find(
+      (el: { tag: string }) => el.tag === "action",
+    );
+    const actions = (
+      actionEl as { actions: Array<{ value: Record<string, unknown> }> }
+    ).actions;
+    expect(actions[0].value).toEqual({
+      action: "selection_pick",
+      command: "model",
+      context: { level: "model", provider: "openai" },
+      value: "gpt-4",
     });
   });
 
@@ -389,8 +444,10 @@ describe("Selection card builders", () => {
     ).actions;
     expect(actions).toHaveLength(2);
     expect(actions[0].value).toEqual({
-      action: "select_project",
-      projectId: "project-1",
+      action: "selection_pick",
+      command: "project",
+      context: undefined,
+      value: "project-1",
     });
   });
 
@@ -415,8 +472,10 @@ describe("Selection card builders", () => {
       actionEl as { actions: Array<{ value: Record<string, unknown> }> }
     ).actions;
     expect(actions[1].value).toEqual({
-      action: "discover_project",
-      directory: "/workspace/project-3",
+      action: "selection_pick",
+      command: "project",
+      context: undefined,
+      value: "/workspace/project-3",
     });
   });
 
@@ -441,7 +500,9 @@ describe("Selection card builders", () => {
     expect(result).toEqual({
       toast: {
         type: "success",
-        content: "Session selected: Target Session (sess-42)",
+        content: expect.stringContaining(
+          "Session selected: Target Session (sess-42)",
+        ),
       },
     });
     expect(sessionManager.setCurrentSession).toHaveBeenCalledWith({
@@ -589,5 +650,82 @@ describe("Selection card builders", () => {
       "chat-1",
       expect.stringContaining("Project selected: Project One"),
     );
+  });
+
+  it("handleCardAction supports two-level model picker flow", async () => {
+    const renderer = createMockRenderer();
+    const settings = createMockSettings();
+    const router = createRouter({ settingsManager: settings, renderer });
+
+    const providerResult = await router.handleCardAction({
+      open_chat_id: "chat-1",
+      action: {
+        value: {
+          action: "selection_pick",
+          command: "model",
+          value: "openai",
+          context: { level: "provider" },
+        },
+      },
+    });
+
+    expect(providerResult).toEqual({});
+    expect(renderer.sendCard).toHaveBeenCalledWith(
+      "chat-1",
+      expect.objectContaining({
+        header: expect.objectContaining({
+          title: expect.objectContaining({ content: "Model Picker" }),
+        }),
+      }),
+    );
+
+    const modelResult = await router.handleCardAction({
+      open_chat_id: "chat-1",
+      action: {
+        value: {
+          action: "selection_pick",
+          command: "model",
+          value: "gpt-4.1",
+          context: { level: "model", provider: "openai" },
+        },
+      },
+    });
+
+    expect(modelResult).toEqual({
+      toast: {
+        type: "success",
+        content: "Model selected: openai/gpt-4.1",
+      },
+    });
+    expect(settings.setCurrentModel).toHaveBeenCalledWith({
+      providerID: "openai",
+      modelID: "gpt-4.1",
+    });
+  });
+
+  it("handleCardAction supports selection cancel and pagination", async () => {
+    const renderer = createMockRenderer();
+    const router = createRouter({ renderer });
+
+    await expect(
+      router.handleCardAction({
+        open_chat_id: "chat-1",
+        action: { value: { action: "selection_cancel" } },
+      }),
+    ).resolves.toEqual({ toast: { type: "info", content: "Cancelled" } });
+
+    await expect(
+      router.handleCardAction({
+        open_chat_id: "chat-1",
+        action: {
+          value: {
+            action: "selection_page",
+            command: "session",
+            page: 1,
+          },
+        },
+      }),
+    ).resolves.toEqual({});
+    expect(renderer.sendCard).toHaveBeenCalled();
   });
 });
