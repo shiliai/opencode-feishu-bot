@@ -29,6 +29,11 @@ export interface ThrottleConfig {
   statusCardPatchMaxAttempts: number;
 }
 
+export interface StatusCardConfig {
+  recentUpdatesCount: number;
+  recreateInterval: number;
+}
+
 export interface ControlCatalogConfig {
   cacheTtlMs: number;
   modelStatePath: string;
@@ -46,6 +51,7 @@ export interface AppConfig {
   connectionType: ConnectionType;
   cardCallback: CardCallbackConfig | null;
   throttle: ThrottleConfig;
+  statusCard: StatusCardConfig;
   controlCatalog: ControlCatalogConfig;
   service: ServiceConfig;
   logLevel: string;
@@ -67,6 +73,8 @@ export const DEFAULT_FEISHU_EVENT_DEDUP_PERSIST_PATH = join(
   ".data",
   "event-dedup.json",
 );
+export const DEFAULT_STATUS_CARD_RECENT_UPDATES_COUNT = 5;
+export const DEFAULT_STATUS_CARD_RECREATE_INTERVAL = 5;
 export const DEFAULT_FEISHU_CARD_CALLBACK_VERIFICATION_TOKEN = "";
 export const DEFAULT_FEISHU_CARD_CALLBACK_ENCRYPT_KEY = "";
 
@@ -102,6 +110,17 @@ function getOptionalPositiveIntEnvVar(
   if (!raw) return defaultValue;
   const parsed = Number.parseInt(raw, 10);
   if (Number.isNaN(parsed) || parsed <= 0) return defaultValue;
+  return parsed;
+}
+
+function getOptionalNonNegativeIntEnvVar(
+  key: string,
+  defaultValue: number,
+): number {
+  const raw = getEnvVar(key, false);
+  if (!raw) return defaultValue;
+  const parsed = Number.parseInt(raw, 10);
+  if (Number.isNaN(parsed) || parsed < 0) return defaultValue;
   return parsed;
 }
 
@@ -191,6 +210,16 @@ export function loadConfig(): AppConfig {
       statusCardPatchMaxAttempts: getOptionalPositiveIntEnvVar(
         "THROTTLE_STATUS_CARD_PATCH_MAX_ATTEMPTS",
         3,
+      ),
+    },
+    statusCard: {
+      recentUpdatesCount: getOptionalNonNegativeIntEnvVar(
+        "STATUS_CARD_RECENT_UPDATES_COUNT",
+        DEFAULT_STATUS_CARD_RECENT_UPDATES_COUNT,
+      ),
+      recreateInterval: getOptionalNonNegativeIntEnvVar(
+        "STATUS_CARD_RECREATE_INTERVAL",
+        DEFAULT_STATUS_CARD_RECREATE_INTERVAL,
       ),
     },
     controlCatalog: {
