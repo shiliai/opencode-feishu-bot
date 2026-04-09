@@ -63,6 +63,7 @@ function createMockRenderer() {
     sendPost: vi.fn().mockResolvedValue(undefined),
     replyPost: vi.fn().mockResolvedValue(undefined),
     updateCard: vi.fn().mockResolvedValue(undefined),
+    updateCompleteCard: vi.fn().mockResolvedValue(undefined),
     renderStatusCard: vi.fn().mockResolvedValue(undefined),
     updateStatusCard: vi.fn().mockResolvedValue(undefined),
     renderQuestionCard: vi.fn().mockResolvedValue(undefined),
@@ -616,8 +617,9 @@ describe("Selection card builders", () => {
 
     expect(result).toEqual({
       toast: {
-        type: "success",
-        content: "New session selected: New Session (new-session-1)",
+        type: "error",
+        content:
+          "Unable to determine which chat should receive the new session. Please try again from the original chat.",
       },
     });
     expect(renderer.sendText).not.toHaveBeenCalled();
