@@ -1,5 +1,5 @@
 import { isAbsolute, relative, resolve } from "node:path";
-import { DEFAULT_CONTROL_CATALOG_CACHE_TTL_MS } from "../config.js";
+import { DEFAULT_CONTROL_CATALOG_CACHE_TTL_MS, getConfig } from "../config.js";
 import type { FeishuRenderer } from "../feishu/renderer.js";
 import type { InteractionManager } from "../interaction/manager.js";
 import { getModelContextLimit } from "../model/context-limit.js";
@@ -41,7 +41,7 @@ import {
   parseSelectionAction,
   type SelectionAction,
 } from "./selection-card/index.js";
-import type { StatusStore } from "./status-store.js";
+import type { StatusStore, StatusTurnState } from "./status-store.js";
 import { scanWorkdirSubdirs, type WorkdirEntry } from "./workdir-scanner.js";
 import { InMemoryTaskStore } from "../scheduled-task/store.js";
 import { ScheduledTaskRuntime } from "../scheduled-task/runtime.js";
@@ -87,6 +87,8 @@ const SUPPORTED_COMMANDS = new Set<string>([
 
 const DEFAULT_HISTORY_COUNT = 10;
 const STATUS_CONTEXT_HISTORY_LIMIT = 50;
+const ABORT_STATUS_POLL_INTERVAL_MS = 250;
+const ABORT_STATUS_MAX_WAIT_MS = 5_000;
 
 const ZERO_WIDTH_CHARACTER_PATTERN = /[\u200B-\u200D\uFEFF]/g;
 
@@ -223,7 +225,7 @@ export type ControlRouterSessionStore = Pick<
 
 export type ControlRouterRenderer = Pick<
   FeishuRenderer,
-  "sendCard" | "sendText"
+  "sendCard" | "sendText" | "updateCompleteCard"
 >;
 
 export type ControlRouterInteractionStore = Pick<
@@ -251,6 +253,12 @@ export interface ControlRouterOptions {
 function createNoopLogger(): Logger {
   return { debug: () => {}, info: () => {}, warn: () => {}, error: () => {} };
 }
+
+function getAbortCardTitle(): string {
+  return `${getConfig().assistantName} cancelled`;
+}
+
+type AbortSessionState = "idle" | "busy" | "not-found";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -1721,7 +1729,9 @@ export class ControlRouter {
       }
     }
 
-    let state = this.interactionManager.isBusy(receiveId) ? "busy" : "idle";
+    const hasLocalBusyState =
+      this.interactionManager.isBusy(receiveId) || Boolean(turnState);
+    let state = hasLocalBusyState ? "busy" : "idle";
     try {
       const statusResponse = await this.openCodeSession.status({ directory });
       const statusMap = isRecord(statusResponse.data)
@@ -1734,7 +1744,15 @@ export class ControlRouter {
         ? getTrimmedString(statusRecord.type)
         : null;
       if (serverState) {
-        state = serverState;
+        const isTransientBusyServerState =
+          serverState === "busy" || serverState === "retry";
+        if (hasLocalBusyState || !isTransientBusyServerState) {
+          state = serverState;
+        } else {
+          this.logger.info(
+            `[ControlRouter] Ignoring transient server busy state after local cleanup: chatId=${receiveId}, session=${currentSession?.id ?? "unknown"}, serverState=${serverState}`,
+          );
+        }
       }
     } catch (error) {
       this.logger.warn(
@@ -1984,21 +2002,44 @@ export class ControlRouter {
     }
 
     try {
-      await this.openCodeSession.abort({ sessionID: currentSession.id });
+      const abortResponse = await this.openCodeSession.abort({
+        sessionID: currentSession.id,
+        directory: currentSession.directory,
+      });
+      if (
+        isRecord(abortResponse) &&
+        "error" in abortResponse &&
+        abortResponse.error
+      ) {
+        throw abortResponse.error;
+      }
 
-      if (this.statusStore) {
-        const turnState = this.statusStore.clear(currentSession.id);
-        if (turnState) {
-          if (turnState.statusUpdateTimer) {
-            clearTimeout(turnState.statusUpdateTimer);
-            turnState.statusUpdateTimer = undefined;
-          }
-          turnState.subscriptionAbortController?.abort();
-        }
+      const finalState = await this.pollAbortSessionState(
+        currentSession.id,
+        currentSession.directory,
+      );
+      if (finalState === "busy") {
+        const message =
+          "⚠️ 已发送取消请求，但任务仍在处理中，请稍后再试 /abort 或用 /status 确认状态";
+        this.logger.warn(
+          `[ControlRouter] Abort request did not settle in time: session=${currentSession.id}, directory=${currentSession.directory}`,
+        );
+        await this.renderer.sendText(receiveId, message);
+        return {
+          success: false,
+          message: `Abort still pending for session: ${currentSession.id}`,
+        };
+      }
+
+      const turnState = this.statusStore?.clear(currentSession.id);
+      if (turnState) {
+        this.disposeTurnResources(turnState);
       }
 
       this.settings.clearChatStatusMessageId(receiveId);
       this.interactionManager.clearBusy(receiveId);
+
+      await this.updateAbortedStatusCard(turnState);
 
       this.logger.info(`[ControlRouter] Aborted session: ${currentSession.id}`);
       await this.renderer.sendText(receiveId, "✅ 已取消当前操作");
@@ -2010,6 +2051,87 @@ export class ControlRouter {
       this.logger.error("[ControlRouter] Failed to abort session", error);
       await this.renderer.sendText(receiveId, "❌ 取消操作失败，请重试");
       return { success: false, message: "Failed to abort session" };
+    }
+  }
+
+  private async pollAbortSessionState(
+    sessionId: string,
+    directory: string,
+    maxWaitMs: number = ABORT_STATUS_MAX_WAIT_MS,
+  ): Promise<AbortSessionState> {
+    const startedAt = Date.now();
+
+    while (Date.now() - startedAt < maxWaitMs) {
+      try {
+        const statusResponse = await this.openCodeSession.status({ directory });
+        const statusMap = isRecord(statusResponse.data)
+          ? statusResponse.data
+          : null;
+        if (!statusMap) {
+          break;
+        }
+
+        const sessionStatus = statusMap[sessionId];
+        if (!isRecord(sessionStatus)) {
+          return "not-found";
+        }
+
+        const state = getTrimmedString(sessionStatus.type);
+        if (state === "idle" || state === "error") {
+          return "idle";
+        }
+
+        if (state !== "busy" && state !== "retry") {
+          return "not-found";
+        }
+      } catch (error) {
+        this.logger.warn(
+          `[ControlRouter] Failed to poll session status after abort: session=${sessionId}, directory=${directory}`,
+          error,
+        );
+        break;
+      }
+
+      await new Promise<void>((resolvePromise) => {
+        setTimeout(resolvePromise, ABORT_STATUS_POLL_INTERVAL_MS);
+      });
+    }
+
+    return "busy";
+  }
+
+  private disposeTurnResources(turnState: StatusTurnState): void {
+    if (turnState.statusUpdateTimer) {
+      clearTimeout(turnState.statusUpdateTimer);
+      turnState.statusUpdateTimer = undefined;
+    }
+    turnState.subscriptionAbortController?.abort();
+  }
+
+  private async updateAbortedStatusCard(
+    turnState: StatusTurnState | undefined,
+  ): Promise<void> {
+    if (!turnState?.statusCardMessageId) {
+      return;
+    }
+
+    try {
+      await this.renderer.updateCompleteCard(
+        turnState.statusCardMessageId,
+        getAbortCardTitle(),
+        "✅ 已取消当前操作",
+        {
+          elapsedMs: Math.max(0, Date.now() - turnState.turnStartTime),
+          tokens: turnState.latestTokens,
+          toolEvents: turnState.toolEvents,
+          template: "orange",
+        },
+      );
+    } catch (error) {
+      this.logger.warn(
+        `[ControlRouter] Failed to update aborted status card: session=${turnState.sessionId}, messageId=${turnState.statusCardMessageId}`,
+        error,
+      );
     }
   }
 

@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   ControlRouter,
   type ControlRouterOptions,
@@ -71,6 +71,8 @@ function createMockRenderer() {
     updateCard: vi.fn().mockResolvedValue(undefined),
     renderStatusCard: vi.fn().mockResolvedValue(undefined),
     updateStatusCard: vi.fn().mockResolvedValue(undefined),
+    renderCompleteCard: vi.fn().mockResolvedValue(undefined),
+    updateCompleteCard: vi.fn().mockResolvedValue(undefined),
     renderQuestionCard: vi.fn().mockResolvedValue(undefined),
     renderPermissionCard: vi.fn().mockResolvedValue(undefined),
     renderControlCard: vi.fn().mockResolvedValue(undefined),
@@ -184,6 +186,11 @@ beforeEach(() => {
   getModelContextLimitMock.mockResolvedValue(400_000);
   scanWorkdirSubdirsMock.mockReset();
   scanWorkdirSubdirsMock.mockResolvedValue([]);
+  vi.useFakeTimers();
+});
+
+afterEach(() => {
+  vi.useRealTimers();
 });
 
 describe("ControlRouter — command dispatch", () => {
@@ -961,17 +968,143 @@ describe("ControlRouter — command dispatch", () => {
       interactionManager,
     });
 
-    const result = await router.handleCommand("chat-1", "/abort");
+    const resultPromise = router.handleCommand("chat-1", "/abort");
+    await vi.runAllTimersAsync();
+    const result = await resultPromise;
 
     expect(result.success).toBe(true);
     expect(openCodeClient.session.abort).toHaveBeenCalledWith({
       sessionID: "sess-1",
+      directory: "/workspace",
+    });
+    expect(openCodeClient.session.status).toHaveBeenCalledWith({
+      directory: "/workspace",
     });
     expect(settings.clearChatStatusMessageId).toHaveBeenCalledWith("chat-1");
     expect(interactionManager.clearBusy).toHaveBeenCalledWith("chat-1");
     expect(renderer.sendText).toHaveBeenCalledWith(
       "chat-1",
       "✅ 已取消当前操作",
+    );
+  });
+
+  it("/abort patches the active status card to an aborted state", async () => {
+    const openCodeClient = createMockOpenCodeClient();
+    const settings = createMockSettings();
+    const sessionManager = createMockSessionManager();
+    sessionManager.getChatSession.mockReturnValue({
+      id: "sess-1",
+      title: "Test",
+      directory: "/workspace",
+    });
+    const interactionManager = createMockInteractionManager();
+    const renderer = createMockRenderer();
+    const statusStore = new StatusStore();
+    const abortController = new AbortController();
+
+    statusStore.startTurn({
+      sessionId: "sess-1",
+      directory: "/workspace",
+      receiveId: "chat-1",
+      sourceMessageId: "source-1",
+    });
+    statusStore.update("sess-1", (state) => {
+      state.statusCardMessageId = "status-card-1";
+      state.subscriptionAbortController = abortController;
+    });
+
+    const router = createRouter({
+      openCodeClient,
+      settingsManager: settings,
+      sessionManager,
+      renderer,
+      interactionManager,
+      statusStore,
+    });
+
+    const resultPromise = router.handleCommand("chat-1", "/abort");
+    await vi.runAllTimersAsync();
+    const result = await resultPromise;
+
+    expect(result.success).toBe(true);
+    expect(statusStore.get("sess-1")).toBeUndefined();
+    expect(abortController.signal.aborted).toBe(true);
+    expect(renderer.updateCompleteCard).toHaveBeenCalledWith(
+      "status-card-1",
+      "OpenCode cancelled",
+      "✅ 已取消当前操作",
+      expect.objectContaining({
+        template: "orange",
+      }),
+    );
+  });
+
+  it("/abort waits for the session to settle before clearing local busy state", async () => {
+    const openCodeClient = createMockOpenCodeClient();
+    openCodeClient.session.status
+      .mockResolvedValueOnce({ data: { "sess-1": { type: "busy" } } })
+      .mockResolvedValueOnce({ data: { "sess-1": { type: "idle" } } });
+    const settings = createMockSettings();
+    const sessionManager = createMockSessionManager();
+    sessionManager.getChatSession.mockReturnValue({
+      id: "sess-1",
+      title: "Test",
+      directory: "/workspace",
+    });
+    const interactionManager = createMockInteractionManager();
+    const renderer = createMockRenderer();
+    const router = createRouter({
+      openCodeClient,
+      settingsManager: settings,
+      sessionManager,
+      renderer,
+      interactionManager,
+    });
+
+    const resultPromise = router.handleCommand("chat-1", "/abort");
+    await vi.advanceTimersByTimeAsync(249);
+    expect(interactionManager.clearBusy).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(1);
+    const result = await resultPromise;
+
+    expect(result.success).toBe(true);
+    expect(openCodeClient.session.status).toHaveBeenCalledTimes(2);
+    expect(interactionManager.clearBusy).toHaveBeenCalledWith("chat-1");
+  });
+
+  it("/abort warns when the server stays busy and preserves local busy cleanup", async () => {
+    const openCodeClient = createMockOpenCodeClient();
+    openCodeClient.session.status.mockResolvedValue({
+      data: { "sess-1": { type: "busy" } },
+    });
+    const settings = createMockSettings();
+    const sessionManager = createMockSessionManager();
+    sessionManager.getChatSession.mockReturnValue({
+      id: "sess-1",
+      title: "Test",
+      directory: "/workspace",
+    });
+    const interactionManager = createMockInteractionManager();
+    const renderer = createMockRenderer();
+    const router = createRouter({
+      openCodeClient,
+      settingsManager: settings,
+      sessionManager,
+      renderer,
+      interactionManager,
+    });
+
+    const resultPromise = router.handleCommand("chat-1", "/abort");
+    await vi.advanceTimersByTimeAsync(5_000);
+    const result = await resultPromise;
+
+    expect(result.success).toBe(false);
+    expect(interactionManager.clearBusy).not.toHaveBeenCalled();
+    expect(settings.clearChatStatusMessageId).not.toHaveBeenCalled();
+    expect(renderer.sendText).toHaveBeenCalledWith(
+      "chat-1",
+      "⚠️ 已发送取消请求，但任务仍在处理中，请稍后再试 /abort 或用 /status 确认状态",
     );
   });
 
@@ -1005,5 +1138,36 @@ describe("ControlRouter — command dispatch", () => {
       (el: { tag: string }) => el.tag === "markdown",
     );
     expect(markdownEl.content).toContain("busy");
+  });
+
+  it("/status suppresses transient server busy after local cleanup", async () => {
+    const renderer = createMockRenderer();
+    const sessionManager = createMockSessionManager();
+    sessionManager.getChatSession.mockReturnValue({
+      id: "sess-1",
+      title: "Test",
+      directory: "/workspace",
+    });
+    const openCodeClient = createMockOpenCodeClient();
+    openCodeClient.session.status.mockResolvedValue({
+      data: { "sess-1": { type: "busy" } },
+    });
+    const interactionManager = createMockInteractionManager();
+    interactionManager.isBusy.mockReturnValue(false);
+    const router = createRouter({
+      renderer,
+      sessionManager,
+      openCodeClient,
+      interactionManager,
+    });
+
+    const result = await router.handleCommand("chat-1", "/status");
+
+    expect(result.success).toBe(true);
+    const sentCard = renderer.sendCard.mock.calls[0][1];
+    const markdownEl = sentCard.elements.find(
+      (el: { tag: string }) => el.tag === "markdown",
+    );
+    expect(markdownEl.content).toContain("**State**: idle");
   });
 });
