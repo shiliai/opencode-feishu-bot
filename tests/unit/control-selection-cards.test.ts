@@ -61,6 +61,14 @@ function createMockRenderer() {
     sendCard: vi.fn().mockResolvedValue("msg-123"),
     sendText: vi.fn().mockResolvedValue([]),
     updateCompleteCard: vi.fn().mockResolvedValue(undefined),
+    sendPost: vi.fn().mockResolvedValue(undefined),
+    replyPost: vi.fn().mockResolvedValue(undefined),
+    updateCard: vi.fn().mockResolvedValue(undefined),
+    renderStatusCard: vi.fn().mockResolvedValue(undefined),
+    updateStatusCard: vi.fn().mockResolvedValue(undefined),
+    renderQuestionCard: vi.fn().mockResolvedValue(undefined),
+    renderPermissionCard: vi.fn().mockResolvedValue(undefined),
+    renderControlCard: vi.fn().mockResolvedValue(undefined),
   };
 }
 
