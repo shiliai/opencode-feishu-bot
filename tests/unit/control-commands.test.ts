@@ -104,6 +104,7 @@ function createMockOpenCodeClient() {
         .fn()
         .mockResolvedValue({ data: { "sess-1": { type: "idle" } } }),
       abort: vi.fn().mockResolvedValue({ data: true }),
+      children: vi.fn().mockResolvedValue({ data: [] }),
       messages: vi.fn().mockResolvedValue({ data: [] }),
       prompt: vi.fn().mockResolvedValue(undefined),
     },
@@ -1013,6 +1014,67 @@ describe("ControlRouter — command dispatch", () => {
     );
   });
 
+  it("/abort aborts discovered child sessions before the active session", async () => {
+    const openCodeClient = createMockOpenCodeClient();
+    openCodeClient.session.children
+      .mockResolvedValueOnce({
+        data: [
+          {
+            id: "child-1",
+            title: "Child",
+            directory: "/workspace",
+          },
+        ],
+      })
+      .mockResolvedValueOnce({
+        data: [
+          {
+            id: "grandchild-1",
+            title: "Grandchild",
+            directory: "/workspace",
+          },
+        ],
+      })
+      .mockResolvedValueOnce({ data: [] });
+    const sessionManager = createMockSessionManager();
+    sessionManager.getChatSession.mockReturnValue({
+      id: "sess-1",
+      title: "Test",
+      directory: "/workspace",
+    });
+    const router = createRouter({ openCodeClient, sessionManager });
+
+    const resultPromise = router.handleCommand("chat-1", "/abort");
+    await vi.runAllTimersAsync();
+    const result = await resultPromise;
+
+    expect(result.success).toBe(true);
+    expect(openCodeClient.session.children).toHaveBeenNthCalledWith(1, {
+      sessionID: "sess-1",
+      directory: "/workspace",
+    });
+    expect(openCodeClient.session.children).toHaveBeenNthCalledWith(2, {
+      sessionID: "child-1",
+      directory: "/workspace",
+    });
+    expect(openCodeClient.session.children).toHaveBeenNthCalledWith(3, {
+      sessionID: "grandchild-1",
+      directory: "/workspace",
+    });
+    expect(openCodeClient.session.abort).toHaveBeenNthCalledWith(1, {
+      sessionID: "grandchild-1",
+      directory: "/workspace",
+    });
+    expect(openCodeClient.session.abort).toHaveBeenNthCalledWith(2, {
+      sessionID: "child-1",
+      directory: "/workspace",
+    });
+    expect(openCodeClient.session.abort).toHaveBeenNthCalledWith(3, {
+      sessionID: "sess-1",
+      directory: "/workspace",
+    });
+  });
+
   it("/abort patches the active status card to an aborted state", async () => {
     const openCodeClient = createMockOpenCodeClient();
     const settings = createMockSettings();
@@ -1098,7 +1160,7 @@ describe("ControlRouter — command dispatch", () => {
     expect(interactionManager.clearBusy).toHaveBeenCalledWith("chat-1");
   });
 
-  it("/abort warns when the server stays busy and preserves local busy cleanup", async () => {
+  it("/abort warns when the server stays busy but still restores local busy state", async () => {
     const openCodeClient = createMockOpenCodeClient();
     openCodeClient.session.status.mockResolvedValue({
       data: { "sess-1": { type: "busy" } },
@@ -1125,24 +1187,81 @@ describe("ControlRouter — command dispatch", () => {
     const result = await resultPromise;
 
     expect(result.success).toBe(false);
-    expect(interactionManager.clearBusy).not.toHaveBeenCalled();
-    expect(settings.clearChatStatusMessageId).not.toHaveBeenCalled();
+    expect(interactionManager.clearBusy).toHaveBeenCalledWith("chat-1");
+    expect(settings.clearChatStatusMessageId).toHaveBeenCalledWith("chat-1");
     expect(renderer.sendText).toHaveBeenCalledWith(
       "chat-1",
-      "⚠️ 已发送取消请求，但任务仍在处理中，请稍后再试 /abort 或用 /status 确认状态",
+      "⚠️ 已发送取消请求，本地会话已恢复空闲；后台任务仍在结束，请稍后重试，或用 /status 确认远端状态",
+    );
+  });
+
+  it("/abort clears local busy state when the abort request fails", async () => {
+    const openCodeClient = createMockOpenCodeClient();
+    openCodeClient.session.abort.mockRejectedValue(new Error("network down"));
+    const settings = createMockSettings();
+    const sessionManager = createMockSessionManager();
+    sessionManager.getChatSession.mockReturnValue({
+      id: "sess-1",
+      title: "Test",
+      directory: "/workspace",
+    });
+    const interactionManager = createMockInteractionManager();
+    const renderer = createMockRenderer();
+    const statusStore = new StatusStore();
+    const abortController = new AbortController();
+
+    statusStore.startTurn({
+      sessionId: "sess-1",
+      directory: "/workspace",
+      receiveId: "chat-1",
+      sourceMessageId: "source-1",
+    });
+    statusStore.update("sess-1", (state) => {
+      state.statusCardMessageId = "status-card-1";
+      state.subscriptionAbortController = abortController;
+    });
+
+    const router = createRouter({
+      openCodeClient,
+      settingsManager: settings,
+      sessionManager,
+      renderer,
+      interactionManager,
+      statusStore,
+    });
+
+    const result = await router.handleCommand("chat-1", "/abort");
+
+    expect(result.success).toBe(false);
+    expect(statusStore.get("sess-1")).toBeUndefined();
+    expect(abortController.signal.aborted).toBe(true);
+    expect(interactionManager.clearBusy).toHaveBeenCalledWith("chat-1");
+    expect(settings.clearChatStatusMessageId).toHaveBeenCalledWith("chat-1");
+    expect(renderer.sendText).toHaveBeenCalledWith(
+      "chat-1",
+      "⚠️ 取消请求失败，但本地会话已恢复空闲；请稍后用 /status 检查远端状态",
     );
   });
 
   it("/abort returns failure when no active session", async () => {
     const renderer = createMockRenderer();
+    const settings = createMockSettings();
     const sessionManager = createMockSessionManager();
+    const interactionManager = createMockInteractionManager();
     sessionManager.getChatSession.mockReturnValue(undefined);
-    const router = createRouter({ renderer, sessionManager });
+    const router = createRouter({
+      renderer,
+      settingsManager: settings,
+      sessionManager,
+      interactionManager,
+    });
 
     const result = await router.handleCommand("chat-1", "/abort");
 
     expect(result.success).toBe(false);
     expect(result.message).toContain("No active session");
+    expect(settings.clearChatStatusMessageId).toHaveBeenCalledWith("chat-1");
+    expect(interactionManager.clearBusy).toHaveBeenCalledWith("chat-1");
     expect(renderer.sendText).toHaveBeenCalledWith(
       "chat-1",
       "没有活跃的会话可以取消",

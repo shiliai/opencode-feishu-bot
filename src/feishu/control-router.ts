@@ -172,6 +172,10 @@ export interface OpenCodeSessionClient {
   }): Promise<{ data?: unknown; error?: unknown }>;
   status(parameters?: Record<string, unknown>): Promise<{ data?: unknown }>;
   abort(parameters?: Record<string, unknown>): Promise<{ data?: unknown }>;
+  children?(parameters: {
+    sessionID: string;
+    directory?: string;
+  }): Promise<{ data?: unknown; error?: unknown }>;
   messages(parameters: {
     sessionID: string;
     directory?: string;
@@ -2007,6 +2011,8 @@ export class ControlRouter {
   private async handleAbort(receiveId: string): Promise<ControlCommandResult> {
     const currentSession = this.sessionManager.getChatSession(receiveId);
     if (!currentSession) {
+      this.settings.clearChatStatusMessageId(receiveId);
+      this.interactionManager.clearBusy(receiveId);
       await this.renderer.sendText(receiveId, "没有活跃的会话可以取消");
       return { success: false, message: "No active session to abort" };
     }
@@ -2017,31 +2023,23 @@ export class ControlRouter {
     }
 
     try {
-      const abortResponse = await this.openCodeSession.abort({
-        sessionID: currentSession.id,
-        directory: currentSession.directory,
-      });
-      if (
-        isRecord(abortResponse) &&
-        "error" in abortResponse &&
-        abortResponse.error
-      ) {
-        throw abortResponse.error;
-      }
+      await this.abortSessionTree(currentSession.id, currentSession.directory);
 
       const finalState = await this.pollAbortSessionState(
         currentSession.id,
         currentSession.directory,
       );
       if (finalState === "busy") {
-        if (turnState) {
-          turnState.abortRequested = false;
-        }
+        const completedTurnState = this.clearAbortedTurnState(
+          receiveId,
+          currentSession.id,
+        );
         const message =
-          "⚠️ 已发送取消请求，但任务仍在处理中，请稍后再试 /abort 或用 /status 确认状态";
+          "⚠️ 已发送取消请求，本地会话已恢复空闲；后台任务仍在结束，请稍后重试，或用 /status 确认远端状态";
         this.logger.warn(
           `[ControlRouter] Abort request did not settle in time: session=${currentSession.id}, directory=${currentSession.directory}`,
         );
+        await this.updateAbortedStatusCard(completedTurnState, message);
         await this.renderer.sendText(receiveId, message);
         return {
           success: false,
@@ -2049,13 +2047,10 @@ export class ControlRouter {
         };
       }
 
-      const completedTurnState = this.statusStore?.clear(currentSession.id);
-      if (completedTurnState) {
-        this.disposeTurnResources(completedTurnState);
-      }
-
-      this.settings.clearChatStatusMessageId(receiveId);
-      this.interactionManager.clearBusy(receiveId);
+      const completedTurnState = this.clearAbortedTurnState(
+        receiveId,
+        currentSession.id,
+      );
 
       await this.updateAbortedStatusCard(completedTurnState);
 
@@ -2066,12 +2061,135 @@ export class ControlRouter {
         message: `Session aborted: ${currentSession.id}`,
       };
     } catch (error) {
-      if (turnState) {
-        turnState.abortRequested = false;
-      }
+      const completedTurnState = this.clearAbortedTurnState(
+        receiveId,
+        currentSession.id,
+      );
       this.logger.error("[ControlRouter] Failed to abort session", error);
-      await this.renderer.sendText(receiveId, "❌ 取消操作失败，请重试");
+      const message =
+        "⚠️ 取消请求失败，但本地会话已恢复空闲；请稍后用 /status 检查远端状态";
+      await this.updateAbortedStatusCard(completedTurnState, message);
+      await this.renderer.sendText(receiveId, message);
       return { success: false, message: "Failed to abort session" };
+    }
+  }
+
+  private clearAbortedTurnState(
+    receiveId: string,
+    sessionId: string,
+  ): StatusTurnState | undefined {
+    const completedTurnState = this.statusStore?.clear(sessionId);
+    if (completedTurnState) {
+      this.disposeTurnResources(completedTurnState);
+    }
+
+    this.settings.clearChatStatusMessageId(receiveId);
+    this.interactionManager.clearBusy(receiveId);
+
+    return completedTurnState;
+  }
+
+  private async abortSessionTree(
+    sessionId: string,
+    directory: string,
+  ): Promise<void> {
+    const descendantIds = await this.collectDescendantSessionIds(
+      sessionId,
+      directory,
+    );
+
+    for (const descendantId of descendantIds.reverse()) {
+      await this.sendAbortRequest(descendantId, directory, false);
+    }
+
+    await this.sendAbortRequest(sessionId, directory, true);
+
+    if (descendantIds.length > 0) {
+      this.logger.info(
+        `[ControlRouter] Abort requested for session tree: root=${sessionId}, descendants=${descendantIds.length}`,
+      );
+    }
+  }
+
+  private async collectDescendantSessionIds(
+    sessionId: string,
+    directory: string,
+  ): Promise<string[]> {
+    if (!this.openCodeSession.children) {
+      return [];
+    }
+
+    const pending = [sessionId];
+    const visited = new Set<string>([sessionId]);
+    const descendants: string[] = [];
+
+    while (pending.length > 0) {
+      const parentSessionId = pending.shift();
+      if (!parentSessionId) {
+        continue;
+      }
+
+      try {
+        const response = await this.openCodeSession.children({
+          sessionID: parentSessionId,
+          directory,
+        });
+        if (isRecord(response) && "error" in response && response.error) {
+          throw response.error;
+        }
+
+        const childSessions = Array.isArray(response.data) ? response.data : [];
+        for (const childSession of childSessions) {
+          if (!isRecord(childSession)) {
+            continue;
+          }
+
+          const childSessionId = getTrimmedString(childSession.id);
+          if (!childSessionId || visited.has(childSessionId)) {
+            continue;
+          }
+
+          visited.add(childSessionId);
+          descendants.push(childSessionId);
+          pending.push(childSessionId);
+        }
+      } catch (error) {
+        this.logger.warn(
+          `[ControlRouter] Failed to list child sessions during abort: parentSession=${parentSessionId}, directory=${directory}`,
+          error,
+        );
+      }
+    }
+
+    return descendants;
+  }
+
+  private async sendAbortRequest(
+    sessionId: string,
+    directory: string,
+    failOnError: boolean,
+  ): Promise<void> {
+    try {
+      const abortResponse = await this.openCodeSession.abort({
+        sessionID: sessionId,
+        directory,
+      });
+      if (
+        isRecord(abortResponse) &&
+        "error" in abortResponse &&
+        abortResponse.error
+      ) {
+        throw abortResponse.error;
+      }
+    } catch (error) {
+      if (failOnError) {
+        throw error;
+      }
+
+      this.logger.warn(
+        `[ControlRouter] Failed to abort child session: session=${sessionId}, directory=${directory}`,
+        error,
+      );
     }
   }
 
@@ -2131,6 +2249,7 @@ export class ControlRouter {
 
   private async updateAbortedStatusCard(
     turnState: StatusTurnState | undefined,
+    message: string = "✅ 已取消当前操作",
   ): Promise<void> {
     if (!turnState?.statusCardMessageId) {
       return;
@@ -2140,7 +2259,7 @@ export class ControlRouter {
       await this.renderer.updateCompleteCard(
         turnState.statusCardMessageId,
         getAbortCardTitle(),
-        "✅ 已取消当前操作",
+        message,
         {
           elapsedMs: Math.max(0, Date.now() - turnState.turnStartTime),
           tokens: turnState.latestTokens,
