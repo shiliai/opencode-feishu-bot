@@ -51,7 +51,10 @@ describe("runtime event handlers chat serialization", () => {
 
     const handlers = createRuntimeEventHandlers({
       promptIngressHandler: promptIngressHandler as never,
-      pipelineController: { startTurn: vi.fn() },
+      pipelineController: {
+        startTurn: vi.fn(),
+        recordFollowUpAppended: vi.fn().mockResolvedValue(undefined),
+      },
       questionCardHandler: {
         handleCardAction: vi.fn(),
         canHandleTextReply: vi.fn().mockReturnValue(false),
@@ -68,6 +71,7 @@ describe("runtime event handlers chat serialization", () => {
       fileHandler: {
         isInboundFileMessage: vi.fn().mockReturnValue(false),
         handleInboundFile: vi.fn(),
+        downloadFile: vi.fn(),
         cleanup: vi.fn(),
       },
       logger: {
@@ -129,7 +133,10 @@ describe("runtime event handlers chat serialization", () => {
 
     const handlers = createRuntimeEventHandlers({
       promptIngressHandler: promptIngressHandler as never,
-      pipelineController: { startTurn: vi.fn() },
+      pipelineController: {
+        startTurn: vi.fn(),
+        recordFollowUpAppended: vi.fn().mockResolvedValue(undefined),
+      },
       questionCardHandler: {
         handleCardAction: vi.fn(),
         canHandleTextReply: vi.fn().mockReturnValue(false),
@@ -146,6 +153,7 @@ describe("runtime event handlers chat serialization", () => {
       fileHandler: {
         isInboundFileMessage: vi.fn().mockReturnValue(false),
         handleInboundFile: vi.fn(),
+        downloadFile: vi.fn(),
         cleanup: vi.fn(),
       },
       logger: {
@@ -181,5 +189,77 @@ describe("runtime event handlers chat serialization", () => {
     releaseFirst?.();
     await first;
     await second;
+  });
+
+  it("acknowledges appended follow-ups without starting a new turn", async () => {
+    const promptResult = {
+      kind: "appended",
+      sessionId: "sess-1",
+      directory: "/workspace/project",
+      receiveId: "chat-1",
+      sourceMessageId: "msg-1",
+      text: "follow-up",
+      followUpSummary: "📥 Follow-up added: follow-up",
+    } as const;
+    const promptIngressHandler = {
+      handlePromptInput: vi.fn(),
+      handleMessageEvent: vi.fn(async () => promptResult),
+    };
+    const startTurn = vi.fn();
+    const recordFollowUpAppended = vi.fn().mockResolvedValue(undefined);
+    const onPromptDispatched = vi.fn();
+    const sendText = vi.fn().mockResolvedValue(["ack-msg-1"]);
+
+    const handlers = createRuntimeEventHandlers({
+      promptIngressHandler: promptIngressHandler as never,
+      pipelineController: { startTurn, recordFollowUpAppended },
+      questionCardHandler: {
+        handleCardAction: vi.fn(),
+        canHandleTextReply: vi.fn().mockReturnValue(false),
+        handleTextReply: vi.fn(),
+      },
+      permissionCardHandler: {
+        handleCardAction: vi.fn(),
+      },
+      controlRouter: {
+        parseCommand: vi.fn().mockReturnValue(null),
+        handleCommand: vi.fn(),
+        handleCardAction: vi.fn(),
+      },
+      fileHandler: {
+        isInboundFileMessage: vi.fn().mockReturnValue(false),
+        handleInboundFile: vi.fn(),
+        downloadFile: vi.fn(),
+        cleanup: vi.fn(),
+      },
+      renderer: { sendText },
+      onPromptDispatched,
+      logger: {
+        debug: vi.fn(),
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+      },
+    });
+
+    await handlers.handleMessageReceived(
+      createTextEvent({
+        eventId: "evt-append",
+        messageId: "msg-1",
+        chatId: "chat-1",
+        text: "follow-up",
+      }),
+    );
+
+    expect(onPromptDispatched).toHaveBeenCalledWith(promptResult, undefined);
+    expect(recordFollowUpAppended).toHaveBeenCalledWith(
+      "sess-1",
+      "📥 Follow-up added: follow-up",
+    );
+    expect(startTurn).not.toHaveBeenCalled();
+    expect(sendText).toHaveBeenCalledWith(
+      "chat-1",
+      "📝 已将新消息追加到当前任务，继续处理中…",
+    );
   });
 });

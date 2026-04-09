@@ -106,4 +106,20 @@ describe("InteractionManager", () => {
       reason: "expected_text",
     });
   });
+
+  it("allows plain text while busy when no interaction state is active", () => {
+    const manager = new InteractionManager();
+    const chatId = "test-chat";
+
+    manager.startBusy(chatId, { reason: "active prompt" });
+
+    expect(
+      manager.resolveGuardDecision(chatId, { text: "follow-up" }),
+    ).toMatchObject({
+      allow: true,
+      busy: true,
+      inputType: "text",
+      state: null,
+    });
+  });
 });

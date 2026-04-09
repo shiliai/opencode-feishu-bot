@@ -335,6 +335,56 @@ describe("ResponsePipelineController", () => {
     );
   });
 
+  it("defers idle finalization until a newer assistant message appears after a follow-up", async () => {
+    const harness = createHarness();
+    const context = makeTurnContext();
+
+    harness.controller.startTurn(context);
+    harness.callbacks.onTypingStart?.(context.sessionId);
+    await drainSession(harness.controller, context.sessionId);
+
+    harness.callbacks.onComplete?.(
+      context.sessionId,
+      "assistant-msg-1",
+      "Initial reply",
+    );
+    await drainSession(harness.controller, context.sessionId);
+
+    await harness.controller.recordFollowUpAppended(
+      context.sessionId,
+      "📥 Follow-up added: please also cover edge cases",
+    );
+    await drainSession(harness.controller, context.sessionId);
+
+    harness.callbacks.onSessionIdle?.(context.sessionId);
+    await drainSession(harness.controller, context.sessionId);
+
+    expect(harness.renderer.updateCompleteCard).not.toHaveBeenCalled();
+    expect(harness.interactionManager.clearBusy).not.toHaveBeenCalled();
+    expect(harness.statusStore.get(context.sessionId)).toBeDefined();
+
+    harness.callbacks.onComplete?.(
+      context.sessionId,
+      "assistant-msg-2",
+      "Follow-up reply",
+    );
+    await drainSession(harness.controller, context.sessionId);
+
+    harness.callbacks.onSessionIdle?.(context.sessionId);
+    await drainSession(harness.controller, context.sessionId);
+
+    expect(harness.renderer.updateCompleteCard).toHaveBeenCalledWith(
+      "status-card-1",
+      "OpenCode reply",
+      "Follow-up reply",
+      expect.objectContaining({ template: "green" }),
+    );
+    expect(harness.interactionManager.clearBusy).toHaveBeenCalledWith(
+      context.receiveId,
+    );
+    expect(harness.statusStore.get(context.sessionId)).toBeUndefined();
+  });
+
   it("ignores session idle finalization while abort is in progress", async () => {
     const harness = createHarness();
     const context = makeTurnContext();

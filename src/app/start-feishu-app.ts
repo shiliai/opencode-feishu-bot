@@ -241,7 +241,7 @@ export async function startFeishuApp(): Promise<void> {
     botOpenId: config.feishu.botOpenId || null,
     logger,
     onPromptDispatched: async (
-      result: Extract<PromptIngressResult, { kind: "dispatched" }>,
+      result: Extract<PromptIngressResult, { kind: "dispatched" | "appended" }>,
       storedFiles,
     ) => {
       if (!storedFiles || storedFiles.length === 0) {

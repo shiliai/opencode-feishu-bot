@@ -494,4 +494,36 @@ describe("ResponsePipelineController status card throttling", () => {
       "status-card-1",
     );
   });
+
+  it("adds appended follow-ups to recent updates and refreshes the status card", async () => {
+    const harness = createHarness();
+    const context = makeTurnContext();
+
+    await createLiveStatusCard(harness, context);
+
+    await harness.controller.recordFollowUpAppended(
+      context.sessionId,
+      "📥 Follow-up added: use the staging environment",
+    );
+    await vi.advanceTimersByTimeAsync(1_000);
+    await drainSession(harness.controller, context.sessionId);
+
+    expect(harness.statusStore.get(context.sessionId)?.recentUpdates).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "follow_up",
+          summary: "📥 Follow-up added: use the staging environment",
+        }),
+      ]),
+    );
+    expect(harness.renderer.updateStatusCard).toHaveBeenCalledWith(
+      "status-card-1",
+      "OpenCode is working",
+      expect.stringContaining(
+        "📥 Follow-up added: use the staging environment",
+      ),
+      false,
+      "blue",
+    );
+  });
 });

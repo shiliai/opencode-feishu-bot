@@ -348,9 +348,16 @@ function buildFooterLine(
   }
 
   if (tokens) {
-    parts.push(
-      `↑ ${compactNumber(tokens.input)} ↓ ${compactNumber(tokens.output)}`,
-    );
+    const totalTokens =
+      tokens.input +
+      tokens.output +
+      tokens.reasoning +
+      tokens.cacheRead +
+      tokens.cacheWrite;
+
+    if (totalTokens > 0) {
+      parts.push(`🧮 ${compactNumber(totalTokens)} tok`);
+    }
 
     if (tokens.reasoning > 0) {
       parts.push(`💭 ${compactNumber(tokens.reasoning)}`);
@@ -358,7 +365,7 @@ function buildFooterLine(
 
     if (tokens.cacheRead > 0 || tokens.cacheWrite > 0) {
       parts.push(
-        `cache ${compactNumber(tokens.cacheRead)}/${compactNumber(tokens.cacheWrite)}`,
+        `🗂️ ${compactNumber(tokens.cacheRead)}/${compactNumber(tokens.cacheWrite)}`,
       );
     }
   }

@@ -139,7 +139,10 @@ async function toDataUri(localPath: string, mime: string): Promise<string> {
 
 export interface RuntimeEventHandlersOptions {
   promptIngressHandler: PromptIngressHandler;
-  pipelineController: Pick<ResponsePipelineController, "startTurn">;
+  pipelineController: Pick<
+    ResponsePipelineController,
+    "startTurn" | "recordFollowUpAppended"
+  >;
   questionCardHandler: Pick<
     QuestionCardHandler,
     "handleCardAction" | "canHandleTextReply" | "handleTextReply"
@@ -157,7 +160,7 @@ export interface RuntimeEventHandlersOptions {
   botOpenId?: string | null;
   logger?: Logger;
   onPromptDispatched?: (
-    result: Extract<PromptIngressResult, { kind: "dispatched" }>,
+    result: Extract<PromptIngressResult, { kind: "dispatched" | "appended" }>,
     storedFiles?: StoredFile[],
   ) => Promise<void> | void;
 }
@@ -181,6 +184,24 @@ export function createRuntimeEventHandlers(
       await options.renderer.sendText(receiveId, "⏳ 正在处理中，请稍候…");
     } catch (error) {
       logger.warn("[RuntimeEventHandlers] Failed to send busy feedback", error);
+    }
+  };
+
+  const sendAppendFeedback = async (receiveId: string): Promise<void> => {
+    if (!options.renderer) {
+      return;
+    }
+
+    try {
+      await options.renderer.sendText(
+        receiveId,
+        "📝 已将新消息追加到当前任务，继续处理中…",
+      );
+    } catch (error) {
+      logger.warn(
+        "[RuntimeEventHandlers] Failed to send append acknowledgement",
+        error,
+      );
     }
   };
 
@@ -419,6 +440,28 @@ export function createRuntimeEventHandlers(
     result: PromptIngressResult,
     storedFiles?: StoredFile[],
   ): Promise<void> => {
+    if (result.kind === "appended") {
+      if (options.onPromptDispatched) {
+        await options.onPromptDispatched(result, storedFiles);
+      }
+
+      await options.pipelineController.recordFollowUpAppended(
+        result.sessionId,
+        result.followUpSummary,
+      );
+      await sendAppendFeedback(result.receiveId);
+      logger.debug(
+        `[RuntimeEventHandlers] Prompt appended to active session: ${JSON.stringify(
+          {
+            sessionId: result.sessionId,
+            receiveId: result.receiveId,
+            storedFileCount: storedFiles?.length ?? 0,
+          },
+        )}`,
+      );
+      return;
+    }
+
     if (result.kind !== "dispatched") {
       if (result.kind === "blocked" && result.receiveId) {
         const isBusyBlock =

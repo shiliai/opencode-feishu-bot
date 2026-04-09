@@ -561,12 +561,12 @@ export class ResponsePipelineController {
         );
       },
       onTypingStop: () => undefined,
-      onPartial: (sessionId, _messageId, messageText) => {
-        this.handlePartial(sessionId, messageText);
+      onPartial: (sessionId, messageId, messageText) => {
+        this.handlePartial(sessionId, messageId, messageText);
       },
-      onComplete: (sessionId, _messageId, messageText) => {
+      onComplete: (sessionId, messageId, messageText) => {
         void this.enqueueSessionTask(sessionId, () =>
-          this.handleComplete(sessionId, messageText),
+          this.handleComplete(sessionId, messageId, messageText),
         );
       },
       onSessionIdle: (sessionId) => {
@@ -621,7 +621,36 @@ export class ResponsePipelineController {
     });
   }
 
-  handlePartial(sessionId: string, messageText: string): void {
+  async recordFollowUpAppended(
+    sessionId: string,
+    summary: string,
+  ): Promise<void> {
+    await this.enqueueSessionTask(sessionId, async () => {
+      const state = this.statusStore.get(sessionId);
+      if (!state || state.finalReplySent || state.pendingCompletion) {
+        return;
+      }
+
+      state.awaitingFollowUpAfterMessageId =
+        state.lastAssistantMessageId ?? null;
+
+      this.recordRecentUpdate(state, {
+        kind: "follow_up",
+        summary,
+        key: `follow_up:${hashString(`${sessionId}:${summary}`)}`,
+      });
+
+      if (state.statusCardMessageId && !state.cardUpdatesBroken) {
+        this.scheduleStatusCardUpdate(sessionId);
+      }
+    });
+  }
+
+  handlePartial(
+    sessionId: string,
+    messageId: string,
+    messageText: string,
+  ): void {
     const normalizedText = normalizeText(messageText);
     if (!normalizedText) {
       return;
@@ -631,6 +660,9 @@ export class ResponsePipelineController {
     if (!state || state.finalReplySent || state.pendingCompletion) {
       return;
     }
+
+    state.lastAssistantMessageId = messageId;
+    this.clearAwaitingFollowUpIfSatisfied(state, messageId);
 
     const signature = hashString(normalizedText);
     if (state.lastPartialSignature === signature) {
@@ -811,11 +843,18 @@ export class ResponsePipelineController {
     }
   }
 
-  async handleComplete(sessionId: string, messageText: string): Promise<void> {
+  async handleComplete(
+    sessionId: string,
+    messageId: string,
+    messageText: string,
+  ): Promise<void> {
     const state = this.statusStore.get(sessionId);
     if (!state || state.finalReplySent) {
       return;
     }
+
+    state.lastAssistantMessageId = messageId;
+    this.clearAwaitingFollowUpIfSatisfied(state, messageId);
 
     const normalizedText = normalizeText(messageText);
     const { reasoningText, answerText } = splitReasoningText(normalizedText);
@@ -861,6 +900,10 @@ export class ResponsePipelineController {
             state.directory,
           );
         if (lastMessage) {
+          this.clearAwaitingFollowUpFromFetchedMessage(
+            state,
+            lastMessage.info.id,
+          );
           const apiText = extractTextFromMessageEntry(lastMessage);
           if (apiText.trim()) {
             completionText = apiText;
@@ -875,6 +918,17 @@ export class ResponsePipelineController {
           error,
         );
       }
+    }
+
+    if (state.awaitingFollowUpAfterMessageId !== undefined) {
+      state.pendingCompletion = false;
+      this.logger.info(
+        `[ResponsePipeline] Deferring session idle finalization because a follow-up has not produced a newer assistant message yet: session=${sessionId}, baselineMessageId=${state.awaitingFollowUpAfterMessageId ?? "none"}, latestAssistantMessageId=${state.lastAssistantMessageId ?? "none"}`,
+      );
+      if (state.statusCardMessageId && !state.cardUpdatesBroken) {
+        this.scheduleStatusCardUpdate(sessionId);
+      }
+      return;
     }
 
     this.logger.info(
@@ -1343,5 +1397,31 @@ export class ResponsePipelineController {
 
     this.sessionTasks.set(sessionId, nextTask);
     await nextTask;
+  }
+
+  private clearAwaitingFollowUpIfSatisfied(
+    state: StatusTurnState,
+    messageId: string,
+  ): void {
+    const baselineMessageId = state.awaitingFollowUpAfterMessageId;
+    if (baselineMessageId === undefined) {
+      return;
+    }
+
+    if (baselineMessageId === null || messageId !== baselineMessageId) {
+      state.awaitingFollowUpAfterMessageId = undefined;
+    }
+  }
+
+  private clearAwaitingFollowUpFromFetchedMessage(
+    state: StatusTurnState,
+    messageId: string | undefined,
+  ): void {
+    if (!messageId) {
+      return;
+    }
+
+    state.lastAssistantMessageId = messageId;
+    this.clearAwaitingFollowUpIfSatisfied(state, messageId);
   }
 }
