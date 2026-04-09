@@ -34,7 +34,11 @@ function makeTurnContext(
   };
 }
 
-function createHarness(options?: { imageResolver?: ImageResolverLike }) {
+function createHarness(options?: {
+  imageResolver?: ImageResolverLike;
+  recreateInterval?: number;
+  recentUpdatesCount?: number;
+}) {
   const statusStore = new StatusStore();
   let callbacks: SummaryCallbacks | undefined;
 
@@ -43,6 +47,9 @@ function createHarness(options?: { imageResolver?: ImageResolverLike }) {
     .mockResolvedValue("status-card-1");
   const updateStatusCard = vi
     .fn<Renderer["updateStatusCard"]>()
+    .mockResolvedValue(undefined);
+  const deleteMessage = vi
+    .fn<Renderer["deleteMessage"]>()
     .mockResolvedValue(undefined);
   const renderCompleteCard = vi
     .fn<Renderer["renderCompleteCard"]>()
@@ -60,6 +67,7 @@ function createHarness(options?: { imageResolver?: ImageResolverLike }) {
   const renderer = {
     renderStatusCard,
     updateStatusCard,
+    deleteMessage,
     renderCompleteCard,
     updateCompleteCard,
     replyPost,
@@ -144,6 +152,10 @@ function createHarness(options?: { imageResolver?: ImageResolverLike }) {
         statusCardPatchRetryDelayMs: 25,
         statusCardPatchMaxAttempts: 3,
       },
+      statusCard: {
+        recreateInterval: options?.recreateInterval ?? 5,
+        recentUpdatesCount: options?.recentUpdatesCount ?? 5,
+      },
     },
   });
 
@@ -219,7 +231,7 @@ describe("ResponsePipelineController status card throttling", () => {
     expect(harness.renderer.updateStatusCard).toHaveBeenCalledWith(
       "status-card-1",
       "OpenCode is working",
-      "Hello world",
+      expect.stringContaining("Hello world"),
       false,
       "blue",
     );
@@ -262,7 +274,8 @@ describe("ResponsePipelineController status card throttling", () => {
     await drainSession(harness.controller, context.sessionId);
 
     const state = harness.statusStore.get(context.sessionId);
-    expect(state?.lastPartialSignature).toBe(state?.lastPatchedSignature);
+    expect(state?.lastPatchedText).toContain("Latest partial");
+    expect(state?.lastPatchedSignature).toBeDefined();
 
     harness.renderer.updateStatusCard.mockClear();
 
@@ -340,9 +353,57 @@ describe("ResponsePipelineController status card throttling", () => {
     expect(harness.renderer.updateStatusCard).toHaveBeenCalledWith(
       "status-card-1",
       "OpenCode is working",
-      "Hello ![img](img_resolved)",
+      expect.stringContaining("Hello ![img](img_resolved)"),
       false,
       "blue",
     );
+  });
+
+  it("recreates the status card after the configured update interval", async () => {
+    const harness = createHarness({ recreateInterval: 2 });
+    const context = makeTurnContext();
+
+    harness.renderer.renderStatusCard
+      .mockResolvedValueOnce("status-card-1")
+      .mockResolvedValueOnce("status-card-2");
+
+    await createLiveStatusCard(harness, context);
+
+    harness.callbacks.onPartial?.(
+      context.sessionId,
+      "assistant-msg-1",
+      "First",
+    );
+    await vi.advanceTimersByTimeAsync(1_000);
+    await drainSession(harness.controller, context.sessionId);
+
+    expect(harness.renderer.updateStatusCard).toHaveBeenCalledTimes(1);
+    expect(harness.renderer.deleteMessage).not.toHaveBeenCalled();
+
+    harness.callbacks.onPartial?.(
+      context.sessionId,
+      "assistant-msg-1",
+      "Second",
+    );
+    await vi.advanceTimersByTimeAsync(1_000);
+    await drainSession(harness.controller, context.sessionId);
+
+    expect(harness.renderer.renderStatusCard).toHaveBeenCalledTimes(2);
+    expect(harness.renderer.renderStatusCard).toHaveBeenLastCalledWith(
+      context.receiveId,
+      "OpenCode is working",
+      expect.stringContaining("Second"),
+      false,
+      "blue",
+    );
+    expect(harness.renderer.deleteMessage).toHaveBeenCalledWith(
+      "status-card-1",
+    );
+    expect(
+      harness.settingsManager.setChatStatusMessageId,
+    ).toHaveBeenLastCalledWith(context.receiveId, "status-card-2");
+    expect(
+      harness.statusStore.get(context.sessionId)?.statusCardMessageId,
+    ).toBe("status-card-2");
   });
 });

@@ -1,6 +1,13 @@
 import { randomUUID } from "node:crypto";
 import type { Event } from "@opencode-ai/sdk/v2";
-import { type AppConfig, getConfig, type ThrottleConfig } from "../config.js";
+import {
+  type AppConfig,
+  DEFAULT_STATUS_CARD_RECREATE_INTERVAL,
+  DEFAULT_STATUS_CARD_RECENT_UPDATES_COUNT,
+  getConfig,
+  type StatusCardConfig,
+  type ThrottleConfig,
+} from "../config.js";
 import {
   openCodeEventSubscriber,
   type SubscribeToEventsOptions,
@@ -20,6 +27,8 @@ import { splitReasoningText, stripReasoningTags } from "./reasoning-utils.js";
 import type { FeishuRenderer } from "./renderer.js";
 import {
   statusStore as defaultStatusStore,
+  type StatusCardRecentUpdate,
+  type StatusCardTodoItem,
   type ResponsePipelineTurnContext,
   type StatusStore,
   type StatusTurnState,
@@ -28,6 +37,7 @@ import {
 interface ResponsePipelineRenderer {
   renderStatusCard: FeishuRenderer["renderStatusCard"];
   updateStatusCard: FeishuRenderer["updateStatusCard"];
+  deleteMessage: FeishuRenderer["deleteMessage"];
   renderCompleteCard: FeishuRenderer["renderCompleteCard"];
   updateCompleteCard: FeishuRenderer["updateCompleteCard"];
   replyPost: FeishuRenderer["replyPost"];
@@ -85,7 +95,10 @@ export interface ResponsePipelineControllerOptions {
   settingsManager: ResponsePipelineSettingsManager;
   interactionManager: ResponsePipelineInteractionManager;
   statusStore?: StatusStore;
-  config?: Pick<AppConfig, "throttle">;
+  config?: {
+    throttle?: AppConfig["throttle"];
+    statusCard?: AppConfig["statusCard"];
+  };
   logger?: Logger;
   scheduleAsync?: (task: () => void) => void;
   setTimeoutFn?: typeof setTimeout;
@@ -104,6 +117,7 @@ const getActiveStatusCardTitle = () => `${getAssistantName()} is working`;
 const ACTIVE_STATUS_CARD_TEMPLATE = "blue" as const;
 const ACTIVE_STATUS_CARD_FALLBACK_TEXT = "Thinking…";
 const FINAL_REPLY_FALLBACK_TEXT = "Done.";
+const MAX_RECENT_UPDATE_SUMMARY_CHARS = 160;
 const getFinalReplyTitle = () => `${getAssistantName()} reply`;
 const getAbortedReplyTitle = () => `${getAssistantName()} aborted`;
 const getErrorReplyTitle = () => `${getAssistantName()} error`;
@@ -145,6 +159,102 @@ function hashString(value: string): string {
 
 function normalizeText(text: string): string {
   return text.replace(/\r\n/g, "\n").trim();
+}
+
+function normalizeInlineText(text: string): string {
+  return text.replace(/\s+/g, " ").trim();
+}
+
+function truncateInlineText(text: string, maxLength: number): string {
+  if (text.length <= maxLength) {
+    return text;
+  }
+
+  return `${text.slice(0, Math.max(0, maxLength - 1)).trimEnd()}…`;
+}
+
+function summarizeRecentText(prefix: string, text: string): string | undefined {
+  const normalized = normalizeInlineText(stripReasoningTags(text));
+  if (!normalized) {
+    return undefined;
+  }
+
+  return `${prefix} ${truncateInlineText(normalized, MAX_RECENT_UPDATE_SUMMARY_CHARS)}`;
+}
+
+function isStatusCardTodoItem(value: unknown): value is StatusCardTodoItem {
+  return (
+    isRecord(value) &&
+    typeof value.id === "string" &&
+    typeof value.content === "string" &&
+    typeof value.status === "string" &&
+    (value.priority === undefined || typeof value.priority === "string")
+  );
+}
+
+function extractTodosFromMetadata(
+  metadata: Record<string, unknown> | undefined,
+): StatusCardTodoItem[] | undefined {
+  const rawTodos = metadata?.todos;
+  if (!Array.isArray(rawTodos)) {
+    return undefined;
+  }
+
+  const todos = rawTodos.filter(isStatusCardTodoItem).map((todo) => ({
+    id: todo.id,
+    content: todo.content,
+    status: todo.status,
+    priority: todo.priority,
+  }));
+
+  return todos.length > 0 ? todos : [];
+}
+
+function buildTodoUpdateSummary(
+  todos: StatusCardTodoItem[],
+): string | undefined {
+  if (todos.length === 0) {
+    return undefined;
+  }
+
+  const counts = {
+    completed: 0,
+    inProgress: 0,
+    pending: 0,
+    cancelled: 0,
+  };
+
+  for (const todo of todos) {
+    switch (todo.status.trim().toLowerCase()) {
+      case "completed":
+        counts.completed += 1;
+        break;
+      case "in_progress":
+      case "running":
+        counts.inProgress += 1;
+        break;
+      case "cancelled":
+        counts.cancelled += 1;
+        break;
+      case "pending":
+      default:
+        counts.pending += 1;
+        break;
+    }
+  }
+
+  const parts = [
+    counts.inProgress > 0 ? `${counts.inProgress} active` : undefined,
+    counts.pending > 0 ? `${counts.pending} pending` : undefined,
+    counts.completed > 0 ? `${counts.completed} done` : undefined,
+    counts.cancelled > 0 ? `${counts.cancelled} cancelled` : undefined,
+  ].filter((part): part is string => Boolean(part));
+
+  if (parts.length === 0) {
+    return `📝 Todo list · ${todos.length} items`;
+  }
+
+  return `📝 Todo list · ${parts.join(" · ")}`;
 }
 
 function extractTextFromMessageEntry(entry: SessionMessageEntry): string {
@@ -409,6 +519,7 @@ export class ResponsePipelineController {
   private readonly interactionManager: ResponsePipelineInteractionManager;
   private readonly statusStore: StatusStore;
   private readonly throttleConfig: ThrottleConfig;
+  private readonly statusCardConfig: StatusCardConfig;
   private readonly logger: Logger;
   private readonly scheduleAsync: (task: () => void) => void;
   private readonly setTimeoutFn: typeof setTimeout;
@@ -416,6 +527,8 @@ export class ResponsePipelineController {
   private readonly sessionTasks = new Map<string, Promise<void>>();
 
   constructor(options: ResponsePipelineControllerOptions) {
+    const appConfig = options.config ? undefined : getConfig();
+
     this.eventSubscriber = options.eventSubscriber ?? openCodeEventSubscriber;
     this.summaryAggregator =
       options.summaryAggregator ?? defaultSummaryAggregator;
@@ -425,7 +538,16 @@ export class ResponsePipelineController {
     this.settingsManager = options.settingsManager;
     this.interactionManager = options.interactionManager;
     this.statusStore = options.statusStore ?? defaultStatusStore;
-    this.throttleConfig = options.config?.throttle ?? getConfig().throttle;
+    this.throttleConfig =
+      options.config?.throttle ?? appConfig?.throttle ?? getConfig().throttle;
+    this.statusCardConfig = options.config?.statusCard ?? {
+      recentUpdatesCount:
+        appConfig?.statusCard.recentUpdatesCount ??
+        DEFAULT_STATUS_CARD_RECENT_UPDATES_COUNT,
+      recreateInterval:
+        appConfig?.statusCard.recreateInterval ??
+        DEFAULT_STATUS_CARD_RECREATE_INTERVAL,
+    };
     this.logger = options.logger ?? defaultLogger;
     this.scheduleAsync =
       options.scheduleAsync ?? ((task) => setImmediate(task));
@@ -528,6 +650,19 @@ export class ResponsePipelineController {
       reasoningText && !answerText ? undefined : strippedText || undefined;
     state.lastPartialSignature = signature;
 
+    const recentSummary = strippedText
+      ? summarizeRecentText("💬", strippedText)
+      : reasoningText
+        ? summarizeRecentText("💭", reasoningText)
+        : undefined;
+    if (recentSummary) {
+      this.recordRecentUpdate(state, {
+        kind: "partial",
+        summary: recentSummary,
+        key: `partial:${signature}`,
+      });
+    }
+
     if (state.statusCardMessageId && !state.cardUpdatesBroken) {
       this.scheduleStatusCardUpdate(sessionId);
     }
@@ -550,6 +685,17 @@ export class ResponsePipelineController {
         state.toolEvents.splice(0, state.toolEvents.length - 12);
       }
     }
+
+    const toolSummary = formatToolEventLine(toolEvent);
+    if (toolSummary) {
+      this.recordRecentUpdate(state, {
+        kind: "tool",
+        summary: toolSummary,
+        key: `tool:${toolEvent.callId}:${toolEvent.status}:${toolEvent.title ?? ""}`,
+      });
+    }
+
+    this.syncTodoStateFromToolEvent(state, toolEvent);
 
     if (
       state.statusCardMessageId &&
@@ -864,6 +1010,17 @@ export class ResponsePipelineController {
       return;
     }
 
+    if (this.shouldRecreateStatusCard(state)) {
+      const recreated = await this.recreateStatusCard(
+        state,
+        content,
+        signature,
+      );
+      if (recreated) {
+        return;
+      }
+    }
+
     const maxAttempts = Math.max(
       1,
       this.throttleConfig.statusCardPatchMaxAttempts,
@@ -880,6 +1037,7 @@ export class ResponsePipelineController {
         );
         state.lastPatchedText = content;
         state.lastPatchedSignature = signature;
+        state.statusCardUpdateCount += 1;
         return;
       } catch (error) {
         if (attempt < maxAttempts && isRetryableStatusCardUpdateError(error)) {
@@ -892,6 +1050,119 @@ export class ResponsePipelineController {
         this.markCardUpdatesBroken(state, error);
         return;
       }
+    }
+  }
+
+  private recordRecentUpdate(
+    state: StatusTurnState,
+    update: StatusCardRecentUpdate,
+  ): void {
+    if (this.statusCardConfig.recentUpdatesCount <= 0) {
+      return;
+    }
+
+    const normalizedSummary = normalizeInlineText(update.summary);
+    if (!normalizedSummary) {
+      return;
+    }
+
+    const nextUpdate: StatusCardRecentUpdate = {
+      ...update,
+      summary: normalizedSummary,
+    };
+    const lastUpdate = state.recentUpdates.at(-1);
+    if (
+      lastUpdate?.key === nextUpdate.key ||
+      lastUpdate?.summary === nextUpdate.summary
+    ) {
+      return;
+    }
+
+    state.recentUpdates = [...state.recentUpdates, nextUpdate].slice(
+      -this.statusCardConfig.recentUpdatesCount,
+    );
+  }
+
+  private syncTodoStateFromToolEvent(
+    state: StatusTurnState,
+    toolEvent: SummaryToolEvent,
+  ): void {
+    const todos = extractTodosFromMetadata(toolEvent.metadata);
+    if (!todos) {
+      return;
+    }
+
+    state.todos = todos;
+    const todoSummary = buildTodoUpdateSummary(todos);
+    if (!todoSummary) {
+      return;
+    }
+
+    this.recordRecentUpdate(state, {
+      kind: "todo",
+      summary: todoSummary,
+      key: `todo:${hashString(JSON.stringify(todos))}`,
+    });
+  }
+
+  private shouldRecreateStatusCard(state: StatusTurnState): boolean {
+    return (
+      !state.pendingCompletion &&
+      this.statusCardConfig.recreateInterval > 0 &&
+      state.statusCardUpdateCount + 1 >= this.statusCardConfig.recreateInterval
+    );
+  }
+
+  private async recreateStatusCard(
+    state: StatusTurnState,
+    content: string,
+    signature: string,
+  ): Promise<boolean> {
+    const previousMessageId = state.statusCardMessageId;
+    if (!previousMessageId) {
+      return false;
+    }
+
+    try {
+      const nextMessageId = await this.renderer.renderStatusCard(
+        state.receiveId,
+        getActiveStatusCardTitle(),
+        content,
+        false,
+        ACTIVE_STATUS_CARD_TEMPLATE,
+      );
+
+      if (!nextMessageId) {
+        return false;
+      }
+
+      state.statusCardMessageId = nextMessageId;
+      state.lastPatchedText = content;
+      state.lastPatchedSignature = signature;
+      state.statusCardUpdateCount = 0;
+      this.settingsManager.setChatStatusMessageId(
+        state.receiveId,
+        nextMessageId,
+      );
+
+      if (nextMessageId !== previousMessageId) {
+        try {
+          await this.renderer.deleteMessage(previousMessageId);
+        } catch (error) {
+          this.logger.warn(
+            `[ResponsePipeline] Failed to delete stale status card after recreate: session=${state.sessionId}, messageId=${previousMessageId}`,
+            error,
+          );
+        }
+      }
+
+      return true;
+    } catch (error) {
+      this.logger.warn(
+        `[ResponsePipeline] Status card recreate failed, falling back to patch: session=${state.sessionId}`,
+        error,
+      );
+      return false;
     }
   }
 

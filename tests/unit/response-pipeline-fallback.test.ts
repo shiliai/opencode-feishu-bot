@@ -46,6 +46,9 @@ function createHarness() {
   const updateStatusCard = vi
     .fn<Renderer["updateStatusCard"]>()
     .mockResolvedValue(undefined);
+  const deleteMessage = vi
+    .fn<Renderer["deleteMessage"]>()
+    .mockResolvedValue(undefined);
   const renderCompleteCard = vi
     .fn<Renderer["renderCompleteCard"]>()
     .mockResolvedValue("complete-card-1");
@@ -62,6 +65,7 @@ function createHarness() {
   const renderer = {
     renderStatusCard,
     updateStatusCard,
+    deleteMessage,
     renderCompleteCard,
     updateCompleteCard,
     replyPost,

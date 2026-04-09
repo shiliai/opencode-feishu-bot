@@ -52,6 +52,9 @@ function createHarness() {
   const updateStatusCard = vi
     .fn<Renderer["updateStatusCard"]>()
     .mockResolvedValue(undefined);
+  const deleteMessage = vi
+    .fn<Renderer["deleteMessage"]>()
+    .mockResolvedValue(undefined);
   const renderCompleteCard = vi
     .fn<Renderer["renderCompleteCard"]>()
     .mockResolvedValue("complete-card-1");
@@ -68,6 +71,7 @@ function createHarness() {
   const renderer = {
     renderStatusCard,
     updateStatusCard,
+    deleteMessage,
     renderCompleteCard,
     updateCompleteCard,
     replyPost,
@@ -494,7 +498,7 @@ describe("ResponsePipelineController", () => {
     ).not.toBe(firstSignature);
   });
 
-  it("stores tool events, session diffs, and token updates in the turn state", () => {
+  it("stores tool events, todos, recent updates, session diffs, and token updates in the turn state", () => {
     const harness = createHarness();
     const context = makeTurnContext();
     const toolEventOne: SummaryToolEvent = {
@@ -508,8 +512,14 @@ describe("ResponsePipelineController", () => {
       sessionId: context.sessionId,
       messageId: "assistant-msg-2",
       callId: "call-2",
-      tool: "write",
+      tool: "todowrite",
       status: "completed",
+      metadata: {
+        todos: [
+          { id: "1", content: "Done item", status: "completed" },
+          { id: "2", content: "Active item", status: "in_progress" },
+        ],
+      },
     };
     const diffEvent: SummarySessionDiffEvent = {
       sessionId: context.sessionId,
@@ -529,6 +539,11 @@ describe("ResponsePipelineController", () => {
     };
 
     harness.controller.startTurn(context);
+    harness.callbacks.onPartial?.(
+      context.sessionId,
+      "assistant-msg-0",
+      "Initial draft",
+    );
     harness.callbacks.onTool?.(toolEventOne);
     harness.callbacks.onTool?.(toolEventTwo);
     harness.callbacks.onSessionDiff?.(diffEvent);
@@ -536,9 +551,26 @@ describe("ResponsePipelineController", () => {
 
     expect(harness.statusStore.get(context.sessionId)).toMatchObject({
       toolEvents: [toolEventOne, toolEventTwo],
+      todos: toolEventTwo.metadata?.todos,
       diffs: diffEvent.diffs,
       latestTokens: tokenEvent.tokens,
     });
+    expect(harness.statusStore.get(context.sessionId)?.recentUpdates).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "partial",
+          summary: "💬 Initial draft",
+        }),
+        expect.objectContaining({
+          kind: "tool",
+          summary: expect.stringContaining("apply_patch"),
+        }),
+        expect.objectContaining({
+          kind: "todo",
+          summary: expect.stringContaining("Todo list"),
+        }),
+      ]),
+    );
   });
 
   it("handleAggregatorCleared clears all turn state and disposes turn resources", async () => {
