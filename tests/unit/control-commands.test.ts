@@ -107,6 +107,7 @@ function createMockOpenCodeClient() {
       children: vi.fn().mockResolvedValue({ data: [] }),
       messages: vi.fn().mockResolvedValue({ data: [] }),
       prompt: vi.fn().mockResolvedValue(undefined),
+      delete: vi.fn().mockResolvedValue({ data: {}, error: undefined }),
     },
     app: {
       agents: vi.fn().mockResolvedValue({
@@ -423,13 +424,17 @@ describe("ControlRouter — command dispatch", () => {
     expect(markdownContent).toContain("✨ New");
   });
 
-  it("/task without args shows usage guide, /tasklist shows empty message", async () => {
+  it("/task without args shows usage guide as card, /tasklist shows empty message", async () => {
     const renderer = createMockRenderer();
     const router = createRouter({ renderer });
 
     const taskResult = await router.handleCommand("chat-1", "/task");
     expect(taskResult.success).toBe(false);
     expect(taskResult.message).toContain("Scheduled Task — Usage");
+    expect(renderer.sendCard).toHaveBeenCalledTimes(1);
+    const sentCard = renderer.sendCard.mock.calls[0][1];
+    expect(sentCard.header.title.content).toBe("📋 Scheduled Task");
+    expect(sentCard.elements[0].content).toContain("Scheduled Task — Usage");
 
     const tasklistResult = await router.handleCommand("chat-1", "/tasklist");
     expect(tasklistResult.success).toBe(true);

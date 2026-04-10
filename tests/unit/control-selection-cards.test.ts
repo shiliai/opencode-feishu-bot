@@ -98,6 +98,7 @@ function createMockOpenCodeClient() {
       abort: vi.fn().mockResolvedValue({ data: true }),
       messages: vi.fn().mockResolvedValue({ data: [] }),
       prompt: vi.fn().mockResolvedValue(undefined),
+      delete: vi.fn().mockResolvedValue({ data: {}, error: undefined }),
     },
     app: {
       agents: vi.fn().mockResolvedValue({

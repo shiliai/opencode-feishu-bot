@@ -26,6 +26,10 @@ function createMockSettings() {
     getSessionDirectoryCache: vi.fn().mockReturnValue(undefined),
     setSessionDirectoryCache: vi.fn().mockResolvedValue(undefined),
     clearSessionDirectoryCache: vi.fn(),
+    getChatSession: vi.fn().mockReturnValue(undefined),
+    setChatSession: vi.fn(),
+    clearChatSession: vi.fn(),
+    clearChatStatusMessageId: vi.fn(),
   };
 }
 
@@ -34,6 +38,9 @@ function createMockSessionManager() {
     getCurrentSession: vi.fn().mockReturnValue(null),
     setCurrentSession: vi.fn(),
     clearSession: vi.fn(),
+    getChatSession: vi.fn().mockReturnValue(undefined),
+    setChatSession: vi.fn(),
+    clearChatSession: vi.fn(),
   };
 }
 
@@ -49,6 +56,7 @@ function createMockRenderer() {
     renderQuestionCard: vi.fn().mockResolvedValue(undefined),
     renderPermissionCard: vi.fn().mockResolvedValue(undefined),
     renderControlCard: vi.fn().mockResolvedValue(undefined),
+    updateCompleteCard: vi.fn().mockResolvedValue(undefined),
   };
 }
 
@@ -62,6 +70,7 @@ function createMockOpenCodeClient() {
       abort: vi.fn().mockResolvedValue({ data: true }),
       messages: vi.fn().mockResolvedValue({ data: [] }),
       prompt: vi.fn().mockResolvedValue(undefined),
+      delete: vi.fn().mockResolvedValue({ data: {}, error: undefined }),
     },
     app: {
       agents: vi.fn().mockResolvedValue({ data: [] }),
