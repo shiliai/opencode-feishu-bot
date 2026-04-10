@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi, type Mock } from "vitest";
 import {
   QuestionCardHandler,
   type QuestionRenderer,
@@ -55,7 +55,7 @@ describe("QuestionCardHandler - handleQuestionEvent", () => {
     expect(renderer.renderQuestionCard).toHaveBeenCalledWith(
       "chat-abc",
       QUESTION,
-      "msg-source-456",
+      "req-1",
     );
     expect(manager.getActiveMessageId()).toBe("msg-card-123");
   });
@@ -65,7 +65,9 @@ describe("QuestionCardHandler - handleQuestionEvent", () => {
     const renderer = createMockRenderer();
     const client = createMockOpenCodeClient();
 
-    renderer.renderQuestionCard.mockResolvedValue("msg-unique-id-999");
+    (renderer.renderQuestionCard as Mock).mockResolvedValue(
+      "msg-unique-id-999",
+    );
 
     manager.startQuestions([QUESTION], "req-2");
 
@@ -103,7 +105,9 @@ describe("QuestionCardHandler - handleQuestionEvent", () => {
     const client = createMockOpenCodeClient();
     const logger = createMockLogger();
 
-    renderer.renderQuestionCard.mockRejectedValue(new Error("Feishu API timeout"));
+    (renderer.renderQuestionCard as Mock).mockRejectedValue(
+      new Error("Feishu API timeout"),
+    );
 
     manager.startQuestions([QUESTION], "req-3");
 
@@ -119,6 +123,8 @@ describe("QuestionCardHandler - handleQuestionEvent", () => {
     ).resolves.toBeUndefined();
 
     expect(logger.error).toHaveBeenCalledTimes(1);
-    expect(logger.error.mock.calls[0][0]).toContain("Failed to render question card");
+    expect((logger.error as Mock).mock.calls[0]?.[0]).toContain(
+      "Failed to render question card",
+    );
   });
 });
