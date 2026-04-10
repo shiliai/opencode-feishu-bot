@@ -54,7 +54,7 @@ describe("FeishuRenderer", () => {
       ],
     };
 
-    await renderer.renderQuestionCard("chat-1", q, "msg-assoc");
+    await renderer.renderQuestionCard("chat-1", q, "req-question-1");
 
     expect(createMock).toHaveBeenCalled();
     const args = createMock.mock.calls[0][0];
@@ -63,6 +63,9 @@ describe("FeishuRenderer", () => {
     expect(parsed.header.template).toBe("orange");
     expect(parsed.elements[1].tag).toBe("action");
     expect(parsed.elements[1].actions[0].value.action).toBe("question_answer");
+    expect(parsed.elements[1].actions[0].value.requestId).toBe(
+      "req-question-1",
+    );
   });
 
   it("renders permission card", async () => {
