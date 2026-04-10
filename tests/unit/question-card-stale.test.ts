@@ -38,8 +38,26 @@ function createHandler(
   });
 }
 
+function buildCardAction(options: {
+  requestId: string;
+  messageId: string;
+  optionIndex?: number;
+  action?: string;
+}) {
+  return {
+    open_message_id: options.messageId,
+    action: {
+      value: {
+        action: options.action ?? "question_answer",
+        requestId: options.requestId,
+        optionIndex: options.optionIndex ?? 0,
+      },
+    },
+  };
+}
+
 describe("QuestionCardHandler - stale card rejection", () => {
-  it("ignores card callback with a messageId that does not match the active card", async () => {
+  it("ignores card callback with an open_message_id that does not match the active card", async () => {
     const manager = new QuestionManager();
     const renderer = createMockRenderer();
     const client = createMockOpenCodeClient();
@@ -49,13 +67,12 @@ describe("QuestionCardHandler - stale card rejection", () => {
 
     const handler = createHandler(manager, renderer, client);
 
-    const staleAction = {
-      action: {
-        value: { action: "question_answer", messageId: "msg-old-expired", optionIndex: 0 },
-      },
-    };
-
-    const result = await handler.handleCardAction(staleAction);
+    const result = await handler.handleCardAction(
+      buildCardAction({
+        requestId: "req-stale-1",
+        messageId: "msg-old-expired",
+      }),
+    );
 
     expect(result).toEqual({});
     expect(client.question.reply).not.toHaveBeenCalled();
@@ -72,47 +89,49 @@ describe("QuestionCardHandler - stale card rejection", () => {
 
     const handler = createHandler(manager, renderer, client);
 
-    const action = {
-      action: {
-        value: { action: "question_answer", messageId: "msg-will-be-cleared", optionIndex: 0 },
-      },
-    };
-
-    const result = await handler.handleCardAction(action);
+    const result = await handler.handleCardAction(
+      buildCardAction({
+        requestId: "req-stale-2",
+        messageId: "msg-will-be-cleared",
+      }),
+    );
 
     expect(result).toEqual({});
     expect(client.question.reply).not.toHaveBeenCalled();
   });
 
-  it("does not alter question manager state when processing a stale callback", async () => {
+  it("ignores card callback when request identity does not match the active request", async () => {
     const manager = new QuestionManager();
     const renderer = createMockRenderer();
     const client = createMockOpenCodeClient();
 
-    manager.startQuestions([QUESTION], "req-stale-3");
+    manager.startQuestions([QUESTION], "req-active");
     manager.setActiveMessageId("msg-active-3");
 
     const snapshotBefore = manager.getStateSnapshot();
 
     const handler = createHandler(manager, renderer, client);
 
-    const staleAction = {
-      action: {
-        value: { action: "question_answer", messageId: "msg-different-id", optionIndex: 1 },
-      },
-    };
-
-    await handler.handleCardAction(staleAction);
+    await handler.handleCardAction(
+      buildCardAction({
+        requestId: "req-different",
+        messageId: "msg-active-3",
+        optionIndex: 1,
+      }),
+    );
 
     const snapshotAfter = manager.getStateSnapshot();
     expect(snapshotAfter.currentIndex).toBe(snapshotBefore.currentIndex);
     expect(snapshotAfter.activeMessageId).toBe(snapshotBefore.activeMessageId);
     expect(snapshotAfter.isActive).toBe(snapshotBefore.isActive);
     expect(snapshotAfter.requestID).toBe(snapshotBefore.requestID);
-    expect(snapshotAfter.selectedOptions.size).toBe(snapshotBefore.selectedOptions.size);
+    expect(snapshotAfter.selectedOptions.size).toBe(
+      snapshotBefore.selectedOptions.size,
+    );
+    expect(client.question.reply).not.toHaveBeenCalled();
   });
 
-  it("no OpenCode reply call is made for any stale callback scenario", async () => {
+  it("requires open_message_id for stale-card protection", async () => {
     const manager = new QuestionManager();
     const renderer = createMockRenderer();
     const client = createMockOpenCodeClient();
@@ -124,19 +143,47 @@ describe("QuestionCardHandler - stale card rejection", () => {
 
     await handler.handleCardAction({
       action: {
-        value: { action: "question_answer", messageId: "wrong-id", optionIndex: 0 },
+        value: {
+          action: "question_answer",
+          requestId: "req-stale-4",
+          optionIndex: 0,
+        },
       },
     });
 
-    await handler.handleCardAction({
-      action: {
-        value: { action: "question_answer", messageId: "also-wrong", optionIndex: 1 },
-      },
-    });
+    expect(client.question.reply).not.toHaveBeenCalled();
+  });
+
+  it("no OpenCode reply call is made for stale or invalid callback scenarios", async () => {
+    const manager = new QuestionManager();
+    const renderer = createMockRenderer();
+    const client = createMockOpenCodeClient();
+
+    manager.startQuestions([QUESTION], "req-stale-5");
+    manager.setActiveMessageId("msg-active-5");
+
+    const handler = createHandler(manager, renderer, client);
+
+    await handler.handleCardAction(
+      buildCardAction({
+        requestId: "req-stale-5",
+        messageId: "wrong-id",
+        optionIndex: 0,
+      }),
+    );
+
+    await handler.handleCardAction(
+      buildCardAction({
+        requestId: "wrong-request",
+        messageId: "msg-active-5",
+        optionIndex: 1,
+      }),
+    );
 
     await handler.handleCardAction({
+      open_message_id: "msg-active-5",
       action: {
-        value: { action: "other_action", messageId: "msg-active-4", optionIndex: 0 },
+        value: { action: "other_action", requestId: "req-stale-5" },
       },
     });
 

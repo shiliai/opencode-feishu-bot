@@ -35,6 +35,7 @@ describe("QuestionManager", () => {
     expect(manager.getCurrentQuestion()).toEqual(QUESTIONS[0]);
     expect([...manager.getSelectedOptions(0)]).toEqual([1]);
     expect(manager.getSelectedAnswer(0)).toBe("* Blue: Cool");
+    expect(manager.getSelectedAnswerLabels(0)).toEqual(["Blue"]);
     expect(manager.getMessageIds()).toEqual(["msg-1"]);
     expect(manager.isActiveMessage("msg-1")).toBe(true);
 
@@ -62,6 +63,27 @@ describe("QuestionManager", () => {
     expect(manager.hasCustomAnswer(1)).toBe(true);
   });
 
+  it("returns multi-select labels in stable option order", () => {
+    const manager = new QuestionManager();
+
+    manager.startQuestions(QUESTIONS, "request-stable");
+    manager.nextQuestion();
+
+    manager.selectOption(1, 2);
+    manager.selectOption(1, 0);
+
+    expect(manager.getSelectedAnswerLabels(1)).toEqual(["Cards", "Mentions"]);
+  });
+
+  it("getAllAnswerValues preserves positional alignment", () => {
+    const manager = new QuestionManager();
+
+    manager.startQuestions(QUESTIONS, "request-alignment");
+    manager.selectOption(0, 0);
+
+    expect(manager.getAllAnswerValues()).toEqual([["Red"], []]);
+  });
+
   it("prefers custom answers and resets state when a new question flow starts", () => {
     const manager = new QuestionManager();
 
@@ -73,6 +95,10 @@ describe("QuestionManager", () => {
     expect(manager.getAllAnswers()).toEqual([
       { question: "Choose a color", answer: "* Red: Warm" },
       { question: "Choose features", answer: "Bring your own answer" },
+    ]);
+    expect(manager.getAllAnswerValues()).toEqual([
+      ["Red"],
+      ["Bring your own answer"],
     ]);
 
     manager.startQuestions([QUESTIONS[0]], "request-4");

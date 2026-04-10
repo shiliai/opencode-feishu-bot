@@ -103,8 +103,14 @@ export class QuestionManager {
 
     this.state.selectedOptions.set(questionIndex, selected);
     logger.debug(
-      `[QuestionManager] Selected options for question ${questionIndex}: ${Array.from(selected).join(", ")}`,
+      `[QuestionManager] Selected options for question ${questionIndex}: ${this.getSelectedOptionIndexes(questionIndex).join(", ")}`,
     );
+  }
+
+  getSelectedOptionIndexes(questionIndex: number): number[] {
+    const selected =
+      this.state.selectedOptions.get(questionIndex) ?? new Set<number>();
+    return Array.from(selected).sort((a, b) => a - b);
   }
 
   getSelectedOptions(questionIndex: number): Set<number> {
@@ -119,14 +125,32 @@ export class QuestionManager {
       return "";
     }
 
-    const selected =
-      this.state.selectedOptions.get(questionIndex) ?? new Set<number>();
-    const options = Array.from(selected)
+    const options = this.getSelectedOptionIndexes(questionIndex)
       .map((index) => question.options[index])
       .filter((option): option is NonNullable<typeof option> => Boolean(option))
       .map((option) => `* ${option.label}: ${option.description}`);
 
     return options.join("\n");
+  }
+
+  getSelectedAnswerLabels(questionIndex: number): string[] {
+    const question = this.state.questions[questionIndex];
+    if (!question) {
+      return [];
+    }
+
+    return this.getSelectedOptionIndexes(questionIndex)
+      .map((index) => question.options[index]?.label)
+      .filter((label): label is string => typeof label === "string");
+  }
+
+  getAnswerValues(questionIndex: number): string[] {
+    const customAnswer = this.getCustomAnswer(questionIndex);
+    if (customAnswer) {
+      return [customAnswer];
+    }
+
+    return this.getSelectedAnswerLabels(questionIndex);
   }
 
   setCustomAnswer(questionIndex: number, answer: string): void {
@@ -253,6 +277,17 @@ export class QuestionManager {
           answer: finalAnswer,
         });
       }
+    }
+
+    return answers;
+  }
+
+  getAllAnswerValues(): Array<Array<string>> {
+    const answers: Array<Array<string>> = [];
+
+    for (let index = 0; index < this.state.questions.length; index++) {
+      const finalAnswer = this.getAnswerValues(index);
+      answers.push(finalAnswer);
     }
 
     return answers;

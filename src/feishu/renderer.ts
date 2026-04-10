@@ -235,9 +235,9 @@ export class FeishuRenderer {
   async renderQuestionCard(
     receiveId: string,
     question: Question,
-    associatedMessageId: string,
+    requestId: string,
   ): Promise<string | undefined> {
-    const card = buildQuestionCard(question, associatedMessageId);
+    const card = buildQuestionCard(question, requestId);
     return this.sendCard(receiveId, card);
   }
 

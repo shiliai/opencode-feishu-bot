@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { buildPostPayload, buildCardPayload } from "../../src/feishu/payloads.js";
+import {
+  buildPostPayload,
+  buildCardPayload,
+} from "../../src/feishu/payloads.js";
 import {
   buildPermissionCard,
   buildQuestionCard,
@@ -14,7 +17,10 @@ describe("Feishu payload contracts", () => {
 
     expect(payload).toHaveProperty("zh_cn");
 
-    const zhCn = payload.zh_cn as { title: string; content: Array<Array<{ tag: string; text: string }>> };
+    const zhCn = payload.zh_cn as {
+      title: string;
+      content: Array<Array<{ tag: string; text: string }>>;
+    };
     expect(zhCn.title).toBe("Bridge Reply");
     expect(zhCn.content).toEqual([
       [{ tag: "text", text: "First line" }],
@@ -33,10 +39,13 @@ describe("Feishu payload contracts", () => {
 
     expect(payload.config?.update_multi).toBe(true);
     expect(payload.header.template).toBe("blue");
-    expect(payload.elements[0]).toEqual({ tag: "markdown", content: "Streaming" });
+    expect(payload.elements[0]).toEqual({
+      tag: "markdown",
+      content: "Streaming",
+    });
   });
 
-  it("question cards encode question_answer actions with message and option identity", () => {
+  it("question cards encode question request identity in card actions", () => {
     const card = buildQuestionCard(
       {
         header: "Pick one",
@@ -46,7 +55,7 @@ describe("Feishu payload contracts", () => {
           { label: "Vue", description: "Progressive UI" },
         ],
       },
-      "message-123",
+      "request-123",
     );
 
     expect(card.header?.template).toBe("orange");
@@ -54,10 +63,61 @@ describe("Feishu payload contracts", () => {
       tag: "action",
       actions: [
         {
-          value: { action: "question_answer", messageId: "message-123", optionIndex: 0 },
+          value: {
+            action: "question_answer",
+            requestId: "request-123",
+            optionIndex: 0,
+          },
         },
         {
-          value: { action: "question_answer", messageId: "message-123", optionIndex: 1 },
+          value: {
+            action: "question_answer",
+            requestId: "request-123",
+            optionIndex: 1,
+          },
+        },
+      ],
+    });
+  });
+
+  it("multi-select question cards use toggle and submit actions", () => {
+    const card = buildQuestionCard(
+      {
+        header: "Pick several",
+        question: "Which tools?",
+        options: [
+          { label: "Bash", description: "Terminal" },
+          { label: "Read", description: "Files" },
+        ],
+        multiple: true,
+      },
+      "request-multi-1",
+    );
+
+    expect(card.elements?.[1]).toMatchObject({
+      tag: "action",
+      actions: [
+        {
+          value: {
+            action: "question_toggle",
+            requestId: "request-multi-1",
+            optionIndex: 0,
+          },
+        },
+        {
+          value: {
+            action: "question_toggle",
+            requestId: "request-multi-1",
+            optionIndex: 1,
+          },
+        },
+      ],
+    });
+    expect(card.elements?.[3]).toMatchObject({
+      tag: "action",
+      actions: [
+        {
+          value: { action: "question_submit", requestId: "request-multi-1" },
         },
       ],
     });
@@ -77,9 +137,27 @@ describe("Feishu payload contracts", () => {
     expect(card.elements?.[1]).toMatchObject({
       tag: "action",
       actions: [
-        { value: { action: "permission_reply", reply: "approve", requestId: "permission-1" } },
-        { value: { action: "permission_reply", reply: "always", requestId: "permission-1" } },
-        { value: { action: "permission_reply", reply: "deny", requestId: "permission-1" } },
+        {
+          value: {
+            action: "permission_reply",
+            reply: "approve",
+            requestId: "permission-1",
+          },
+        },
+        {
+          value: {
+            action: "permission_reply",
+            reply: "always",
+            requestId: "permission-1",
+          },
+        },
+        {
+          value: {
+            action: "permission_reply",
+            reply: "deny",
+            requestId: "permission-1",
+          },
+        },
       ],
     });
   });

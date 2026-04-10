@@ -18,7 +18,7 @@ export interface QuestionRenderer {
   renderQuestionCard(
     receiveId: string,
     question: Question,
-    associatedMessageId: string,
+    requestId: string,
   ): Promise<string | undefined>;
   sendText?(receiveId: string, text: string): Promise<string[]>;
 }
@@ -45,11 +45,16 @@ export interface QuestionCardHandlerOptions {
   logger?: Logger;
 }
 
-interface CardActionValue {
-  action: string;
-  messageId: string;
-  optionIndex: number;
-}
+type CardActionValue =
+  | {
+      action: "question_answer" | "question_toggle";
+      requestId: string;
+      optionIndex: number;
+    }
+  | {
+      action: "question_submit";
+      requestId: string;
+    };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -68,22 +73,40 @@ function extractActionValue(
     return null;
   }
 
-  if (value.action !== "question_answer") {
+  if (
+    value.action !== "question_answer" &&
+    value.action !== "question_toggle" &&
+    value.action !== "question_submit"
+  ) {
     return null;
   }
 
-  if (
-    typeof value.messageId !== "string" ||
-    typeof value.optionIndex !== "number"
-  ) {
+  if (typeof value.requestId !== "string") {
+    return null;
+  }
+
+  if (value.action === "question_submit") {
+    return {
+      action: value.action,
+      requestId: value.requestId,
+    };
+  }
+
+  if (typeof value.optionIndex !== "number") {
     return null;
   }
 
   return {
     action: value.action,
-    messageId: value.messageId,
+    requestId: value.requestId,
     optionIndex: value.optionIndex,
   };
+}
+
+function extractOpenMessageId(event: Record<string, unknown>): string | null {
+  return typeof event.open_message_id === "string"
+    ? event.open_message_id
+    : null;
 }
 
 export class QuestionCardHandler {
@@ -136,11 +159,6 @@ export class QuestionCardHandler {
     }
 
     this.questionManager.setCustomAnswer(currentIndex, answer);
-    await this.openCodeClient.question.reply({
-      requestID,
-      answers: [[answer]],
-    });
-
     await this.advanceQuestionFlow();
     return true;
   }
@@ -158,6 +176,14 @@ export class QuestionCardHandler {
     this.activeReceiveId = receiveId;
     this.activeSourceMessageId = sourceMessageId;
 
+    const requestID = this.questionManager.getRequestID();
+    if (!requestID) {
+      this.logger.warn(
+        "[QuestionCardHandler] No requestID found for question card render",
+      );
+      return;
+    }
+
     if (question.custom && this.renderer.sendText) {
       await this.renderer.sendText(
         receiveId,
@@ -173,7 +199,7 @@ export class QuestionCardHandler {
       const messageId = await this.renderer.renderQuestionCard(
         receiveId,
         question,
-        sourceMessageId,
+        requestID,
       );
 
       if (messageId) {
@@ -198,7 +224,13 @@ export class QuestionCardHandler {
       return {};
     }
 
-    const { messageId, optionIndex } = actionValue;
+    const messageId = extractOpenMessageId(event);
+    if (!messageId) {
+      this.logger.warn(
+        "[QuestionCardHandler] Card action missing open_message_id",
+      );
+      return {};
+    }
 
     if (!this.questionManager.isActiveMessage(messageId)) {
       this.logger.debug(
@@ -207,26 +239,38 @@ export class QuestionCardHandler {
       return {};
     }
 
-    const currentIndex = this.questionManager.getCurrentIndex();
-    this.questionManager.selectOption(currentIndex, optionIndex);
-
-    const selectedAnswer = this.questionManager.getSelectedAnswer(currentIndex);
     const requestID = this.questionManager.getRequestID();
-
-    if (!requestID) {
+    if (!requestID || requestID !== actionValue.requestId) {
       this.logger.warn(
-        "[QuestionCardHandler] No requestID found, skipping reply",
+        `[QuestionCardHandler] Request mismatch for card action: manager=${requestID ?? "missing"}, card=${actionValue.requestId}`,
       );
       return {};
     }
 
-    await this.openCodeClient.question.reply({
-      requestID,
-      answers: [[selectedAnswer]],
-    });
+    const currentIndex = this.questionManager.getCurrentIndex();
+
+    if (actionValue.action !== "question_submit") {
+      this.questionManager.selectOption(currentIndex, actionValue.optionIndex);
+    }
+
+    const answerValues = this.questionManager.getAnswerValues(currentIndex);
+
+    if (actionValue.action === "question_toggle") {
+      this.logger.debug(
+        `[QuestionCardHandler] Toggled selections for question ${currentIndex}: ${answerValues.join(", ")}`,
+      );
+      return {};
+    }
+
+    if (answerValues.length === 0) {
+      this.logger.debug(
+        `[QuestionCardHandler] Ignoring question action without a completed answer: requestID=${requestID}, questionIndex=${currentIndex}, action=${actionValue.action}`,
+      );
+      return {};
+    }
 
     this.logger.debug(
-      `[QuestionCardHandler] Forwarded answer for question ${currentIndex}: ${selectedAnswer}`,
+      `[QuestionCardHandler] Captured answer for question ${currentIndex}: ${answerValues.join(", ")}`,
     );
 
     await this.advanceQuestionFlow();
@@ -235,29 +279,63 @@ export class QuestionCardHandler {
   }
 
   private async advanceQuestionFlow(): Promise<void> {
-    this.questionManager.nextQuestion();
+    const currentIndex = this.questionManager.getCurrentIndex();
+    const totalQuestions = this.questionManager.getTotalQuestions();
+    const isLastQuestion = currentIndex + 1 >= totalQuestions;
 
-    if (this.questionManager.hasNextQuestion()) {
-      const nextQuestion = this.questionManager.getCurrentQuestion();
-      if (!nextQuestion) {
-        return;
-      }
+    if (!isLastQuestion) {
+      this.questionManager.nextQuestion();
 
-      this.syncInteractionState(nextQuestion);
+      if (this.questionManager.hasNextQuestion()) {
+        const nextQuestion = this.questionManager.getCurrentQuestion();
+        if (!nextQuestion) {
+          return;
+        }
 
-      if (!this.activeReceiveId || !this.activeSourceMessageId) {
-        this.logger.warn(
-          "[QuestionCardHandler] Missing render context for next question",
+        this.syncInteractionState(nextQuestion);
+
+        if (!this.activeReceiveId || !this.activeSourceMessageId) {
+          this.logger.warn(
+            "[QuestionCardHandler] Missing render context for next question",
+          );
+          return;
+        }
+
+        await this.handleQuestionEvent(
+          this.activeReceiveId,
+          this.activeSourceMessageId,
         );
-        return;
       }
 
-      await this.handleQuestionEvent(
-        this.activeReceiveId,
-        this.activeSourceMessageId,
+      return;
+    }
+
+    const requestID = this.questionManager.getRequestID();
+    if (!requestID) {
+      this.logger.warn(
+        "[QuestionCardHandler] No requestID found, skipping final reply",
       );
       return;
     }
+
+    const answers = this.questionManager.getAllAnswerValues();
+
+    const missingIndex = answers.findIndex((answer) => answer.length === 0);
+    if (missingIndex !== -1) {
+      this.logger.warn(
+        `[QuestionCardHandler] Refusing to reply with incomplete answers: requestID=${requestID}, missingIndex=${missingIndex}, totalQuestions=${totalQuestions}`,
+      );
+      return;
+    }
+
+    await this.openCodeClient.question.reply({
+      requestID,
+      answers,
+    });
+
+    this.logger.debug(
+      `[QuestionCardHandler] Forwarded ${answers.length} answers for request ${requestID}`,
+    );
 
     this.questionManager.clear();
     if (this.interactionManager && this.activeReceiveId) {

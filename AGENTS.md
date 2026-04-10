@@ -98,6 +98,21 @@ Use these local references first:
 2. Search the two local reference repositories above.
 3. Only then use web docs/search if local sources are insufficient.
 
+### Docs shortcut for OpenCode / bridge investigations
+
+Before scanning `_reference/opencode` or re-reading large parts of the bridge, consult the curated docs in `docs/` first.
+
+Start with:
+
+- `docs/index.md`
+- `docs/feishu-bridge-state-analysis.md`
+- `docs/feishu-bridge-git-hotspots.md`
+- `docs/opencode-session-state-reference.md`
+- `docs/opencode-web-client-interaction.md`
+- `docs/opencode-server-api-reference.md`
+
+Use `_reference/opencode` only when those docs are missing coverage, appear stale, or you need line-level confirmation against the reference source.
+
 ## 8) Formatting and style conventions
 
 - 2-space indentation.
