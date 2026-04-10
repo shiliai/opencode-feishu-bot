@@ -34,5 +34,8 @@ settings.json
 .sisyphus/
 full_test_log.txt
 
+# Reference codebases (local analysis only)
+_reference/
+
 # Packaging artifacts
 *.tgz
