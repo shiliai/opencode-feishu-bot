@@ -407,7 +407,7 @@ function formatElapsed(ms: number): string {
 
 export function buildQuestionCard(
   questionState: Question,
-  messageId: string,
+  requestId: string,
 ): InteractiveCard {
   const elements: InteractiveCardElement[] = [
     {
@@ -430,7 +430,7 @@ export function buildQuestionCard(
         questionState.options.map((opt, i) => ({
           tag: "button",
           text: plainText(opt.label),
-          value: { action: "question_answer", messageId, optionIndex: i },
+          value: { action: "question_toggle", requestId, optionIndex: i },
         }));
 
       elements.push({
@@ -441,14 +441,26 @@ export function buildQuestionCard(
       elements.push({
         tag: "markdown",
         content:
-          "*This is a multiple-choice question. Please select all that apply.*",
+          "*This is a multiple-choice question. Select all that apply, then click Submit selections.*",
+      });
+
+      elements.push({
+        tag: "action",
+        actions: [
+          {
+            tag: "button",
+            text: plainText("Submit selections"),
+            type: "primary",
+            value: { action: "question_submit", requestId },
+          },
+        ],
       });
     } else {
       const optionButtons: InteractiveCardActionItem[] =
         questionState.options.map((opt, i) => ({
           tag: "button",
           text: plainText(opt.label),
-          value: { action: "question_answer", messageId, optionIndex: i },
+          value: { action: "question_answer", requestId, optionIndex: i },
         }));
 
       elements.push({

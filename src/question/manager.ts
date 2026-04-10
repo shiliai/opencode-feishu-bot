@@ -129,6 +129,29 @@ export class QuestionManager {
     return options.join("\n");
   }
 
+  getSelectedAnswerLabels(questionIndex: number): string[] {
+    const question = this.state.questions[questionIndex];
+    if (!question) {
+      return [];
+    }
+
+    const selected =
+      this.state.selectedOptions.get(questionIndex) ?? new Set<number>();
+
+    return Array.from(selected)
+      .map((index) => question.options[index]?.label)
+      .filter((label): label is string => typeof label === "string");
+  }
+
+  getAnswerValues(questionIndex: number): string[] {
+    const customAnswer = this.getCustomAnswer(questionIndex);
+    if (customAnswer) {
+      return [customAnswer];
+    }
+
+    return this.getSelectedAnswerLabels(questionIndex);
+  }
+
   setCustomAnswer(questionIndex: number, answer: string): void {
     logger.debug(
       `[QuestionManager] Custom answer received for question ${questionIndex}: ${answer}`,
@@ -252,6 +275,19 @@ export class QuestionManager {
           question: question.question,
           answer: finalAnswer,
         });
+      }
+    }
+
+    return answers;
+  }
+
+  getAllAnswerValues(): Array<Array<string>> {
+    const answers: Array<Array<string>> = [];
+
+    for (let index = 0; index < this.state.questions.length; index++) {
+      const finalAnswer = this.getAnswerValues(index);
+      if (finalAnswer.length > 0) {
+        answers.push(finalAnswer);
       }
     }
 
