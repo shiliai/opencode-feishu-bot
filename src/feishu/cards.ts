@@ -423,9 +423,6 @@ export function buildQuestionCard(
 
   if (questionState.options && questionState.options.length > 0) {
     if (questionState.multiple) {
-      // For multiple, a select menu is usually better, but for simplicity of actions we can use buttons with state
-      // Actually feishu select menu has multi-select support, but node sdk might not fully model it
-      // For now we render options as buttons (or maybe a select menu)
       const optionButtons: InteractiveCardActionItem[] =
         questionState.options.map((opt, i) => ({
           tag: "button",
