@@ -50,19 +50,20 @@ describe("question and permission integration", () => {
     expect(harness.renderer.renderQuestionCard).toHaveBeenCalledWith(
       "chat-question-1",
       createQuestionFixture()[0],
-      "source-msg-question-1",
+      "question-request-1",
     );
 
     await harness.handleCardAction(
       createQuestionCardAction({
         messageId: "question-card-1",
+        requestId: "question-request-1",
         optionIndex: 0,
       }),
     );
 
     expect(harness.openCodeClients.question.reply).toHaveBeenCalledWith({
       requestID: "question-request-1",
-      answers: [["* React: Component UI"]],
+      answers: [["React"]],
     });
   });
 

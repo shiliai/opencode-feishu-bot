@@ -309,8 +309,8 @@ export async function createBridgeHarness(): Promise<BridgeHarness> {
   };
 
   const questionRenderer: QuestionRenderer = {
-    renderQuestionCard: (receiveId, question, associatedMessageId) =>
-      renderer.renderQuestionCard(receiveId, question, associatedMessageId),
+    renderQuestionCard: (receiveId, question, requestId) =>
+      renderer.renderQuestionCard(receiveId, question, requestId),
   };
 
   const questionCardHandler = new QuestionCardHandler({

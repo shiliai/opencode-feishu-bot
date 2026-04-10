@@ -212,6 +212,7 @@ export function createWriteToolEvent(options: {
 
 export function createQuestionCardAction(options: {
   messageId: string;
+  requestId: string;
   optionIndex: number;
   eventId?: string;
 }): Record<string, unknown> {
@@ -223,7 +224,7 @@ export function createQuestionCardAction(options: {
     action: {
       value: {
         action: "question_answer",
-        messageId: options.messageId,
+        requestId: options.requestId,
         optionIndex: options.optionIndex,
       },
     },
