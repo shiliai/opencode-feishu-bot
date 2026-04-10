@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi, type Mock } from "vitest";
 import {
   QuestionCardHandler,
   type QuestionRenderer,
@@ -21,6 +21,17 @@ const SECOND_QUESTION = {
     { label: "TypeScript", description: "Static typing" },
     { label: "JavaScript", description: "Dynamic scripting" },
   ],
+};
+
+const MULTI_SELECT_QUESTION = {
+  header: "Pick several",
+  question: "Which tools do you use?",
+  options: [
+    { label: "Bash", description: "Terminal" },
+    { label: "Read", description: "Files" },
+    { label: "Edit", description: "Changes" },
+  ],
+  multiple: true,
 };
 
 function createMockRenderer(): QuestionRenderer {
@@ -48,8 +59,32 @@ function createHandler(
   });
 }
 
+function buildCardAction(options: {
+  action?: "question_answer" | "question_toggle" | "question_submit";
+  requestId: string;
+  messageId: string;
+  optionIndex?: number;
+}) {
+  const action = options.action ?? "question_answer";
+  const value =
+    action === "question_submit"
+      ? { action, requestId: options.requestId }
+      : {
+          action,
+          requestId: options.requestId,
+          optionIndex: options.optionIndex ?? 0,
+        };
+
+  return {
+    open_message_id: options.messageId,
+    action: {
+      value,
+    },
+  };
+}
+
 describe("QuestionCardHandler - handleCardAction", () => {
-  it("forwards exactly one answer to OpenCode for a single-question flow", async () => {
+  it("forwards raw option labels to OpenCode for a single-question flow", async () => {
     const manager = new QuestionManager();
     const renderer = createMockRenderer();
     const client = createMockOpenCodeClient();
@@ -59,42 +94,18 @@ describe("QuestionCardHandler - handleCardAction", () => {
 
     const handler = createHandler(manager, renderer, client);
 
-    const cardAction = {
-      action: {
-        value: { action: "question_answer", messageId: "msg-active-1", optionIndex: 0 },
-      },
-    };
-
-    await handler.handleCardAction(cardAction);
+    await handler.handleCardAction(
+      buildCardAction({
+        requestId: "req-single",
+        messageId: "msg-active-1",
+        optionIndex: 0,
+      }),
+    );
 
     expect(client.question.reply).toHaveBeenCalledTimes(1);
     expect(client.question.reply).toHaveBeenCalledWith({
       requestID: "req-single",
-      answers: [["* React: Component library"]],
-    });
-  });
-
-  it("answer text matches the selected option's label and description", async () => {
-    const manager = new QuestionManager();
-    const renderer = createMockRenderer();
-    const client = createMockOpenCodeClient();
-
-    manager.startQuestions([QUESTION], "req-label");
-    manager.setActiveMessageId("msg-label-1");
-
-    const handler = createHandler(manager, renderer, client);
-
-    const cardAction = {
-      action: {
-        value: { action: "question_answer", messageId: "msg-label-1", optionIndex: 1 },
-      },
-    };
-
-    await handler.handleCardAction(cardAction);
-
-    expect(client.question.reply).toHaveBeenCalledWith({
-      requestID: "req-label",
-      answers: [["* Vue: Progressive framework"]],
+      answers: [["React"]],
     });
   });
 
@@ -104,60 +115,112 @@ describe("QuestionCardHandler - handleCardAction", () => {
     const client = createMockOpenCodeClient();
 
     manager.startQuestions([QUESTION], "req-last");
+    manager.setActiveMessageId("msg-last-1");
 
     const handler = createHandler(manager, renderer, client);
 
-    manager.setActiveMessageId("msg-last-1");
-
-    const cardAction = {
-      action: {
-        value: { action: "question_answer", messageId: "msg-last-1", optionIndex: 0 },
-      },
-    };
-
-    await handler.handleCardAction(cardAction);
+    await handler.handleCardAction(
+      buildCardAction({
+        requestId: "req-last",
+        messageId: "msg-last-1",
+        optionIndex: 0,
+      }),
+    );
 
     expect(manager.isActive()).toBe(false);
   });
 
-  it("renders the next question card and does not clear when more questions remain", async () => {
+  it("batches answers across multiple questions and replies once at the end", async () => {
     const manager = new QuestionManager();
     const renderer = createMockRenderer();
     const client = createMockOpenCodeClient();
 
+    (renderer.renderQuestionCard as Mock)
+      .mockResolvedValueOnce("msg-card-q1")
+      .mockResolvedValueOnce("msg-card-q2");
+
     manager.startQuestions([QUESTION, SECOND_QUESTION], "req-multi");
-    manager.setActiveMessageId("msg-multi-1");
 
     const handler = createHandler(manager, renderer, client);
 
     await handler.handleQuestionEvent("chat-1", "source-msg-1");
 
-    const cardAction = {
-      action: {
-        value: { action: "question_answer", messageId: "msg-card-new", optionIndex: 1 },
-      },
-    };
+    await handler.handleCardAction(
+      buildCardAction({
+        requestId: "req-multi",
+        messageId: "msg-card-q1",
+        optionIndex: 1,
+      }),
+    );
 
-    await handler.handleCardAction(cardAction);
-
-    expect(client.question.reply).toHaveBeenCalledWith({
-      requestID: "req-multi",
-      answers: [["* Vue: Progressive framework"]],
-    });
-
+    expect(client.question.reply).not.toHaveBeenCalled();
     expect(manager.getCurrentIndex()).toBe(1);
     expect(manager.getCurrentQuestion()).toEqual(SECOND_QUESTION);
-
-    expect(renderer.renderQuestionCard).toHaveBeenCalledTimes(2);
     expect(renderer.renderQuestionCard).toHaveBeenNthCalledWith(
       2,
       "chat-1",
       SECOND_QUESTION,
-      "source-msg-1",
+      "req-multi",
     );
-    expect(manager.getActiveMessageId()).toBe("msg-card-new");
+    expect(manager.getActiveMessageId()).toBe("msg-card-q2");
 
-    expect(manager.isActive()).toBe(true);
+    await handler.handleCardAction(
+      buildCardAction({
+        requestId: "req-multi",
+        messageId: "msg-card-q2",
+        optionIndex: 0,
+      }),
+    );
+
+    expect(client.question.reply).toHaveBeenCalledTimes(1);
+    expect(client.question.reply).toHaveBeenCalledWith({
+      requestID: "req-multi",
+      answers: [["Vue"], ["TypeScript"]],
+    });
+    expect(manager.isActive()).toBe(false);
+  });
+
+  it("waits for an explicit submit action before replying to a multi-select question", async () => {
+    const manager = new QuestionManager();
+    const renderer = createMockRenderer();
+    const client = createMockOpenCodeClient();
+
+    manager.startQuestions([MULTI_SELECT_QUESTION], "req-multi-select");
+
+    const handler = createHandler(manager, renderer, client);
+    await handler.handleQuestionEvent("chat-1", "source-msg-1");
+
+    await handler.handleCardAction(
+      buildCardAction({
+        action: "question_toggle",
+        requestId: "req-multi-select",
+        messageId: "msg-card-new",
+        optionIndex: 0,
+      }),
+    );
+    await handler.handleCardAction(
+      buildCardAction({
+        action: "question_toggle",
+        requestId: "req-multi-select",
+        messageId: "msg-card-new",
+        optionIndex: 2,
+      }),
+    );
+
+    expect(client.question.reply).not.toHaveBeenCalled();
+
+    await handler.handleCardAction(
+      buildCardAction({
+        action: "question_submit",
+        requestId: "req-multi-select",
+        messageId: "msg-card-new",
+      }),
+    );
+
+    expect(client.question.reply).toHaveBeenCalledWith({
+      requestID: "req-multi-select",
+      answers: [["Bash", "Edit"]],
+    });
   });
 
   it("returns an empty object for non-question card actions", async () => {
@@ -171,8 +234,9 @@ describe("QuestionCardHandler - handleCardAction", () => {
     const handler = createHandler(manager, renderer, client);
 
     const cardAction = {
+      open_message_id: "msg-ignore-1",
       action: {
-        value: { action: "control_cancel", messageId: "msg-ignore-1" },
+        value: { action: "control_cancel", requestId: "req-ignore" },
       },
     };
 
