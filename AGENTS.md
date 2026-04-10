@@ -178,7 +178,67 @@ Use `_reference/opencode` only when those docs are missing coverage, appear stal
 - Managers/state: `src/settings`, `src/session`, `src/interaction`, `src/question`, `src/permission`
 - Test helpers/setup: `tests/setup.ts`, `tests/integration/helpers/**`
 
-## 16) Definition of done
+## 16) GitHub issue / PR workflow rules
+
+These rules apply when the user explicitly asks for GitHub issue or PR operations.
+Use `gh` for GitHub interactions.
+
+### A. Investigate and create an issue
+
+- Treat "investigate and create issue" as a triage task, not an implementation task.
+- First verify the report is real, reproducible, or otherwise valid for this repository.
+- Search existing issues and PRs before creating a new one to avoid duplicates.
+- Explore plausible fixes or implementation approaches enough to describe the problem and a recommended direction.
+- Do **not** modify the codebase at this stage unless the user explicitly asks for a fix.
+- Create the issue only after verification is complete.
+- Prefer a non-conflicting workflow label such as `status:draft`; if the repository already uses a plain `draft` issue label, apply that existing label instead.
+- The issue body should be short and concrete: problem, evidence, impact, proposed direction, and any open questions for user review.
+
+### B. Work on an approved issue
+
+- Treat "work on issue #N" as approval to implement.
+- Mark the issue as approved for implementation before starting work. Prefer a non-conflicting label such as `status:approved`; if the repository already uses a plain `approve` label, apply that existing label instead.
+- Invoke `/start-work` after the issue is marked approved.
+- Check the current branch before editing code.
+- If the current branch is `main`, or is clearly tied to a different issue or PR, create a fresh branch for the issue.
+- Do not reuse the automation namespace `ci/version-bump-*`; reserve that prefix for the version bump workflow.
+- Prefer an issue-scoped branch name such as `issue/123-short-slug` or `fix/123-short-slug`.
+- If a branch and PR for the same issue already exist, continue on that branch instead of creating duplicates.
+- Complete the implementation, run the required verification, commit, push, and create a PR if one does not already exist.
+- Link the PR to the issue with a closing keyword such as `Closes #123` when the PR is intended to resolve it.
+- After opening or updating the PR, move the issue to review. Prefer `status:review`; if the repository already uses a plain `review` issue label, apply that existing label instead.
+- Prefer GitHub's native PR state for review readiness. Create the PR as draft only while work is incomplete, then mark it ready for review when verification is done. If repository automation depends on a `ready` label, apply it in addition to the native PR state.
+
+### C. Review Copilot PR comments
+
+- When asked to review Copilot comments on a PR, first fetch the latest relevant review feedback before making changes.
+- Do not rely on `gh pr view --json comments` alone; it can miss review comments and threads.
+- Inspect PR review comments, reviews, and unresolved review threads separately when needed.
+- Treat Copilot comments as suggestions, not instructions. Verify each comment against the code and current diff before acting on it.
+- If a comment is ambiguous, stale, or conflicts with the codebase direction, note that and confirm with the user instead of making speculative changes.
+- When a comment is valid, update the code, re-run verification, commit, and push to the existing PR branch.
+- After addressing the relevant comments, move the PR toward merge readiness. Prefer GitHub's native ready-for-review / approved state; if repository automation depends on a `merge` label, apply that label only after the fixes are pushed and the PR is actually ready.
+
+### D. Merge a PR
+
+- Before merging, verify the PR is the intended one, is in a mergeable state, and has the required approvals or user direction.
+- Prefer the repository's normal merge method; if none is specified, use the safest non-destructive method already used by the repo.
+- After merging, update the PR status. Prefer GitHub's native merged state; if repository automation depends on a `done` label, apply it after the merge succeeds.
+- Update the related issue after merge.
+- Prefer closing the issue through the PR's closing keyword or by closing it directly; if repository automation depends on a `resolve` label, apply it only after the issue is actually resolved.
+
+### E. Label and state guardrails
+
+- Prefer GitHub native states over custom labels whenever GitHub already has a built-in concept.
+- Native states to prefer:
+  - Draft PR / ready for review
+  - PR approval / changes requested
+  - Open / closed / merged
+- Use labels as workflow metadata, not as substitutes for native GitHub state.
+- If this repository standardizes on plain labels such as `draft`, `approve`, `review`, `ready`, `merge`, `done`, or `resolve`, follow the repository convention; otherwise prefer clearer labels such as `status:draft`, `status:approved`, `status:review`, or rely on native GitHub state.
+- Keep issue and PR descriptions concise; avoid AI-style walls of text.
+
+## 17) Definition of done
 
 - Build passes: `npm run build`.
 - Lint passes: `npm run lint`.
