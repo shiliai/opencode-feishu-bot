@@ -195,7 +195,7 @@ describe("QuestionCardHandler - handleCardAction", () => {
         action: "question_toggle",
         requestId: "req-multi-select",
         messageId: "msg-card-new",
-        optionIndex: 0,
+        optionIndex: 2,
       }),
     );
     await handler.handleCardAction(
@@ -203,7 +203,7 @@ describe("QuestionCardHandler - handleCardAction", () => {
         action: "question_toggle",
         requestId: "req-multi-select",
         messageId: "msg-card-new",
-        optionIndex: 2,
+        optionIndex: 0,
       }),
     );
 

@@ -103,8 +103,14 @@ export class QuestionManager {
 
     this.state.selectedOptions.set(questionIndex, selected);
     logger.debug(
-      `[QuestionManager] Selected options for question ${questionIndex}: ${Array.from(selected).join(", ")}`,
+      `[QuestionManager] Selected options for question ${questionIndex}: ${this.getSelectedOptionIndexes(questionIndex).join(", ")}`,
     );
+  }
+
+  getSelectedOptionIndexes(questionIndex: number): number[] {
+    const selected =
+      this.state.selectedOptions.get(questionIndex) ?? new Set<number>();
+    return Array.from(selected).sort((a, b) => a - b);
   }
 
   getSelectedOptions(questionIndex: number): Set<number> {
@@ -119,9 +125,7 @@ export class QuestionManager {
       return "";
     }
 
-    const selected =
-      this.state.selectedOptions.get(questionIndex) ?? new Set<number>();
-    const options = Array.from(selected)
+    const options = this.getSelectedOptionIndexes(questionIndex)
       .map((index) => question.options[index])
       .filter((option): option is NonNullable<typeof option> => Boolean(option))
       .map((option) => `* ${option.label}: ${option.description}`);
@@ -135,10 +139,7 @@ export class QuestionManager {
       return [];
     }
 
-    const selected =
-      this.state.selectedOptions.get(questionIndex) ?? new Set<number>();
-
-    return Array.from(selected)
+    return this.getSelectedOptionIndexes(questionIndex)
       .map((index) => question.options[index]?.label)
       .filter((label): label is string => typeof label === "string");
   }
@@ -286,9 +287,7 @@ export class QuestionManager {
 
     for (let index = 0; index < this.state.questions.length; index++) {
       const finalAnswer = this.getAnswerValues(index);
-      if (finalAnswer.length > 0) {
-        answers.push(finalAnswer);
-      }
+      answers.push(finalAnswer);
     }
 
     return answers;

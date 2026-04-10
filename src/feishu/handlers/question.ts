@@ -319,6 +319,15 @@ export class QuestionCardHandler {
     }
 
     const answers = this.questionManager.getAllAnswerValues();
+
+    const missingIndex = answers.findIndex((answer) => answer.length === 0);
+    if (missingIndex !== -1) {
+      this.logger.warn(
+        `[QuestionCardHandler] Refusing to reply with incomplete answers: requestID=${requestID}, missingIndex=${missingIndex}, totalQuestions=${totalQuestions}`,
+      );
+      return;
+    }
+
     await this.openCodeClient.question.reply({
       requestID,
       answers,

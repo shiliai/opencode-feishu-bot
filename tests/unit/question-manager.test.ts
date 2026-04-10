@@ -63,6 +63,27 @@ describe("QuestionManager", () => {
     expect(manager.hasCustomAnswer(1)).toBe(true);
   });
 
+  it("returns multi-select labels in stable option order", () => {
+    const manager = new QuestionManager();
+
+    manager.startQuestions(QUESTIONS, "request-stable");
+    manager.nextQuestion();
+
+    manager.selectOption(1, 2);
+    manager.selectOption(1, 0);
+
+    expect(manager.getSelectedAnswerLabels(1)).toEqual(["Cards", "Mentions"]);
+  });
+
+  it("getAllAnswerValues preserves positional alignment", () => {
+    const manager = new QuestionManager();
+
+    manager.startQuestions(QUESTIONS, "request-alignment");
+    manager.selectOption(0, 0);
+
+    expect(manager.getAllAnswerValues()).toEqual([["Red"], []]);
+  });
+
   it("prefers custom answers and resets state when a new question flow starts", () => {
     const manager = new QuestionManager();
 
