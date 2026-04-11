@@ -178,6 +178,18 @@ export function createRuntimeEventHandlers(
   const messageTasks = new Map<string, Promise<void>>();
   const cardActionTasks = new Map<string, Promise<void>>();
 
+  const mergeCardActionResponses = (
+    ...responses: CardActionResponse[]
+  ): CardActionResponse => {
+    for (const response of responses) {
+      if (response.toast) {
+        return response;
+      }
+    }
+
+    return {};
+  };
+
   const sendBusyFeedback = async (receiveId: string): Promise<void> => {
     if (!options.renderer) {
       return;
@@ -557,9 +569,17 @@ export function createRuntimeEventHandlers(
       const queueKey = getCardActionQueueKey(event);
       let response: CardActionResponse = {};
       await enqueueCardActionTask(queueKey, async () => {
-        await options.questionCardHandler.handleCardAction(event);
-        await options.permissionCardHandler.handleCardAction(event);
-        response = await options.controlRouter.handleCardAction(event);
+        const questionResponse =
+          await options.questionCardHandler.handleCardAction(event);
+        const permissionResponse =
+          await options.permissionCardHandler.handleCardAction(event);
+        const controlResponse =
+          await options.controlRouter.handleCardAction(event);
+        response = mergeCardActionResponses(
+          controlResponse,
+          permissionResponse,
+          questionResponse,
+        );
       });
       return response;
     },

@@ -12,7 +12,11 @@ import type {
 } from "../settings/manager.js";
 import type { Logger } from "../utils/logger.js";
 import { APP_VERSION } from "../version.js";
-import { buildConfirmCard } from "./cards.js";
+import {
+  buildCancelledCard,
+  buildConfirmCard,
+  buildResolvedCard,
+} from "./cards.js";
 import type { FeishuClients } from "./client.js";
 import type {
   ProjectPickerEntry,
@@ -229,7 +233,7 @@ export type ControlRouterSessionStore = Pick<
 
 export type ControlRouterRenderer = Pick<
   FeishuRenderer,
-  "sendCard" | "sendText" | "updateCompleteCard"
+  "sendCard" | "sendText" | "updateCompleteCard" | "updateCard"
 >;
 
 export type ControlRouterInteractionStore = Pick<
@@ -333,6 +337,19 @@ function getCardActionReceiveId(event: Record<string, unknown>): string {
     : typeof context?.open_chat_id === "string"
       ? context.open_chat_id
       : "";
+}
+
+function getCardActionOpenMessageId(
+  event: Record<string, unknown>,
+): string | null {
+  const payload = getCardActionPayload(event);
+  const context = isRecord(payload.context) ? payload.context : null;
+
+  return typeof payload.open_message_id === "string"
+    ? payload.open_message_id
+    : typeof context?.open_message_id === "string"
+      ? context.open_message_id
+      : null;
 }
 
 function buildCardActionToast(
@@ -506,6 +523,9 @@ export class ControlRouter {
             getCardActionReceiveId(event),
             sessionId,
           );
+          if (result.success) {
+            await this.updateActionCard(event, "Session Picker", sessionId);
+          }
           return buildCardActionToast(
             result.message,
             result.success ? "success" : "error",
@@ -522,6 +542,9 @@ export class ControlRouter {
             getCardActionReceiveId(event),
             modelName,
           );
+          if (result.success) {
+            await this.updateActionCard(event, "Model Picker", modelName);
+          }
           return buildCardActionToast(
             result.message,
             result.success ? "success" : "error",
@@ -538,6 +561,9 @@ export class ControlRouter {
             getCardActionReceiveId(event),
             agentName,
           );
+          if (result.success) {
+            await this.updateActionCard(event, "Agent Picker", agentName);
+          }
           return buildCardActionToast(
             result.message,
             result.success ? "success" : "error",
@@ -554,6 +580,9 @@ export class ControlRouter {
             getCardActionReceiveId(event),
             projectId,
           );
+          if (result.success) {
+            await this.updateActionCard(event, "Projects", projectId);
+          }
           return buildCardActionToast(
             result.message,
             result.success ? "success" : "error",
@@ -569,19 +598,22 @@ export class ControlRouter {
             getCardActionReceiveId(event),
             directory,
           );
+          if (result.success) {
+            await this.updateActionCard(event, "Projects", directory);
+          }
           return buildCardActionToast(
             result.message,
             result.success ? "success" : "error",
           );
         }
-        case "control_cancel":
-          {
-            const receiveId = getCardActionReceiveId(event);
-            if (receiveId) {
-              this.interactionManager.clearBusy(receiveId);
-            }
+        case "control_cancel": {
+          const receiveId = getCardActionReceiveId(event);
+          if (receiveId) {
+            this.interactionManager.clearBusy(receiveId);
           }
+          await this.updateCancelledActionCard(event, "Control");
           return buildCardActionToast("Operation cancelled", "info");
+        }
         case "confirm_write": {
           const operationId =
             typeof value?.operationId === "string" ? value.operationId : null;
@@ -602,6 +634,13 @@ export class ControlRouter {
 
           try {
             const result = await this.executeCreateSession(receiveId);
+            if (result.success) {
+              await this.updateActionCard(
+                event,
+                "⚠️ Confirmation Required",
+                "Session created",
+              );
+            }
             if (receiveId && result.message) {
               await this.renderer.sendText(receiveId, result.message);
             }
@@ -637,6 +676,10 @@ export class ControlRouter {
         }
         case "reject_write": {
           const receiveId = getCardActionReceiveId(event);
+          await this.updateCancelledActionCard(
+            event,
+            "⚠️ Confirmation Required",
+          );
           if (receiveId) {
             await this.renderer.sendText(receiveId, "Operation cancelled");
           }
@@ -700,6 +743,9 @@ export class ControlRouter {
                   })();
 
             const result = await this.handleModel(receiveId, fullModelName);
+            if (result.success) {
+              await this.updateActionCard(event, "Model Picker", fullModelName);
+            }
             return buildCardActionToast(
               result.message,
               result.success ? "success" : "error",
@@ -707,6 +753,13 @@ export class ControlRouter {
           }
           case "session": {
             const result = await this.handleSession(receiveId, action.value);
+            if (result.success) {
+              await this.updateActionCard(
+                event,
+                "Session Picker",
+                action.value,
+              );
+            }
             return buildCardActionToast(
               result.message,
               result.success ? "success" : "error",
@@ -716,6 +769,9 @@ export class ControlRouter {
             const result = isAbsolute(action.value)
               ? await this.discoverProject(receiveId, action.value)
               : await this.handleProjects(receiveId, action.value);
+            if (result.success) {
+              await this.updateActionCard(event, "Projects", action.value);
+            }
             return buildCardActionToast(
               result.message,
               result.success ? "success" : "error",
@@ -723,6 +779,9 @@ export class ControlRouter {
           }
           case "agent": {
             const result = await this.handleAgent(receiveId, action.value);
+            if (result.success) {
+              await this.updateActionCard(event, "Agent Picker", action.value);
+            }
             return buildCardActionToast(
               result.message,
               result.success ? "success" : "error",
@@ -733,6 +792,7 @@ export class ControlRouter {
         }
       }
       case "selection_cancel":
+        await this.updateCancelledActionCard(event, "Selection");
         return buildCardActionToast("Cancelled", "info");
       case "selection_back":
       case "selection_page": {
@@ -2272,6 +2332,40 @@ export class ControlRouter {
         `[ControlRouter] Failed to update aborted status card: session=${turnState.sessionId}, messageId=${turnState.statusCardMessageId}`,
         error,
       );
+    }
+  }
+
+  private async updateActionCard(
+    event: Record<string, unknown>,
+    title: string,
+    selectedValue: string,
+  ): Promise<void> {
+    const messageId = getCardActionOpenMessageId(event);
+    if (!messageId) {
+      return;
+    }
+
+    try {
+      const card = buildResolvedCard(title, selectedValue);
+      await this.renderer.updateCard(messageId, card);
+    } catch (error) {
+      this.logger.warn("[ControlRouter] Failed to update action card", error);
+    }
+  }
+
+  private async updateCancelledActionCard(
+    event: Record<string, unknown>,
+    title: string,
+  ): Promise<void> {
+    const messageId = getCardActionOpenMessageId(event);
+    if (!messageId) {
+      return;
+    }
+
+    try {
+      await this.renderer.updateCard(messageId, buildCancelledCard(title));
+    } catch (error) {
+      this.logger.warn("[ControlRouter] Failed to update action card", error);
     }
   }
 

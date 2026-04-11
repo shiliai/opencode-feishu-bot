@@ -602,6 +602,33 @@ describe("Selection card builders", () => {
     );
   });
 
+  it("updates cards when nested callbacks carry open_message_id in context", async () => {
+    const renderer = createMockRenderer();
+    const settings = createMockSettings();
+    const router = createRouter({ settingsManager: settings, renderer });
+
+    await router.handleCardAction({
+      event: {
+        action: {
+          value: { action: "select_model", modelName: "openai/gpt-4.1" },
+        },
+        context: {
+          open_chat_id: "chat-nested",
+          open_message_id: "msg-nested-card",
+        },
+      },
+    });
+
+    expect(renderer.updateCard).toHaveBeenCalledWith(
+      "msg-nested-card",
+      expect.objectContaining({
+        header: expect.objectContaining({
+          template: "green",
+        }),
+      }),
+    );
+  });
+
   it("handleCardAction returns toast feedback when callback has no chat id", async () => {
     const renderer = createMockRenderer();
     const router = createRouter({ renderer });
@@ -736,5 +763,31 @@ describe("Selection card builders", () => {
       }),
     ).resolves.toEqual({});
     expect(renderer.sendCard).toHaveBeenCalled();
+  });
+
+  it("leaves the original card in place when selection handling fails", async () => {
+    const renderer = createMockRenderer();
+    const openCodeClient = createMockOpenCodeClient();
+    openCodeClient.session.get.mockResolvedValue({
+      data: null,
+      error: { message: "not found" },
+    });
+    const router = createRouter({ renderer, openCodeClient });
+
+    const result = await router.handleCardAction({
+      open_chat_id: "chat-1",
+      open_message_id: "msg-failed-card",
+      action: {
+        value: { action: "select_session", sessionId: "sess-missing" },
+      },
+    });
+
+    expect(result).toEqual({
+      toast: {
+        type: "error",
+        content: "Failed to switch session",
+      },
+    });
+    expect(renderer.updateCard).not.toHaveBeenCalled();
   });
 });

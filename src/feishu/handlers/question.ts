@@ -1,7 +1,10 @@
+import type { InteractiveCard } from "@larksuiteoapi/node-sdk";
 import type { Question } from "../../question/types.js";
 import type { QuestionManager } from "../../question/manager.js";
 import type { Logger } from "../../utils/logger.js";
 import { logger as defaultLogger } from "../../utils/logger.js";
+import { buildResolvedQuestionCard } from "../cards.js";
+import type { CardActionResponse } from "../control-router.js";
 
 export const QUESTION_GUIDED_REPLY_PREFIX = "answer:";
 
@@ -21,6 +24,7 @@ export interface QuestionRenderer {
     requestId: string,
   ): Promise<string | undefined>;
   sendText?(receiveId: string, text: string): Promise<string[]>;
+  updateCard?(messageId: string, card: InteractiveCard): Promise<void>;
 }
 
 export interface QuestionInteractionManager {
@@ -60,10 +64,17 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+function getCardActionPayload(
+  event: Record<string, unknown>,
+): Record<string, unknown> {
+  return isRecord(event.event) ? event.event : event;
+}
+
 function extractActionValue(
   event: Record<string, unknown>,
 ): CardActionValue | null {
-  const actionObj = event.action;
+  const payload = getCardActionPayload(event);
+  const actionObj = payload.action;
   if (!isRecord(actionObj)) {
     return null;
   }
@@ -104,9 +115,14 @@ function extractActionValue(
 }
 
 function extractOpenMessageId(event: Record<string, unknown>): string | null {
-  return typeof event.open_message_id === "string"
-    ? event.open_message_id
-    : null;
+  const payload = getCardActionPayload(event);
+  const context = isRecord(payload.context) ? payload.context : null;
+
+  return typeof payload.open_message_id === "string"
+    ? payload.open_message_id
+    : typeof context?.open_message_id === "string"
+      ? context.open_message_id
+      : null;
 }
 
 export class QuestionCardHandler {
@@ -218,7 +234,7 @@ export class QuestionCardHandler {
 
   async handleCardAction(
     event: Record<string, unknown>,
-  ): Promise<Record<string, never>> {
+  ): Promise<CardActionResponse> {
     const actionValue = extractActionValue(event);
     if (!actionValue) {
       return {};
@@ -256,10 +272,20 @@ export class QuestionCardHandler {
     const answerValues = this.questionManager.getAnswerValues(currentIndex);
 
     if (actionValue.action === "question_toggle") {
+      const selectedLabels =
+        this.questionManager.getSelectedAnswerLabels(currentIndex);
       this.logger.debug(
         `[QuestionCardHandler] Toggled selections for question ${currentIndex}: ${answerValues.join(", ")}`,
       );
-      return {};
+      return {
+        toast: {
+          type: "info",
+          content:
+            selectedLabels.length > 0
+              ? `Selected: ${selectedLabels.join(", ")}`
+              : "Selection cleared",
+        },
+      };
     }
 
     if (answerValues.length === 0) {
@@ -275,7 +301,12 @@ export class QuestionCardHandler {
 
     await this.advanceQuestionFlow();
 
-    return {};
+    return {
+      toast: {
+        type: "success",
+        content: `Answer submitted: ${answerValues.join(", ")}`,
+      },
+    };
   }
 
   private async advanceQuestionFlow(): Promise<void> {
@@ -351,8 +382,43 @@ export class QuestionCardHandler {
       `[QuestionCardHandler] Forwarded ${answers.length} answers for request ${requestID}`,
     );
 
+    await this.updateQuestionCardToResolved();
+
     this.activeReceiveId = null;
     this.activeSourceMessageId = null;
+  }
+
+  private async updateQuestionCardToResolved(): Promise<void> {
+    const activeMessageId = this.questionManager.getActiveMessageId();
+    if (!activeMessageId || !this.renderer.updateCard) {
+      return;
+    }
+
+    const currentIndex = this.questionManager.getCurrentIndex();
+    const question = this.questionManager.getCurrentQuestion();
+    const questionText = question?.question ?? "Question";
+    const answerLabels =
+      this.questionManager.getSelectedAnswerLabels(currentIndex);
+    const customAnswer = this.questionManager.getCustomAnswer(currentIndex);
+    const displayAnswers =
+      answerLabels.length > 0
+        ? answerLabels
+        : customAnswer
+          ? [customAnswer]
+          : [];
+
+    try {
+      const resolvedCard = buildResolvedQuestionCard(
+        questionText,
+        displayAnswers,
+      );
+      await this.renderer.updateCard(activeMessageId, resolvedCard);
+    } catch (error) {
+      this.logger.warn(
+        "[QuestionCardHandler] Failed to update question card to resolved state",
+        error,
+      );
+    }
   }
 
   private syncInteractionState(question: Question): void {
