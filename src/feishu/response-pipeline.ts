@@ -612,6 +612,21 @@ export class ResponsePipelineController {
     };
   }
 
+  handleEventSupervisorFailure(directory: string, error: unknown): void {
+    const affectedStates = this.getActiveStatesForDirectory(directory);
+
+    this.logger.error(
+      `[ResponsePipeline] Fatal event subscription failure for directory=${directory}; affectedSessions=${affectedStates.length}`,
+      error,
+    );
+
+    for (const state of affectedStates) {
+      void this.enqueueSessionTask(state.sessionId, () =>
+        this.handleSessionError(state.sessionId, STREAM_ENDED_MESSAGE()),
+      );
+    }
+  }
+
   startTurn(context: ResponsePipelineTurnContext): void {
     this.summaryAggregator.setSession(context.sessionId);
 
@@ -1359,6 +1374,16 @@ export class ResponsePipelineController {
     if (!this.eventSupervisor) {
       state.subscriptionAbortController?.abort();
     }
+  }
+
+  private getActiveStatesForDirectory(directory: string): StatusTurnState[] {
+    return this.statusStore
+      .getSessionIds()
+      .map((sessionId) => this.statusStore.get(sessionId))
+      .filter(
+        (state): state is StatusTurnState =>
+          state !== undefined && state.directory === directory,
+      );
   }
 
   private getStatusCardContent(state: StatusTurnState): string {

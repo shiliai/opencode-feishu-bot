@@ -170,6 +170,10 @@ export async function startFeishuApp(): Promise<void> {
     logger,
   });
 
+  let handleFatalSubscriptionError:
+    | ((directory: string, error: unknown) => void)
+    | null = null;
+
   const controlRouter = new ControlRouter({
     settingsManager: managersWithSession.settings,
     sessionManager: managersWithSession.session,
@@ -228,6 +232,9 @@ export async function startFeishuApp(): Promise<void> {
     pendingStore,
     client: openCodeClient,
     logger,
+    onFatalSubscriptionError: (directory, error) => {
+      handleFatalSubscriptionError?.(directory, error);
+    },
   });
 
   // Step 7: Create ResponsePipelineController
@@ -243,6 +250,9 @@ export async function startFeishuApp(): Promise<void> {
     statusStore,
     config,
   });
+  handleFatalSubscriptionError = (directory, error) => {
+    pipelineController.handleEventSupervisorFailure(directory, error);
+  };
   pipelineControllerInstance = pipelineController;
 
   // Step 8: Create event router with message and card action handlers

@@ -318,6 +318,13 @@ export class QuestionCardHandler {
       return;
     }
 
+    if (this.questionManager.isSubmitted(requestID)) {
+      this.logger.debug(
+        `[QuestionCardHandler] Ignoring duplicate question submission for request ${requestID}`,
+      );
+      return;
+    }
+
     const answers = this.questionManager.getAllAnswerValues();
 
     const missingIndex = answers.findIndex((answer) => answer.length === 0);
@@ -328,10 +335,17 @@ export class QuestionCardHandler {
       return;
     }
 
-    await this.openCodeClient.question.reply({
-      requestID,
-      answers,
-    });
+    this.questionManager.markSubmitted(requestID);
+
+    try {
+      await this.openCodeClient.question.reply({
+        requestID,
+        answers,
+      });
+    } catch (error) {
+      this.questionManager.clearSubmitted(requestID);
+      throw error;
+    }
 
     this.logger.debug(
       `[QuestionCardHandler] Forwarded ${answers.length} answers for request ${requestID}`,

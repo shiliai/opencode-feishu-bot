@@ -21,6 +21,8 @@ function cloneState(state: QuestionState): QuestionState {
 }
 
 export class QuestionManager {
+  private submittedRequestIds: Set<string> = new Set();
+
   private state: QuestionState = {
     questions: [],
     currentIndex: 0,
@@ -256,6 +258,19 @@ export class QuestionManager {
       isActive: false,
       requestID: null,
     };
+    this.submittedRequestIds.clear();
+  }
+
+  markSubmitted(requestId: string): void {
+    this.submittedRequestIds.add(requestId);
+  }
+
+  clearSubmitted(requestId: string): void {
+    this.submittedRequestIds.delete(requestId);
+  }
+
+  isSubmitted(requestId: string): boolean {
+    return this.submittedRequestIds.has(requestId);
   }
 
   getAllAnswers(): QuestionAnswer[] {

@@ -5,6 +5,7 @@ import type {
   OpenCodeEventSubscriber,
   SubscribeToEventsOptions,
 } from "../../src/opencode/events.js";
+import { FATAL_NO_STREAM_ERROR } from "../../src/opencode/events.js";
 import { PendingInteractionStore } from "../../src/pending/store.js";
 import type { Logger } from "../../src/utils/logger.js";
 
@@ -40,6 +41,7 @@ describe("EventSupervisor", () => {
   let pendingStore: PendingInteractionStore;
   let client: EventSupervisorClient;
   let logger: Logger;
+  let onFatalSubscriptionError: ReturnType<typeof vi.fn>;
   let supervisor: EventSupervisor;
 
   beforeEach(() => {
@@ -83,12 +85,15 @@ describe("EventSupervisor", () => {
       error: vi.fn(),
     };
 
+    onFatalSubscriptionError = vi.fn();
+
     supervisor = new EventSupervisor({
       eventSubscriber: eventSubscriber as OpenCodeEventSubscriber,
       summaryAggregator,
       pendingStore,
       client,
       logger,
+      onFatalSubscriptionError,
       resubscribeDelayMs: 5,
     });
   });
@@ -249,7 +254,7 @@ describe("EventSupervisor", () => {
 
   it("retries subscription after subscribeToEvents rejects", async () => {
     vi.useFakeTimers();
-    subscribeToEvents.mockRejectedValueOnce(new Error("no stream"));
+    subscribeToEvents.mockRejectedValueOnce(new Error("temporary failure"));
 
     try {
       supervisor.ensureSubscribed("/workspace/a");
@@ -265,6 +270,31 @@ describe("EventSupervisor", () => {
         "/workspace/a",
         expect.any(Function),
       );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("propagates fatal no-stream failures without retrying", async () => {
+    vi.useFakeTimers();
+    const failure = new Error(FATAL_NO_STREAM_ERROR);
+    subscribeToEvents.mockRejectedValueOnce(failure);
+
+    try {
+      supervisor.ensureSubscribed("/workspace/a");
+      await flushPromises();
+
+      expect(subscribeToEvents).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(5);
+      expect(subscribeToEvents).toHaveBeenCalledTimes(1);
+      expect(onFatalSubscriptionError).toHaveBeenCalledWith(
+        "/workspace/a",
+        failure,
+      );
+      expect(supervisor.getSnapshot()).toEqual({
+        directory: null,
+        isSubscribed: false,
+      });
     } finally {
       vi.useRealTimers();
     }

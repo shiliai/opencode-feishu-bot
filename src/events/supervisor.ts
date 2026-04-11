@@ -1,5 +1,8 @@
 import type { Event } from "@opencode-ai/sdk/v2";
-import type { OpenCodeEventSubscriber } from "../opencode/events.js";
+import {
+  FATAL_NO_STREAM_ERROR,
+  type OpenCodeEventSubscriber,
+} from "../opencode/events.js";
 import type { PendingInteractionStore } from "../pending/store.js";
 import type { Logger } from "../utils/logger.js";
 
@@ -26,6 +29,7 @@ export interface EventSupervisorOptions {
   pendingStore: PendingInteractionStore;
   client?: EventSupervisorClient;
   logger: Logger;
+  onFatalSubscriptionError?: (directory: string, error: unknown) => void;
   resubscribeDelayMs?: number;
 }
 
@@ -50,6 +54,10 @@ function getRequestId(event: Event): string | undefined {
     ? rawEvent.properties
     : undefined;
   return getString(properties?.requestID) ?? getString(properties?.id);
+}
+
+function isFatalSubscriptionError(error: unknown): boolean {
+  return error instanceof Error && error.message === FATAL_NO_STREAM_ERROR;
 }
 
 export class EventSupervisor {
@@ -118,6 +126,14 @@ export class EventSupervisor {
         );
 
         if (!this.isCurrentSubscription(directory, generation)) {
+          return;
+        }
+
+        if (isFatalSubscriptionError(error)) {
+          this.clearRetryTimer();
+          this.currentDirectory = null;
+          this.isSubscribed = false;
+          this.options.onFatalSubscriptionError?.(directory, error);
           return;
         }
 
