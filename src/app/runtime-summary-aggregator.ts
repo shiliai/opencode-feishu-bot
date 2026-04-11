@@ -119,6 +119,18 @@ export class RuntimeSummaryAggregator {
     this.aggregator.processEvent(event);
   }
 
+  private getReceiveIdForRequest(
+    sessionId: string,
+    requestId: string,
+  ): string | null {
+    const pending = this.options.pendingStore?.get(requestId);
+    if (pending?.chatId) {
+      return pending.chatId;
+    }
+
+    return this.options.statusStore.get(sessionId)?.receiveId ?? null;
+  }
+
   private handleQuestion(event: SummaryQuestionEvent): void {
     this.options.questionManager.startQuestions(
       event.questions,
@@ -214,12 +226,22 @@ export class RuntimeSummaryAggregator {
     this.logger.info(
       `[RuntimeSummaryAggregator] Question replied: session=${sessionId}, requestId=${requestId}`,
     );
-    this.options.pendingStore?.remove(requestId);
-    this.options.questionManager.clear();
 
-    const turn = this.options.statusStore.get(sessionId);
-    if (turn) {
-      this.options.interactionManager.clear(turn.receiveId, "question_replied");
+    const receiveId = this.getReceiveIdForRequest(sessionId, requestId);
+    const activeRequestId = this.options.questionManager.getRequestID();
+
+    this.options.pendingStore?.remove(requestId);
+
+    if (activeRequestId === requestId) {
+      this.options.questionManager.clear();
+    } else {
+      this.logger.warn(
+        `[RuntimeSummaryAggregator] Ignoring stale question reply for requestId=${requestId}; activeRequestId=${activeRequestId ?? "none"}`,
+      );
+    }
+
+    if (receiveId) {
+      this.options.interactionManager.clear(receiveId, "question_replied");
     }
   }
 
@@ -227,15 +249,22 @@ export class RuntimeSummaryAggregator {
     this.logger.info(
       `[RuntimeSummaryAggregator] Question rejected: session=${sessionId}, requestId=${requestId}`,
     );
-    this.options.pendingStore?.remove(requestId);
-    this.options.questionManager.clear();
 
-    const turn = this.options.statusStore.get(sessionId);
-    if (turn) {
-      this.options.interactionManager.clear(
-        turn.receiveId,
-        "question_rejected",
+    const receiveId = this.getReceiveIdForRequest(sessionId, requestId);
+    const activeRequestId = this.options.questionManager.getRequestID();
+
+    this.options.pendingStore?.remove(requestId);
+
+    if (activeRequestId === requestId) {
+      this.options.questionManager.clear();
+    } else {
+      this.logger.warn(
+        `[RuntimeSummaryAggregator] Ignoring stale question rejection for requestId=${requestId}; activeRequestId=${activeRequestId ?? "none"}`,
       );
+    }
+
+    if (receiveId) {
+      this.options.interactionManager.clear(receiveId, "question_rejected");
     }
   }
 
@@ -243,15 +272,14 @@ export class RuntimeSummaryAggregator {
     this.logger.info(
       `[RuntimeSummaryAggregator] Permission replied: session=${sessionId}, requestId=${requestId}`,
     );
+
+    const receiveId = this.getReceiveIdForRequest(sessionId, requestId);
+
     this.options.pendingStore?.remove(requestId);
     this.options.permissionManager.removeByRequestId(requestId);
 
-    const turn = this.options.statusStore.get(sessionId);
-    if (turn) {
-      this.options.interactionManager.clear(
-        turn.receiveId,
-        "permission_replied",
-      );
+    if (receiveId) {
+      this.options.interactionManager.clear(receiveId, "permission_replied");
     }
   }
 

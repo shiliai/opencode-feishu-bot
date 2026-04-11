@@ -89,6 +89,7 @@ describe("EventSupervisor", () => {
       pendingStore,
       client,
       logger,
+      resubscribeDelayMs: 5,
     });
   });
 
@@ -216,6 +217,57 @@ describe("EventSupervisor", () => {
       chatId: "",
       type: "permission",
     });
+  });
+
+  it("bootstrap does not hydrate stale directory after subscription switch", async () => {
+    const questionResolvers = new Map<
+      string,
+      (value: { data: Array<{ id: string; sessionID: string }> }) => void
+    >();
+    client.question.list = vi.fn().mockImplementation(
+      ({ directory }: { directory?: string } = {}) =>
+        new Promise<{ data: Array<{ id: string; sessionID: string }> }>(
+          (resolve) => {
+            if (directory) {
+              questionResolvers.set(directory, resolve);
+            }
+          },
+        ),
+    );
+    client.permission.list = vi.fn().mockResolvedValue({ data: [] });
+
+    supervisor.ensureSubscribed("/workspace/a");
+    supervisor.ensureSubscribed("/workspace/b");
+
+    const resolveWorkspaceA = questionResolvers.get("/workspace/a");
+    expect(resolveWorkspaceA).toBeDefined();
+    resolveWorkspaceA?.({ data: [{ id: "q-stale", sessionID: "sess-a" }] });
+    await flushPromises();
+
+    expect(pendingStore.has("q-stale")).toBe(false);
+  });
+
+  it("retries subscription after subscribeToEvents rejects", async () => {
+    vi.useFakeTimers();
+    subscribeToEvents.mockRejectedValueOnce(new Error("no stream"));
+
+    try {
+      supervisor.ensureSubscribed("/workspace/a");
+      await flushPromises();
+
+      expect(subscribeToEvents).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(5);
+
+      expect(subscribeToEvents).toHaveBeenCalledTimes(2);
+      expect(subscribeToEvents).toHaveBeenNthCalledWith(
+        2,
+        "/workspace/a",
+        expect.any(Function),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("bootstrap failure is logged but does not crash", async () => {

@@ -26,12 +26,15 @@ export interface EventSupervisorOptions {
   pendingStore: PendingInteractionStore;
   client?: EventSupervisorClient;
   logger: Logger;
+  resubscribeDelayMs?: number;
 }
 
 export interface EventSupervisorSnapshot {
   directory: string | null;
   isSubscribed: boolean;
 }
+
+const DEFAULT_RESUBSCRIBE_DELAY_MS = 1_000;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -52,6 +55,8 @@ function getRequestId(event: Event): string | undefined {
 export class EventSupervisor {
   private currentDirectory: string | null = null;
   private isSubscribed = false;
+  private subscriptionGeneration = 0;
+  private retryTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(private readonly options: EventSupervisorOptions) {}
 
@@ -70,33 +75,25 @@ export class EventSupervisor {
       this.stop();
     }
 
+    this.clearRetryTimer();
+    this.subscriptionGeneration += 1;
     this.currentDirectory = directory;
     this.isSubscribed = true;
 
-    void this.options.eventSubscriber
-      .subscribeToEvents(directory, (event) => {
-        this.onEvent(event);
-      })
-      .catch((error: unknown) => {
+    this.startSubscription(directory, this.subscriptionGeneration);
+    void this.bootstrap(directory, this.subscriptionGeneration).catch(
+      (error: unknown) => {
         this.options.logger.error(
-          `[EventSupervisor] Event subscription failed for ${directory}`,
+          `[EventSupervisor] Bootstrap failed for ${directory}`,
           error,
         );
-        if (this.currentDirectory === directory) {
-          this.currentDirectory = null;
-          this.isSubscribed = false;
-        }
-      });
-
-    void this.bootstrap(directory).catch((error: unknown) => {
-      this.options.logger.error(
-        `[EventSupervisor] Bootstrap failed for ${directory}`,
-        error,
-      );
-    });
+      },
+    );
   }
 
   stop(): void {
+    this.clearRetryTimer();
+    this.subscriptionGeneration += 1;
     this.options.eventSubscriber.stopEventListening();
     this.currentDirectory = null;
     this.isSubscribed = false;
@@ -107,6 +104,63 @@ export class EventSupervisor {
       directory: this.currentDirectory,
       isSubscribed: this.isSubscribed,
     };
+  }
+
+  private startSubscription(directory: string, generation: number): void {
+    void this.options.eventSubscriber
+      .subscribeToEvents(directory, (event) => {
+        this.onEvent(event);
+      })
+      .catch((error: unknown) => {
+        this.options.logger.error(
+          `[EventSupervisor] Event subscription failed for ${directory}`,
+          error,
+        );
+
+        if (!this.isCurrentSubscription(directory, generation)) {
+          return;
+        }
+
+        this.scheduleRetry(directory, generation);
+      });
+  }
+
+  private isCurrentSubscription(
+    directory: string,
+    generation: number,
+  ): boolean {
+    return (
+      this.isSubscribed &&
+      this.currentDirectory === directory &&
+      this.subscriptionGeneration === generation
+    );
+  }
+
+  private clearRetryTimer(): void {
+    if (this.retryTimer) {
+      clearTimeout(this.retryTimer);
+      this.retryTimer = null;
+    }
+  }
+
+  private scheduleRetry(directory: string, generation: number): void {
+    this.clearRetryTimer();
+
+    const delay =
+      this.options.resubscribeDelayMs ?? DEFAULT_RESUBSCRIBE_DELAY_MS;
+    this.options.logger.warn(
+      `[EventSupervisor] Retrying subscription for ${directory} in ${delay}ms`,
+    );
+
+    this.retryTimer = setTimeout(() => {
+      this.retryTimer = null;
+
+      if (!this.isCurrentSubscription(directory, generation)) {
+        return;
+      }
+
+      this.startSubscription(directory, generation);
+    }, delay);
   }
 
   private onEvent(event: Event): void {
@@ -129,7 +183,10 @@ export class EventSupervisor {
     this.options.pendingStore.remove(requestId);
   }
 
-  private async bootstrap(directory: string): Promise<void> {
+  private async bootstrap(
+    directory: string,
+    generation: number,
+  ): Promise<void> {
     if (!this.options.client) {
       return;
     }
@@ -138,8 +195,14 @@ export class EventSupervisor {
       const questionResponse = await this.options.client.question.list({
         directory,
       });
+      if (!this.isCurrentSubscription(directory, generation)) {
+        return;
+      }
       const questions = questionResponse.data ?? [];
       for (const item of questions) {
+        if (!this.isCurrentSubscription(directory, generation)) {
+          return;
+        }
         this.options.pendingStore.add(
           item.id,
           item.sessionID,
@@ -162,8 +225,14 @@ export class EventSupervisor {
       const permissionResponse = await this.options.client.permission.list({
         directory,
       });
+      if (!this.isCurrentSubscription(directory, generation)) {
+        return;
+      }
       const permissions = permissionResponse.data ?? [];
       for (const item of permissions) {
+        if (!this.isCurrentSubscription(directory, generation)) {
+          return;
+        }
         this.options.pendingStore.add(
           item.id,
           item.sessionID,
