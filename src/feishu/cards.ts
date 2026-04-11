@@ -590,6 +590,62 @@ export function buildConfirmCard(data: ConfirmCardData): InteractiveCard {
   };
 }
 
+export function buildResolvedCard(
+  title: string,
+  selectedValue: string,
+): InteractiveCard {
+  return {
+    header: {
+      title: plainText(title),
+      template: "green",
+    },
+    elements: [
+      {
+        tag: "markdown",
+        content: `✅ **${selectedValue}**`,
+      },
+    ],
+  };
+}
+
+export function buildCancelledCard(title: string): InteractiveCard {
+  return {
+    header: {
+      title: plainText(title),
+      template: "grey",
+    },
+    elements: [
+      {
+        tag: "markdown",
+        content: "Cancelled",
+      },
+    ],
+  };
+}
+
+export function buildResolvedQuestionCard(
+  questionText: string,
+  selectedAnswers: string[],
+): InteractiveCard {
+  const answerList =
+    selectedAnswers.length > 0
+      ? selectedAnswers.map((answer) => `• ${answer}`).join("\n")
+      : "No selection";
+
+  return {
+    header: {
+      title: plainText("Input Required"),
+      template: "green",
+    },
+    elements: [
+      {
+        tag: "markdown",
+        content: `${questionText}\n\n✅ **Answered:** \n${answerList}`,
+      },
+    ],
+  };
+}
+
 export function buildControlCard(
   status: string,
   options: { showCancel?: boolean } = {},
