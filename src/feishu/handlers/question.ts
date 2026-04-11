@@ -4,6 +4,7 @@ import type { QuestionManager } from "../../question/manager.js";
 import type { Logger } from "../../utils/logger.js";
 import { logger as defaultLogger } from "../../utils/logger.js";
 import { buildResolvedQuestionCard } from "../cards.js";
+import type { CardActionResponse } from "../control-router.js";
 
 export const QUESTION_GUIDED_REPLY_PREFIX = "answer:";
 
@@ -63,10 +64,17 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+function getCardActionPayload(
+  event: Record<string, unknown>,
+): Record<string, unknown> {
+  return isRecord(event.event) ? event.event : event;
+}
+
 function extractActionValue(
   event: Record<string, unknown>,
 ): CardActionValue | null {
-  const actionObj = event.action;
+  const payload = getCardActionPayload(event);
+  const actionObj = payload.action;
   if (!isRecord(actionObj)) {
     return null;
   }
@@ -107,9 +115,14 @@ function extractActionValue(
 }
 
 function extractOpenMessageId(event: Record<string, unknown>): string | null {
-  return typeof event.open_message_id === "string"
-    ? event.open_message_id
-    : null;
+  const payload = getCardActionPayload(event);
+  const context = isRecord(payload.context) ? payload.context : null;
+
+  return typeof payload.open_message_id === "string"
+    ? payload.open_message_id
+    : typeof context?.open_message_id === "string"
+      ? context.open_message_id
+      : null;
 }
 
 export class QuestionCardHandler {
@@ -221,7 +234,7 @@ export class QuestionCardHandler {
 
   async handleCardAction(
     event: Record<string, unknown>,
-  ): Promise<{ toast?: { type: string; content: string } }> {
+  ): Promise<CardActionResponse> {
     const actionValue = extractActionValue(event);
     if (!actionValue) {
       return {};

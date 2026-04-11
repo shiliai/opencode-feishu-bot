@@ -38,6 +38,7 @@ function createMockRenderer(): QuestionRenderer {
   return {
     renderQuestionCard: vi.fn().mockResolvedValue("msg-card-new"),
     sendText: vi.fn().mockResolvedValue(["msg-guidance-1"]),
+    updateCard: vi.fn().mockResolvedValue(undefined),
   };
 }
 
@@ -192,7 +193,7 @@ describe("QuestionCardHandler - handleCardAction", () => {
     const handler = createHandler(manager, renderer, client);
     await handler.handleQuestionEvent("chat-1", "source-msg-1");
 
-    await handler.handleCardAction(
+    const firstToggleResult = await handler.handleCardAction(
       buildCardAction({
         action: "question_toggle",
         requestId: "req-multi-select",
@@ -200,7 +201,7 @@ describe("QuestionCardHandler - handleCardAction", () => {
         optionIndex: 2,
       }),
     );
-    await handler.handleCardAction(
+    const secondToggleResult = await handler.handleCardAction(
       buildCardAction({
         action: "question_toggle",
         requestId: "req-multi-select",
@@ -209,9 +210,22 @@ describe("QuestionCardHandler - handleCardAction", () => {
       }),
     );
 
+    expect(firstToggleResult).toEqual({
+      toast: {
+        type: "info",
+        content: "Selected: Edit",
+      },
+    });
+    expect(secondToggleResult).toEqual({
+      toast: {
+        type: "info",
+        content: "Selected: Bash, Edit",
+      },
+    });
+
     expect(client.question.reply).not.toHaveBeenCalled();
 
-    await handler.handleCardAction(
+    const submitResult = await handler.handleCardAction(
       buildCardAction({
         action: "question_submit",
         requestId: "req-multi-select",
@@ -219,10 +233,30 @@ describe("QuestionCardHandler - handleCardAction", () => {
       }),
     );
 
+    expect(submitResult).toEqual({
+      toast: {
+        type: "success",
+        content: "Answer submitted: Bash, Edit",
+      },
+    });
     expect(client.question.reply).toHaveBeenCalledWith({
       requestID: "req-multi-select",
       answers: [["Bash", "Edit"]],
     });
+    expect(renderer.updateCard).toHaveBeenCalledWith(
+      "msg-card-new",
+      expect.objectContaining({
+        header: expect.objectContaining({
+          template: "green",
+        }),
+        elements: expect.arrayContaining([
+          expect.objectContaining({
+            tag: "markdown",
+            content: expect.stringContaining("Which tools do you use?"),
+          }),
+        ]),
+      }),
+    );
   });
 
   it("ignores duplicate question submit callbacks while the first reply is still in flight", async () => {
@@ -298,6 +332,43 @@ describe("QuestionCardHandler - handleCardAction", () => {
 
     expect(result).toEqual({});
     expect(client.question.reply).not.toHaveBeenCalled();
+  });
+
+  it("supports nested callback payloads for question card actions", async () => {
+    const manager = new QuestionManager();
+    const renderer = createMockRenderer();
+    const client = createMockOpenCodeClient();
+
+    manager.startQuestions([QUESTION], "req-nested");
+    manager.setActiveMessageId("msg-nested-1");
+
+    const handler = createHandler(manager, renderer, client);
+
+    const result = await handler.handleCardAction({
+      event: {
+        context: {
+          open_message_id: "msg-nested-1",
+        },
+        action: {
+          value: {
+            action: "question_answer",
+            requestId: "req-nested",
+            optionIndex: 1,
+          },
+        },
+      },
+    });
+
+    expect(result).toEqual({
+      toast: {
+        type: "success",
+        content: "Answer submitted: Vue",
+      },
+    });
+    expect(client.question.reply).toHaveBeenCalledWith({
+      requestID: "req-nested",
+      answers: [["Vue"]],
+    });
   });
 
   it("supports guided text replies for custom-answer questions", async () => {
