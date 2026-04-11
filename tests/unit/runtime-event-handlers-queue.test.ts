@@ -268,6 +268,69 @@ describe("runtime event handlers chat serialization", () => {
     await second;
   });
 
+  it("returns question card toast responses when control router has no reply", async () => {
+    const questionCardHandler = {
+      handleCardAction: vi.fn().mockResolvedValue({
+        toast: {
+          type: "info",
+          content: "Selected: Bash",
+        },
+      }),
+      canHandleTextReply: vi.fn().mockReturnValue(false),
+      handleTextReply: vi.fn(),
+    };
+
+    const handlers = createRuntimeEventHandlers({
+      promptIngressHandler: {
+        handlePromptInput: vi.fn(),
+        handleMessageEvent: vi.fn(),
+      } as never,
+      pipelineController: {
+        startTurn: vi.fn(),
+        recordFollowUpAppended: vi.fn().mockResolvedValue(undefined),
+      },
+      questionCardHandler: questionCardHandler as never,
+      permissionCardHandler: {
+        handleCardAction: vi.fn().mockResolvedValue({}),
+      },
+      controlRouter: {
+        parseCommand: vi.fn().mockReturnValue(null),
+        handleCommand: vi.fn(),
+        handleCardAction: vi.fn().mockResolvedValue({}),
+      },
+      fileHandler: {
+        isInboundFileMessage: vi.fn().mockReturnValue(false),
+        handleInboundFile: vi.fn(),
+        downloadFile: vi.fn(),
+        cleanup: vi.fn(),
+      },
+      logger: {
+        debug: vi.fn(),
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+      },
+    });
+
+    await expect(
+      handlers.handleCardAction({
+        open_message_id: "msg-question-card",
+        action: {
+          value: {
+            action: "question_toggle",
+            requestId: "req-1",
+            optionIndex: 0,
+          },
+        },
+      }),
+    ).resolves.toEqual({
+      toast: {
+        type: "info",
+        content: "Selected: Bash",
+      },
+    });
+  });
+
   it("acknowledges appended follow-ups without starting a new turn", async () => {
     const promptResult = {
       kind: "appended",
