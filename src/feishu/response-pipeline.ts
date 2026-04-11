@@ -88,6 +88,9 @@ export interface SessionMessageFetcher {
 
 export interface ResponsePipelineControllerOptions {
   eventSubscriber?: ResponsePipelineEventSubscriber;
+  eventSupervisor?: {
+    ensureSubscribed(directory: string): void;
+  };
   summaryAggregator?: ResponsePipelineSummaryAggregator;
   sessionMessageFetcher?: SessionMessageFetcher;
   renderer: ResponsePipelineRenderer;
@@ -511,6 +514,9 @@ export function isRetryableStatusCardUpdateError(error: unknown): boolean {
 
 export class ResponsePipelineController {
   private readonly eventSubscriber: ResponsePipelineEventSubscriber;
+  private readonly eventSupervisor: {
+    ensureSubscribed(directory: string): void;
+  } | null;
   private readonly summaryAggregator: ResponsePipelineSummaryAggregator;
   private readonly sessionMessageFetcher?: SessionMessageFetcher;
   private readonly renderer: ResponsePipelineRenderer;
@@ -533,6 +539,7 @@ export class ResponsePipelineController {
         : getConfig();
 
     this.eventSubscriber = options.eventSubscriber ?? openCodeEventSubscriber;
+    this.eventSupervisor = options.eventSupervisor ?? null;
     this.summaryAggregator =
       options.summaryAggregator ?? defaultSummaryAggregator;
     this.sessionMessageFetcher = options.sessionMessageFetcher;
@@ -608,17 +615,20 @@ export class ResponsePipelineController {
   startTurn(context: ResponsePipelineTurnContext): void {
     this.summaryAggregator.setSession(context.sessionId);
 
-    const abortController = new AbortController();
     const state = this.statusStore.startTurn(context);
-    state.subscriptionAbortController = abortController;
 
     this.logger.info(
       `[ResponsePipeline] Starting turn: session=${context.sessionId}, directory=${context.directory}, receiveId=${context.receiveId}, sourceMessageId=${context.sourceMessageId}`,
     );
 
-    this.scheduleAsync(() => {
-      void this.runEventSubscription(context, abortController);
-    });
+    if (this.eventSupervisor) {
+      this.eventSupervisor.ensureSubscribed(context.directory);
+      return;
+    }
+
+    const abortController = new AbortController();
+    state.subscriptionAbortController = abortController;
+    void this.runEventSubscription(context, abortController);
   }
 
   async recordFollowUpAppended(
@@ -1346,7 +1356,9 @@ export class ResponsePipelineController {
 
   private disposeTurnResources(state: StatusTurnState): void {
     this.clearScheduledStatusUpdate(state);
-    state.subscriptionAbortController?.abort();
+    if (!this.eventSupervisor) {
+      state.subscriptionAbortController?.abort();
+    }
   }
 
   private getStatusCardContent(state: StatusTurnState): string {

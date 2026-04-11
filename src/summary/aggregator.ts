@@ -230,10 +230,28 @@ export class SummaryAggregator {
     this.callbacks.onQuestionError = callback;
   }
 
+  setOnQuestionReplied(
+    callback: NonNullable<SummaryCallbacks["onQuestionReplied"]>,
+  ): void {
+    this.callbacks.onQuestionReplied = callback;
+  }
+
+  setOnQuestionRejected(
+    callback: NonNullable<SummaryCallbacks["onQuestionRejected"]>,
+  ): void {
+    this.callbacks.onQuestionRejected = callback;
+  }
+
   setOnPermission(
     callback: NonNullable<SummaryCallbacks["onPermission"]>,
   ): void {
     this.callbacks.onPermission = callback;
+  }
+
+  setOnPermissionReplied(
+    callback: NonNullable<SummaryCallbacks["onPermissionReplied"]>,
+  ): void {
+    this.callbacks.onPermissionReplied = callback;
   }
 
   setOnSessionDiff(
@@ -311,8 +329,17 @@ export class SummaryAggregator {
       case "question.asked":
         this.handleQuestionAsked(event);
         break;
+      case "question.replied":
+        this.handleQuestionReplied(event);
+        break;
+      case "question.rejected":
+        this.handleQuestionRejected(event);
+        break;
       case "permission.asked":
         this.handlePermissionAsked(event);
+        break;
+      case "permission.replied":
+        this.handlePermissionReplied(event);
         break;
       case "session.diff":
         this.handleSessionDiff(event);
@@ -672,6 +699,54 @@ export class SummaryAggregator {
 
     this.scheduleAsync(() => {
       this.callbacks.onPermission?.(permissionEvent);
+    });
+  }
+
+  private handleQuestionReplied(event: Event): void {
+    const properties = getEventProperties(event);
+    const sessionId = properties && getString(properties.sessionID);
+    const requestId =
+      (properties && getString(properties.requestID)) ||
+      (properties && getString(properties.id));
+
+    if (!sessionId || !requestId || sessionId !== this.currentSessionId) {
+      return;
+    }
+
+    this.scheduleAsync(() => {
+      this.callbacks.onQuestionReplied?.(sessionId, requestId);
+    });
+  }
+
+  private handleQuestionRejected(event: Event): void {
+    const properties = getEventProperties(event);
+    const sessionId = properties && getString(properties.sessionID);
+    const requestId =
+      (properties && getString(properties.requestID)) ||
+      (properties && getString(properties.id));
+
+    if (!sessionId || !requestId || sessionId !== this.currentSessionId) {
+      return;
+    }
+
+    this.scheduleAsync(() => {
+      this.callbacks.onQuestionRejected?.(sessionId, requestId);
+    });
+  }
+
+  private handlePermissionReplied(event: Event): void {
+    const properties = getEventProperties(event);
+    const sessionId = properties && getString(properties.sessionID);
+    const requestId =
+      (properties && getString(properties.requestID)) ||
+      (properties && getString(properties.id));
+
+    if (!sessionId || !requestId || sessionId !== this.currentSessionId) {
+      return;
+    }
+
+    this.scheduleAsync(() => {
+      this.callbacks.onPermissionReplied?.(sessionId, requestId);
     });
   }
 

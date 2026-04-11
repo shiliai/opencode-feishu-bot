@@ -337,10 +337,6 @@ export class QuestionCardHandler {
       `[QuestionCardHandler] Forwarded ${answers.length} answers for request ${requestID}`,
     );
 
-    this.questionManager.clear();
-    if (this.interactionManager && this.activeReceiveId) {
-      this.interactionManager.clear(this.activeReceiveId, "question_answered");
-    }
     this.activeReceiveId = null;
     this.activeSourceMessageId = null;
   }

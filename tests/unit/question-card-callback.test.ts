@@ -109,7 +109,7 @@ describe("QuestionCardHandler - handleCardAction", () => {
     });
   });
 
-  it("clears question state after answering the last question", async () => {
+  it("keeps question state active after reply (cleared by server event)", async () => {
     const manager = new QuestionManager();
     const renderer = createMockRenderer();
     const client = createMockOpenCodeClient();
@@ -127,7 +127,8 @@ describe("QuestionCardHandler - handleCardAction", () => {
       }),
     );
 
-    expect(manager.isActive()).toBe(false);
+    expect(client.question.reply).toHaveBeenCalledTimes(1);
+    expect(manager.isActive()).toBe(true);
   });
 
   it("batches answers across multiple questions and replies once at the end", async () => {
@@ -177,7 +178,8 @@ describe("QuestionCardHandler - handleCardAction", () => {
       requestID: "req-multi",
       answers: [["Vue"], ["TypeScript"]],
     });
-    expect(manager.isActive()).toBe(false);
+    // State is no longer cleared optimistically; server event clears it
+    expect(manager.isActive()).toBe(true);
   });
 
   it("waits for an explicit submit action before replying to a multi-select question", async () => {
@@ -291,6 +293,7 @@ describe("QuestionCardHandler - handleCardAction", () => {
       requestID: "req-custom",
       answers: [["my custom answer"]],
     });
-    expect(manager.isActive()).toBe(false);
+    // State is no longer cleared optimistically; server event clears it
+    expect(manager.isActive()).toBe(true);
   });
 });

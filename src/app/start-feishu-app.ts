@@ -7,6 +7,7 @@ import {
   type ServerResponse,
 } from "node:http";
 import { type AppConfig, ConfigValidationError, getConfig } from "../config.js";
+import { EventSupervisor } from "../events/supervisor.js";
 import { createCardCallbackRequestHandler } from "../feishu/card-callback-server.js";
 import { ControlRouter } from "../feishu/control-router.js";
 import { createEventDeduplicator } from "../feishu/event-deduplicator.js";
@@ -33,14 +34,16 @@ import { ResponsePipelineController } from "../feishu/response-pipeline.js";
 import { createFeishuClients } from "../feishu/sdk.js";
 import { statusStore } from "../feishu/status-store.js";
 import { startFeishuWsClient } from "../feishu/ws-client.js";
-import { interactionManager } from "../interaction/manager.js";
+import { InteractionManager } from "../interaction/manager.js";
 import { createOpenCodeClient } from "../opencode/client.js";
+import { openCodeEventSubscriber } from "../opencode/events.js";
 import { createSessionMessageFetcher } from "../opencode/message-fetcher.js";
 import { createOpenCodePromptClient } from "../opencode/prompt-client.js";
-import { permissionManager } from "../permission/manager.js";
-import { questionManager } from "../question/manager.js";
-import { sessionManager } from "../session/manager.js";
-import { settingsManager } from "../settings/manager.js";
+import { PendingInteractionStore } from "../pending/store.js";
+import { PermissionManager } from "../permission/manager.js";
+import { QuestionManager } from "../question/manager.js";
+import { SessionManager } from "../session/manager.js";
+import { SettingsManager } from "../settings/manager.js";
 import { logger } from "../utils/logger.js";
 import { APP_VERSION } from "../version.js";
 import { createRuntimeEventHandlers } from "./runtime-event-handlers.js";
@@ -111,20 +114,25 @@ export async function startFeishuApp(): Promise<void> {
   const openCodePromptAsyncClient: OpenCodePromptAsyncClient =
     createOpenCodePromptClient(openCodeClient, logger);
 
-  // Step 5: Create managers (singletons)
+  // Step 5: Create managers
   const managers = {
-    settings: settingsManager,
+    settings: new SettingsManager(),
+    question: new QuestionManager(),
+    permission: new PermissionManager(),
+    interaction: new InteractionManager(),
+  };
+  const sessionManager = new SessionManager(managers.settings);
+  const managersWithSession = {
+    ...managers,
     session: sessionManager,
-    question: questionManager,
-    permission: permissionManager,
-    interaction: interactionManager,
   };
 
-  await managers.settings.loadSettings();
-  if (!managers.settings.getCurrentProject()) {
+  await managersWithSession.settings.loadSettings();
+  if (!managersWithSession.settings.getCurrentProject()) {
     const defaultWorktree =
-      managers.settings.getCurrentSession()?.directory ?? process.cwd();
-    managers.settings.setCurrentProject({
+      managersWithSession.settings.getCurrentSession()?.directory ??
+      process.cwd();
+    managersWithSession.settings.setCurrentProject({
       id: defaultWorktree,
       worktree: defaultWorktree,
       name: "Default workspace",
@@ -136,17 +144,17 @@ export async function startFeishuApp(): Promise<void> {
 
   // Step 6: Create handlers
   const questionCardHandler = new QuestionCardHandler({
-    questionManager: managers.question,
+    questionManager: managersWithSession.question,
     renderer,
     openCodeClient: openCodeQuestionClient,
-    interactionManager: managers.interaction,
+    interactionManager: managersWithSession.interaction,
   });
 
   const permissionCardHandler = new PermissionCardHandler({
-    permissionManager: managers.permission,
+    permissionManager: managersWithSession.permission,
     renderer,
     openCodeClient: openCodePermissionClient,
-    interactionManager: managers.interaction,
+    interactionManager: managersWithSession.interaction,
   });
 
   const fileStore = new FileStore({ logger });
@@ -163,15 +171,15 @@ export async function startFeishuApp(): Promise<void> {
   });
 
   const controlRouter = new ControlRouter({
-    settingsManager: managers.settings,
-    sessionManager: managers.session,
+    settingsManager: managersWithSession.settings,
+    sessionManager: managersWithSession.session,
     renderer,
     openCodeClient,
     feishuClient: feishuClients.client,
     catalogCacheTtlMs: config.controlCatalog.cacheTtlMs,
     catalogModelStatePath: config.controlCatalog.modelStatePath,
     messageReader,
-    interactionManager: managers.interaction,
+    interactionManager: managersWithSession.interaction,
     statusStore,
     cardActionsEnabled:
       config.connectionType === "ws" ||
@@ -181,8 +189,8 @@ export async function startFeishuApp(): Promise<void> {
   });
 
   const promptIngressHandler = new PromptIngressHandler({
-    settings: managers.settings,
-    interactionManager: managers.interaction,
+    settings: managersWithSession.settings,
+    interactionManager: managersWithSession.interaction,
     openCodeSession: openCodeClient.session,
     openCodeSessionStatus: openCodeClient.session,
     openCodeSessionMessages: openCodeClient.session,
@@ -192,12 +200,14 @@ export async function startFeishuApp(): Promise<void> {
   });
 
   const inboundFilesBySession = new Map<string, StoredFile[]>();
+  const pendingStore = new PendingInteractionStore();
 
   const summaryAggregator = new RuntimeSummaryAggregator({
     statusStore,
-    questionManager: managers.question,
-    permissionManager: managers.permission,
-    interactionManager: managers.interaction,
+    questionManager: managersWithSession.question,
+    permissionManager: managersWithSession.permission,
+    interactionManager: managersWithSession.interaction,
+    pendingStore,
     questionCardHandler,
     permissionCardHandler,
     fileHandler,
@@ -212,15 +222,24 @@ export async function startFeishuApp(): Promise<void> {
     },
   });
 
+  const eventSupervisor = new EventSupervisor({
+    eventSubscriber: openCodeEventSubscriber,
+    summaryAggregator,
+    pendingStore,
+    client: openCodeClient,
+    logger,
+  });
+
   // Step 7: Create ResponsePipelineController
   const sessionMessageFetcher = createSessionMessageFetcher(openCodeClient);
   const pipelineController = new ResponsePipelineController({
+    eventSupervisor,
     summaryAggregator,
     sessionMessageFetcher,
     renderer,
     imageResolver,
-    settingsManager: managers.settings,
-    interactionManager: managers.interaction,
+    settingsManager: managersWithSession.settings,
+    interactionManager: managersWithSession.interaction,
     statusStore,
     config,
   });
@@ -350,6 +369,7 @@ export async function startFeishuApp(): Promise<void> {
       logger.info(`Aborting active session: ${sessionId}`);
     }
     statusStore.clearAll();
+    eventSupervisor.stop();
 
     httpServer?.close(() => {
       logger.info("HTTP server closed");

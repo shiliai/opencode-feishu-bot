@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
-import { PermissionCardHandler } from "../../src/feishu/handlers/permission.js";
-import type { OpenCodePermissionClient } from "../../src/feishu/handlers/permission.js";
+import {
+  type OpenCodePermissionClient,
+  PermissionCardHandler,
+} from "../../src/feishu/handlers/permission.js";
 import { PermissionManager } from "../../src/permission/manager.js";
 import type { PermissionRequest } from "../../src/permission/types.js";
 
@@ -44,7 +46,11 @@ function createHandler() {
   return { handler, permissionManager, openCodeClient, logger };
 }
 
-function buildCardAction(reply: string, requestId: string = "perm-1", openMessageId: string = "card-msg-1") {
+function buildCardAction(
+  reply: string,
+  requestId: string = "perm-1",
+  openMessageId: string = "card-msg-1",
+) {
   return {
     open_message_id: openMessageId,
     action: {
@@ -62,7 +68,7 @@ describe("PermissionCardHandler duplicate rejection", () => {
 
     await handler.handleCardAction(action);
     expect(openCodeClient.permission.reply).toHaveBeenCalledTimes(1);
-    expect(permissionManager.isActiveMessage("card-msg-1")).toBe(false);
+    expect(permissionManager.isActiveMessage("card-msg-1")).toBe(true);
 
     await handler.handleCardAction(action);
     expect(openCodeClient.permission.reply).toHaveBeenCalledTimes(1);
@@ -80,9 +86,9 @@ describe("PermissionCardHandler duplicate rejection", () => {
     await handler.handleCardAction(action);
     const snapshotAfterSecond = permissionManager.getPendingCount();
 
-    expect(snapshotAfterFirst).toBe(0);
-    expect(snapshotAfterSecond).toBe(0);
-    expect(permissionManager.isActiveMessage("card-msg-1")).toBe(false);
+    expect(snapshotAfterFirst).toBe(1);
+    expect(snapshotAfterSecond).toBe(1);
+    expect(permissionManager.isActiveMessage("card-msg-1")).toBe(true);
   });
 
   it("unknown messageId is safely ignored", async () => {
@@ -119,7 +125,11 @@ describe("PermissionCardHandler duplicate rejection", () => {
     const event = {
       open_message_id: null,
       action: {
-        value: { action: "permission_reply", reply: "approve", requestId: "perm-1" },
+        value: {
+          action: "permission_reply",
+          reply: "approve",
+          requestId: "perm-1",
+        },
       },
     };
     const result = await handler.handleCardAction(event);

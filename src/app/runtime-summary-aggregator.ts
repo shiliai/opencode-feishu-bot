@@ -1,4 +1,14 @@
 import type { Event } from "@opencode-ai/sdk/v2";
+import type { FileHandler } from "../feishu/file-handler.js";
+import type { FileStore } from "../feishu/file-store.js";
+import type { PermissionCardHandler } from "../feishu/handlers/permission.js";
+import type { QuestionCardHandler } from "../feishu/handlers/question.js";
+import { QUESTION_GUIDED_REPLY_PREFIX } from "../feishu/handlers/question.js";
+import type { StatusStore } from "../feishu/status-store.js";
+import type { InteractionManager } from "../interaction/manager.js";
+import type { PendingInteractionStore } from "../pending/store.js";
+import type { PermissionManager } from "../permission/manager.js";
+import type { QuestionManager } from "../question/manager.js";
 import { SummaryAggregator } from "../summary/aggregator.js";
 import type {
   SummaryCallbacks,
@@ -6,15 +16,6 @@ import type {
   SummaryQuestionEvent,
   SummaryToolEvent,
 } from "../summary/types.js";
-import type { StatusStore } from "../feishu/status-store.js";
-import type { QuestionManager } from "../question/manager.js";
-import type { PermissionManager } from "../permission/manager.js";
-import type { InteractionManager } from "../interaction/manager.js";
-import type { QuestionCardHandler } from "../feishu/handlers/question.js";
-import { QUESTION_GUIDED_REPLY_PREFIX } from "../feishu/handlers/question.js";
-import type { PermissionCardHandler } from "../feishu/handlers/permission.js";
-import type { FileHandler } from "../feishu/file-handler.js";
-import type { FileStore } from "../feishu/file-store.js";
 import type { Logger } from "../utils/logger.js";
 import { logger as defaultLogger } from "../utils/logger.js";
 
@@ -23,6 +24,7 @@ export interface RuntimeSummaryAggregatorOptions {
   questionManager: QuestionManager;
   permissionManager: PermissionManager;
   interactionManager: InteractionManager;
+  pendingStore?: PendingInteractionStore;
   questionCardHandler: Pick<QuestionCardHandler, "handleQuestionEvent">;
   permissionCardHandler: Pick<PermissionCardHandler, "handlePermissionEvent">;
   fileHandler: Pick<FileHandler, "egressFile">;
@@ -46,7 +48,6 @@ function runAsync(
 
 export class RuntimeSummaryAggregator {
   private readonly aggregator: SummaryAggregator;
-  private callbacks: SummaryCallbacks = {};
   private readonly logger: Logger;
 
   constructor(private readonly options: RuntimeSummaryAggregatorOptions) {
@@ -57,7 +58,6 @@ export class RuntimeSummaryAggregator {
   }
 
   setCallbacks(callbacks: SummaryCallbacks): void {
-    this.callbacks = callbacks;
     this.aggregator.setCallbacks({
       ...callbacks,
       onQuestion: (event) => {
@@ -93,9 +93,20 @@ export class RuntimeSummaryAggregator {
           );
         }
       },
+      onQuestionReplied: (sessionId, requestId) => {
+        callbacks.onQuestionReplied?.(sessionId, requestId);
+        this.handleQuestionReplied(sessionId, requestId);
+      },
+      onQuestionRejected: (sessionId, requestId) => {
+        callbacks.onQuestionRejected?.(sessionId, requestId);
+        this.handleQuestionRejected(sessionId, requestId);
+      },
+      onPermissionReplied: (sessionId, requestId) => {
+        callbacks.onPermissionReplied?.(sessionId, requestId);
+        this.handlePermissionReplied(sessionId, requestId);
+      },
       onCleared: () => {
         callbacks.onCleared?.();
-        this.options.interactionManager.clearAll("aggregator_cleared");
       },
     });
   }
@@ -123,6 +134,14 @@ export class RuntimeSummaryAggregator {
     if (!turn) {
       return;
     }
+
+    this.options.pendingStore?.add(
+      event.requestId,
+      event.sessionId,
+      turn.directory,
+      turn.receiveId,
+      "question",
+    );
 
     const expectedInput =
       firstQuestion.options.length > 0 && firstQuestion.custom
@@ -160,6 +179,14 @@ export class RuntimeSummaryAggregator {
       return;
     }
 
+    this.options.pendingStore?.add(
+      event.request.id,
+      event.sessionId,
+      turn.directory,
+      turn.receiveId,
+      "permission",
+    );
+
     this.options.interactionManager.start(turn.receiveId, {
       kind: "permission",
       expectedInput: "callback",
@@ -181,6 +208,51 @@ export class RuntimeSummaryAggregator {
       "Failed to render permission interaction",
       this.options.trackTask,
     );
+  }
+
+  private handleQuestionReplied(sessionId: string, requestId: string): void {
+    this.logger.info(
+      `[RuntimeSummaryAggregator] Question replied: session=${sessionId}, requestId=${requestId}`,
+    );
+    this.options.pendingStore?.remove(requestId);
+    this.options.questionManager.clear();
+
+    const turn = this.options.statusStore.get(sessionId);
+    if (turn) {
+      this.options.interactionManager.clear(turn.receiveId, "question_replied");
+    }
+  }
+
+  private handleQuestionRejected(sessionId: string, requestId: string): void {
+    this.logger.info(
+      `[RuntimeSummaryAggregator] Question rejected: session=${sessionId}, requestId=${requestId}`,
+    );
+    this.options.pendingStore?.remove(requestId);
+    this.options.questionManager.clear();
+
+    const turn = this.options.statusStore.get(sessionId);
+    if (turn) {
+      this.options.interactionManager.clear(
+        turn.receiveId,
+        "question_rejected",
+      );
+    }
+  }
+
+  private handlePermissionReplied(sessionId: string, requestId: string): void {
+    this.logger.info(
+      `[RuntimeSummaryAggregator] Permission replied: session=${sessionId}, requestId=${requestId}`,
+    );
+    this.options.pendingStore?.remove(requestId);
+    this.options.permissionManager.removeByRequestId(requestId);
+
+    const turn = this.options.statusStore.get(sessionId);
+    if (turn) {
+      this.options.interactionManager.clear(
+        turn.receiveId,
+        "permission_replied",
+      );
+    }
   }
 
   private handleTool(event: SummaryToolEvent): void {

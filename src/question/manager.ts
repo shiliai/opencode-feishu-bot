@@ -1,5 +1,5 @@
-import type { Question, QuestionAnswer, QuestionState } from "./types.js";
 import { logger } from "../utils/logger.js";
+import type { Question, QuestionAnswer, QuestionState } from "./types.js";
 
 function cloneState(state: QuestionState): QuestionState {
   return {
@@ -293,5 +293,3 @@ export class QuestionManager {
     return answers;
   }
 }
-
-export const questionManager = new QuestionManager();

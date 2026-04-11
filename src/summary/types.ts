@@ -82,7 +82,10 @@ export interface SummaryCallbacks {
   onTool?: (toolEvent: SummaryToolEvent) => void;
   onQuestion?: (questionEvent: SummaryQuestionEvent) => void;
   onQuestionError?: (sessionId: string) => void;
+  onQuestionReplied?: (sessionId: string, requestId: string) => void;
+  onQuestionRejected?: (sessionId: string, requestId: string) => void;
   onPermission?: (permissionEvent: SummaryPermissionEvent) => void;
+  onPermissionReplied?: (sessionId: string, requestId: string) => void;
   onSessionDiff?: (diffEvent: SummarySessionDiffEvent) => void;
   onTokenUpdate?: (tokenEvent: SummaryTokenEvent) => void;
   onSessionRetry?: (retryInfo: SummarySessionRetryInfo) => void;
