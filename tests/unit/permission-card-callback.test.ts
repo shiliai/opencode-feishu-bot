@@ -44,7 +44,11 @@ function createHandler() {
   return { handler, permissionManager, openCodeClient, logger };
 }
 
-function buildCardAction(reply: string, requestId: string = "perm-1", openMessageId: string = "card-msg-1") {
+function buildCardAction(
+  reply: string,
+  requestId: string = "perm-1",
+  openMessageId: string = "card-msg-1",
+) {
   return {
     open_message_id: openMessageId,
     action: {
@@ -91,15 +95,16 @@ describe("PermissionCardHandler card action callbacks", () => {
     });
   });
 
-  it("removes the permission from the manager after resolution", async () => {
+  it("keeps the permission active after card reply (cleared by server event)", async () => {
     const { handler, permissionManager } = createHandler();
     permissionManager.startPermission(REQUEST, "card-msg-1");
     expect(permissionManager.isActiveMessage("card-msg-1")).toBe(true);
 
     await handler.handleCardAction(buildCardAction("approve"));
 
-    expect(permissionManager.isActiveMessage("card-msg-1")).toBe(false);
-    expect(permissionManager.getRequest("card-msg-1")).toBeNull();
+    // State is no longer cleared optimistically; server event clears it
+    expect(permissionManager.isActiveMessage("card-msg-1")).toBe(true);
+    expect(permissionManager.getRequest("card-msg-1")).not.toBeNull();
   });
 
   it("makes exactly ONE downstream reply call per action", async () => {
@@ -118,7 +123,11 @@ describe("PermissionCardHandler card action callbacks", () => {
     const event = {
       open_message_id: "card-msg-1",
       action: {
-        value: { action: "question_answer", reply: "approve", requestId: "perm-1" },
+        value: {
+          action: "question_answer",
+          reply: "approve",
+          requestId: "perm-1",
+        },
       },
     };
     await handler.handleCardAction(event);
@@ -133,7 +142,11 @@ describe("PermissionCardHandler card action callbacks", () => {
 
     const event = {
       action: {
-        value: { action: "permission_reply", reply: "approve", requestId: "perm-1" },
+        value: {
+          action: "permission_reply",
+          reply: "approve",
+          requestId: "perm-1",
+        },
       },
     };
     await handler.handleCardAction(event);

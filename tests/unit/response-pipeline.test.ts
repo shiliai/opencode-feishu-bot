@@ -410,6 +410,55 @@ describe("ResponsePipelineController", () => {
     expect(harness.statusStore.get(context.sessionId)).toBe(state);
   });
 
+  it("finalizes active sessions in the failed directory when the supervisor reports a fatal subscription error", async () => {
+    const harness = createHarness();
+    const firstContext = makeTurnContext("session-1");
+    const secondContext = {
+      ...makeTurnContext("session-2"),
+      directory: firstContext.directory,
+    };
+    const thirdContext = makeTurnContext("session-3");
+
+    harness.controller.startTurn(firstContext);
+    harness.controller.startTurn(secondContext);
+    harness.controller.startTurn(thirdContext);
+
+    harness.controller.handleEventSupervisorFailure(
+      firstContext.directory,
+      new Error("fatal subscription failure"),
+    );
+
+    await drainSession(harness.controller, firstContext.sessionId);
+    await drainSession(harness.controller, secondContext.sessionId);
+    await drainSession(harness.controller, thirdContext.sessionId);
+
+    expect(harness.renderer.renderCompleteCard).toHaveBeenCalledTimes(2);
+    expect(harness.renderer.renderCompleteCard).toHaveBeenNthCalledWith(
+      1,
+      firstContext.receiveId,
+      "OpenCode error",
+      "OpenCode stream ended before a final reply was delivered.",
+      expect.objectContaining({ template: "red" }),
+    );
+    expect(harness.renderer.renderCompleteCard).toHaveBeenNthCalledWith(
+      2,
+      secondContext.receiveId,
+      "OpenCode error",
+      "OpenCode stream ended before a final reply was delivered.",
+      expect.objectContaining({ template: "red" }),
+    );
+    expect(harness.interactionManager.clearBusy).toHaveBeenCalledTimes(2);
+    expect(harness.interactionManager.clearBusy).toHaveBeenCalledWith(
+      firstContext.receiveId,
+    );
+    expect(harness.interactionManager.clearBusy).toHaveBeenCalledWith(
+      secondContext.receiveId,
+    );
+    expect(harness.statusStore.get(firstContext.sessionId)).toBeUndefined();
+    expect(harness.statusStore.get(secondContext.sessionId)).toBeUndefined();
+    expect(harness.statusStore.get(thirdContext.sessionId)).toBeDefined();
+  });
+
   it("uses the latest completed assistant message when the session goes idle", async () => {
     const harness = createHarness();
     const context = makeTurnContext();

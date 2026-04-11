@@ -109,7 +109,7 @@ describe("QuestionCardHandler - handleCardAction", () => {
     });
   });
 
-  it("clears question state after answering the last question", async () => {
+  it("keeps question state active after reply (cleared by server event)", async () => {
     const manager = new QuestionManager();
     const renderer = createMockRenderer();
     const client = createMockOpenCodeClient();
@@ -127,7 +127,8 @@ describe("QuestionCardHandler - handleCardAction", () => {
       }),
     );
 
-    expect(manager.isActive()).toBe(false);
+    expect(client.question.reply).toHaveBeenCalledTimes(1);
+    expect(manager.isActive()).toBe(true);
   });
 
   it("batches answers across multiple questions and replies once at the end", async () => {
@@ -177,7 +178,8 @@ describe("QuestionCardHandler - handleCardAction", () => {
       requestID: "req-multi",
       answers: [["Vue"], ["TypeScript"]],
     });
-    expect(manager.isActive()).toBe(false);
+    // State is no longer cleared optimistically; server event clears it
+    expect(manager.isActive()).toBe(true);
   });
 
   it("waits for an explicit submit action before replying to a multi-select question", async () => {
@@ -221,6 +223,45 @@ describe("QuestionCardHandler - handleCardAction", () => {
       requestID: "req-multi-select",
       answers: [["Bash", "Edit"]],
     });
+  });
+
+  it("ignores duplicate question submit callbacks while the first reply is still in flight", async () => {
+    const manager = new QuestionManager();
+    const renderer = createMockRenderer();
+    let resolveReply: (() => void) | undefined;
+    const client = {
+      question: {
+        reply: vi.fn().mockImplementation(
+          () =>
+            new Promise((resolve) => {
+              resolveReply = () => resolve({ data: { success: true } });
+            }),
+        ),
+      },
+    };
+
+    manager.startQuestions([QUESTION], "req-duplicate");
+    manager.setActiveMessageId("msg-active-duplicate");
+
+    const handler = createHandler(manager, renderer, client);
+    const action = buildCardAction({
+      requestId: "req-duplicate",
+      messageId: "msg-active-duplicate",
+      optionIndex: 0,
+    });
+
+    const firstReply = handler.handleCardAction(action);
+    const duplicateReply = handler.handleCardAction(action);
+    await Promise.resolve();
+
+    expect(client.question.reply).toHaveBeenCalledTimes(1);
+
+    resolveReply?.();
+    await firstReply;
+    await duplicateReply;
+
+    expect(client.question.reply).toHaveBeenCalledTimes(1);
+    expect(manager.isActive()).toBe(true);
   });
 
   it("returns an empty object for non-question card actions", async () => {
@@ -291,6 +332,7 @@ describe("QuestionCardHandler - handleCardAction", () => {
       requestID: "req-custom",
       answers: [["my custom answer"]],
     });
-    expect(manager.isActive()).toBe(false);
+    // State is no longer cleared optimistically; server event clears it
+    expect(manager.isActive()).toBe(true);
   });
 });

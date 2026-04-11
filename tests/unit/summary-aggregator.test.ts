@@ -539,6 +539,162 @@ describe("SummaryAggregator", () => {
     expect(onSessionError).toHaveBeenCalledWith("session-1", "failure");
   });
 
+  it("emits question.replied callback with sessionId and requestId", () => {
+    const onQuestionReplied = vi.fn();
+    aggregator.setOnQuestionReplied(onQuestionReplied);
+    aggregator.setSession("session-1");
+
+    aggregator.processEvent(
+      makeEvent("question.replied", {
+        sessionID: "session-1",
+        requestID: "req-q-1",
+        answers: [["Yes"]],
+      }),
+    );
+
+    expect(onQuestionReplied).toHaveBeenCalledOnce();
+    expect(onQuestionReplied).toHaveBeenCalledWith("session-1", "req-q-1");
+  });
+
+  it("emits question.rejected callback with sessionId and requestId", () => {
+    const onQuestionRejected = vi.fn();
+    aggregator.setOnQuestionRejected(onQuestionRejected);
+    aggregator.setSession("session-1");
+
+    aggregator.processEvent(
+      makeEvent("question.rejected", {
+        sessionID: "session-1",
+        requestID: "req-q-2",
+      }),
+    );
+
+    expect(onQuestionRejected).toHaveBeenCalledOnce();
+    expect(onQuestionRejected).toHaveBeenCalledWith("session-1", "req-q-2");
+  });
+
+  it("emits permission.replied callback with sessionId and requestId", () => {
+    const onPermissionReplied = vi.fn();
+    aggregator.setOnPermissionReplied(onPermissionReplied);
+    aggregator.setSession("session-1");
+
+    aggregator.processEvent(
+      makeEvent("permission.replied", {
+        sessionID: "session-1",
+        requestID: "req-p-1",
+        reply: "once",
+      }),
+    );
+
+    expect(onPermissionReplied).toHaveBeenCalledOnce();
+    expect(onPermissionReplied).toHaveBeenCalledWith("session-1", "req-p-1");
+  });
+
+  it("falls back to id when requestID is missing on replied/rejected events", () => {
+    const onQuestionReplied = vi.fn();
+    const onQuestionRejected = vi.fn();
+    const onPermissionReplied = vi.fn();
+    aggregator.setOnQuestionReplied(onQuestionReplied);
+    aggregator.setOnQuestionRejected(onQuestionRejected);
+    aggregator.setOnPermissionReplied(onPermissionReplied);
+    aggregator.setSession("session-1");
+
+    aggregator.processEvent(
+      makeEvent("question.replied", {
+        sessionID: "session-1",
+        id: "fallback-q-1",
+        answers: [["A"]],
+      }),
+    );
+    aggregator.processEvent(
+      makeEvent("question.rejected", {
+        sessionID: "session-1",
+        id: "fallback-q-2",
+      }),
+    );
+    aggregator.processEvent(
+      makeEvent("permission.replied", {
+        sessionID: "session-1",
+        id: "fallback-p-1",
+        reply: "always",
+      }),
+    );
+
+    expect(onQuestionReplied).toHaveBeenCalledWith("session-1", "fallback-q-1");
+    expect(onQuestionRejected).toHaveBeenCalledWith(
+      "session-1",
+      "fallback-q-2",
+    );
+    expect(onPermissionReplied).toHaveBeenCalledWith(
+      "session-1",
+      "fallback-p-1",
+    );
+  });
+
+  it("ignores replied/rejected events for foreign sessions", () => {
+    const onQuestionReplied = vi.fn();
+    const onQuestionRejected = vi.fn();
+    const onPermissionReplied = vi.fn();
+    aggregator.setOnQuestionReplied(onQuestionReplied);
+    aggregator.setOnQuestionRejected(onQuestionRejected);
+    aggregator.setOnPermissionReplied(onPermissionReplied);
+    aggregator.setSession("session-1");
+
+    aggregator.processEvent(
+      makeEvent("question.replied", {
+        sessionID: "session-other",
+        requestID: "req-1",
+        answers: [["X"]],
+      }),
+    );
+    aggregator.processEvent(
+      makeEvent("question.rejected", {
+        sessionID: "session-other",
+        requestID: "req-2",
+      }),
+    );
+    aggregator.processEvent(
+      makeEvent("permission.replied", {
+        sessionID: "session-other",
+        requestID: "req-3",
+        reply: "reject",
+      }),
+    );
+
+    expect(onQuestionReplied).not.toHaveBeenCalled();
+    expect(onQuestionRejected).not.toHaveBeenCalled();
+    expect(onPermissionReplied).not.toHaveBeenCalled();
+  });
+
+  it("ignores replied/rejected events missing required fields", () => {
+    const onQuestionReplied = vi.fn();
+    const onQuestionRejected = vi.fn();
+    const onPermissionReplied = vi.fn();
+    aggregator.setOnQuestionReplied(onQuestionReplied);
+    aggregator.setOnQuestionRejected(onQuestionRejected);
+    aggregator.setOnPermissionReplied(onPermissionReplied);
+    aggregator.setSession("session-1");
+
+    // Missing sessionID
+    aggregator.processEvent(
+      makeEvent("question.replied", { requestID: "req-1", answers: [["X"]] }),
+    );
+    // Missing both requestID and id
+    aggregator.processEvent(
+      makeEvent("question.rejected", { sessionID: "session-1" }),
+    );
+    // Missing sessionID
+    aggregator.processEvent(
+      makeEvent("permission.replied", {
+        requestID: "req-3",
+        reply: "once",
+      }),
+    );
+
+    expect(onQuestionReplied).not.toHaveBeenCalled();
+    expect(onQuestionRejected).not.toHaveBeenCalled();
+    expect(onPermissionReplied).not.toHaveBeenCalled();
+  });
+
   it("fires question error callback when question tool fails", () => {
     const onQuestionError = vi.fn();
     aggregator.setOnQuestionError(onQuestionError);

@@ -1,7 +1,6 @@
-import type { PermissionRequest } from "../../permission/types.js";
 import type { PermissionManager } from "../../permission/manager.js";
-import type { Logger } from "../../utils/logger.js";
-import { logger as defaultLogger } from "../../utils/logger.js";
+import type { PermissionRequest } from "../../permission/types.js";
+import { logger as defaultLogger, type Logger } from "../../utils/logger.js";
 
 type OpenCodeReplyValue = "once" | "always" | "reject";
 
@@ -27,15 +26,6 @@ export interface PermissionCardHandlerOptions {
   openCodeClient: OpenCodePermissionClient;
   interactionManager?: { clear(chatId: string, reason?: string): void };
   logger?: Logger;
-}
-
-function extractReceiveId(event: Record<string, unknown>): string | null {
-  const context = isRecord(event.context) ? event.context : null;
-  return typeof event.open_chat_id === "string"
-    ? event.open_chat_id
-    : typeof context?.open_chat_id === "string"
-      ? context.open_chat_id
-      : null;
 }
 
 function mapPermissionReply(cardReply: string): OpenCodeReplyValue {
@@ -159,6 +149,13 @@ export class PermissionCardHandler {
       return this.emptyResponse;
     }
 
+    if (this.permissionManager.isReplied(request.id)) {
+      this.logger.debug(
+        `[PermissionCardHandler] Ignoring already-replied card action for requestId=${request.id}, messageId=${messageId}`,
+      );
+      return this.emptyResponse;
+    }
+
     // Verify the request ID matches (extra safety check)
     if (request.id !== requestIdFromCard) {
       this.logger.warn(
@@ -174,18 +171,13 @@ export class PermissionCardHandler {
         requestID: request.id,
         reply,
       });
+      this.permissionManager.markReplied(request.id);
     } catch (error) {
       this.logger.error(
         `[PermissionCardHandler] Failed to forward permission reply for request ${request.id}`,
         error,
       );
       return this.emptyResponse;
-    }
-
-    this.permissionManager.removeByMessageId(messageId);
-    const receiveId = extractReceiveId(event);
-    if (receiveId) {
-      this.interactionManager?.clear(receiveId, "permission_resolved");
     }
 
     this.logger.info(

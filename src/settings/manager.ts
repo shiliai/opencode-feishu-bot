@@ -1,5 +1,5 @@
-import path from "node:path";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import path from "node:path";
 import { logger as defaultLogger, type Logger } from "../utils/logger.js";
 
 export interface ProjectInfo {
@@ -413,127 +413,127 @@ export class SettingsManager {
   }
 }
 
-export const settingsManager = new SettingsManager();
+const defaultSettingsManager = new SettingsManager();
 
 export function getSettingsFilePath(): string {
-  return settingsManager.getSettingsFilePath();
+  return defaultSettingsManager.getSettingsFilePath();
 }
 
 export async function loadSettings(): Promise<void> {
-  return settingsManager.loadSettings();
+  return defaultSettingsManager.loadSettings();
 }
 
 export function getCurrentProject(): ProjectInfo | undefined {
-  return settingsManager.getCurrentProject();
+  return defaultSettingsManager.getCurrentProject();
 }
 
 export function setCurrentProject(projectInfo: ProjectInfo): void {
-  settingsManager.setCurrentProject(projectInfo);
+  defaultSettingsManager.setCurrentProject(projectInfo);
 }
 
 export function clearProject(): void {
-  settingsManager.clearProject();
+  defaultSettingsManager.clearProject();
 }
 
 export function getCurrentSession(): SessionInfo | undefined {
-  return settingsManager.getCurrentSession();
+  return defaultSettingsManager.getCurrentSession();
 }
 
 export function setCurrentSession(sessionInfo: SessionInfo): void {
-  settingsManager.setCurrentSession(sessionInfo);
+  defaultSettingsManager.setCurrentSession(sessionInfo);
 }
 
 export function clearSession(): void {
-  settingsManager.clearSession();
+  defaultSettingsManager.clearSession();
 }
 
 export function getChatSession(chatId: string): SessionInfo | undefined {
-  return settingsManager.getChatSession(chatId);
+  return defaultSettingsManager.getChatSession(chatId);
 }
 
 export function setChatSession(chatId: string, sessionInfo: SessionInfo): void {
-  settingsManager.setChatSession(chatId, sessionInfo);
+  defaultSettingsManager.setChatSession(chatId, sessionInfo);
 }
 
 export function clearChatSession(chatId: string): void {
-  settingsManager.clearChatSession(chatId);
+  defaultSettingsManager.clearChatSession(chatId);
 }
 
 export function getCurrentAgent(): string | undefined {
-  return settingsManager.getCurrentAgent();
+  return defaultSettingsManager.getCurrentAgent();
 }
 
 export function setCurrentAgent(agentName: string): void {
-  settingsManager.setCurrentAgent(agentName);
+  defaultSettingsManager.setCurrentAgent(agentName);
 }
 
 export function clearCurrentAgent(): void {
-  settingsManager.clearCurrentAgent();
+  defaultSettingsManager.clearCurrentAgent();
 }
 
 export function getCurrentModel(): ModelInfo | undefined {
-  return settingsManager.getCurrentModel();
+  return defaultSettingsManager.getCurrentModel();
 }
 
 export function setCurrentModel(modelInfo: ModelInfo): void {
-  settingsManager.setCurrentModel(modelInfo);
+  defaultSettingsManager.setCurrentModel(modelInfo);
 }
 
 export function clearCurrentModel(): void {
-  settingsManager.clearCurrentModel();
+  defaultSettingsManager.clearCurrentModel();
 }
 
 export function getStatusMessageId(): string | undefined {
-  return settingsManager.getStatusMessageId();
+  return defaultSettingsManager.getStatusMessageId();
 }
 
 export function setStatusMessageId(messageId: string): void {
-  settingsManager.setStatusMessageId(messageId);
+  defaultSettingsManager.setStatusMessageId(messageId);
 }
 
 export function clearStatusMessageId(): void {
-  settingsManager.clearStatusMessageId();
+  defaultSettingsManager.clearStatusMessageId();
 }
 
 export function getChatStatusMessageId(chatId: string): string | undefined {
-  return settingsManager.getChatStatusMessageId(chatId);
+  return defaultSettingsManager.getChatStatusMessageId(chatId);
 }
 
 export function setChatStatusMessageId(
   chatId: string,
   messageId: string,
 ): void {
-  settingsManager.setChatStatusMessageId(chatId, messageId);
+  defaultSettingsManager.setChatStatusMessageId(chatId, messageId);
 }
 
 export function clearChatStatusMessageId(chatId: string): void {
-  settingsManager.clearChatStatusMessageId(chatId);
+  defaultSettingsManager.clearChatStatusMessageId(chatId);
 }
 
 export function getSessionDirectoryCache():
   | SessionDirectoryCacheInfo
   | undefined {
-  return settingsManager.getSessionDirectoryCache();
+  return defaultSettingsManager.getSessionDirectoryCache();
 }
 
 export function setSessionDirectoryCache(
   cache: SessionDirectoryCacheInfo,
 ): Promise<void> {
-  return settingsManager.setSessionDirectoryCache(cache);
+  return defaultSettingsManager.setSessionDirectoryCache(cache);
 }
 
 export function clearSessionDirectoryCache(): void {
-  settingsManager.clearSessionDirectoryCache();
+  defaultSettingsManager.clearSessionDirectoryCache();
 }
 
 export async function waitForPendingSettingsWrites(): Promise<void> {
-  return settingsManager.waitForPendingWrites();
+  return defaultSettingsManager.waitForPendingWrites();
 }
 
 export function __resetSettingsForTests(): void {
-  settingsManager.__resetSettingsForTests();
+  defaultSettingsManager.__resetSettingsForTests();
 }
 
 export function __resetChatStateForTests(): void {
-  settingsManager.__resetChatStateForTests();
+  defaultSettingsManager.__resetChatStateForTests();
 }

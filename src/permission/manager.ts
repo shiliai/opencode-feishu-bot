@@ -1,10 +1,12 @@
-import type { PermissionRequest, PermissionState } from "./types.js";
 import { logger } from "../utils/logger.js";
+import type { PermissionRequest, PermissionState } from "./types.js";
 
 export class PermissionManager {
   private state: PermissionState = {
     requestsByMessageId: new Map(),
   };
+
+  private repliedRequestIds: Set<string> = new Set();
 
   getStateSnapshot(): PermissionState {
     return {
@@ -53,6 +55,14 @@ export class PermissionManager {
     return messageId !== null && this.state.requestsByMessageId.has(messageId);
   }
 
+  markReplied(requestId: string): void {
+    this.repliedRequestIds.add(requestId);
+  }
+
+  isReplied(requestId: string): boolean {
+    return this.repliedRequestIds.has(requestId);
+  }
+
   getMessageId(): string | null {
     const messageIds = this.getMessageIds();
     if (messageIds.length === 0) {
@@ -73,11 +83,38 @@ export class PermissionManager {
     }
 
     this.state.requestsByMessageId.delete(messageId);
+    this.repliedRequestIds.delete(request.id);
     logger.debug(
       `[PermissionManager] Removed permission request: id=${request.id}, messageId=${messageId}, pending=${this.state.requestsByMessageId.size}`,
     );
 
     return request;
+  }
+
+  removeByRequestId(requestId: string | null): PermissionRequest | null {
+    if (requestId === null) {
+      return null;
+    }
+
+    this.repliedRequestIds.delete(requestId);
+
+    for (const [
+      messageId,
+      request,
+    ] of this.state.requestsByMessageId.entries()) {
+      if (request.id !== requestId) {
+        continue;
+      }
+
+      this.state.requestsByMessageId.delete(messageId);
+      logger.debug(
+        `[PermissionManager] Removed permission request: id=${request.id}, messageId=${messageId}, pending=${this.state.requestsByMessageId.size}`,
+      );
+
+      return request;
+    }
+
+    return null;
   }
 
   getPendingCount(): number {
@@ -95,7 +132,6 @@ export class PermissionManager {
     this.state = {
       requestsByMessageId: new Map(),
     };
+    this.repliedRequestIds.clear();
   }
 }
-
-export const permissionManager = new PermissionManager();

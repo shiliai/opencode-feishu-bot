@@ -1,8 +1,4 @@
-import {
-  settingsManager,
-  type SessionInfo,
-  type SettingsManager,
-} from "../settings/manager.js";
+import type { SessionInfo, SettingsManager } from "../settings/manager.js";
 
 export type { SessionInfo };
 
@@ -16,9 +12,7 @@ export interface SessionStore {
 }
 
 export class SessionManager {
-  constructor(
-    private readonly store: SessionStore = settingsManager as SettingsManager,
-  ) {}
+  constructor(private readonly store: SessionStore | SettingsManager) {}
 
   setCurrentSession(sessionInfo: SessionInfo): void {
     this.store.setCurrentSession(sessionInfo);
@@ -43,30 +37,4 @@ export class SessionManager {
   clearChatSession(chatId: string): void {
     this.store.clearChatSession(chatId);
   }
-}
-
-export const sessionManager = new SessionManager();
-
-export function setCurrentSession(sessionInfo: SessionInfo): void {
-  sessionManager.setCurrentSession(sessionInfo);
-}
-
-export function getCurrentSession(): SessionInfo | null {
-  return sessionManager.getCurrentSession();
-}
-
-export function clearSession(): void {
-  sessionManager.clearSession();
-}
-
-export function setChatSession(chatId: string, sessionInfo: SessionInfo): void {
-  sessionManager.setChatSession(chatId, sessionInfo);
-}
-
-export function getChatSession(chatId: string): SessionInfo | undefined {
-  return sessionManager.getChatSession(chatId);
-}
-
-export function clearChatSession(chatId: string): void {
-  sessionManager.clearChatSession(chatId);
 }

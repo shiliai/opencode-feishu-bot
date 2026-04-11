@@ -1,3 +1,4 @@
+import { logger } from "../utils/logger.js";
 import type {
   BlockReason,
   BusyState,
@@ -12,7 +13,6 @@ import type {
   StartInteractionOptions,
   TransitionInteractionOptions,
 } from "./types.js";
-import { logger } from "../utils/logger.js";
 
 export const DEFAULT_ALLOWED_INTERACTION_COMMANDS = [
   "/help",
@@ -456,5 +456,3 @@ export class InteractionManager {
     );
   }
 }
-
-export const interactionManager = new InteractionManager();
