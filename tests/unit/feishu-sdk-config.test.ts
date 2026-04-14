@@ -29,6 +29,12 @@ function makeConfig(overrides: Partial<AppConfig> = {}): AppConfig {
     },
     service: { port: 3000, host: "0.0.0.0" },
     logLevel: "info",
+    statusCard: {
+      recentUpdatesCount: 5,
+      recreateInterval: 5,
+    },
+    scheduledTaskLimit: 10,
+    scheduledTaskPersistPath: ".data/scheduled-tasks.json",
     assistantName: "OpenCode",
     ...overrides,
   };

@@ -1,10 +1,9 @@
 import type { Logger } from "../utils/logger.js";
-import type { ScheduledTask } from "./types.js";
+import type { ScheduledTaskSessionTracker } from "./session-tracker.js";
+import type { ScheduledTask, TaskExecutionResult } from "./types.js";
 
-export interface TaskExecutionResult {
-  status: "success" | "error";
-  error: string | null;
-}
+const SCHEDULED_TASK_AGENT = "build";
+const SCHEDULED_TASK_SESSION_TITLE = "Scheduled task run";
 
 export interface TaskExecutorDeps {
   sessionClient: {
@@ -13,9 +12,13 @@ export interface TaskExecutorDeps {
       error?: unknown;
     }>;
     prompt(parameters: Record<string, unknown>): Promise<unknown>;
-    abort(parameters: Record<string, unknown>): Promise<unknown>;
+    delete(parameters: { sessionID: string }): Promise<{
+      data?: unknown;
+      error?: unknown;
+    }>;
   };
   logger: Logger;
+  sessionTracker?: ScheduledTaskSessionTracker;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -23,27 +26,49 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function getErrorMessage(error: unknown): string {
-  if (error instanceof Error) {
-    return error.message;
+  if (error instanceof Error && error.message.trim()) {
+    return error.message.trim();
   }
-  return String(error);
+
+  if (typeof error === "string" && error.trim()) {
+    return error.trim();
+  }
+
+  return "Unknown scheduled task execution error";
+}
+
+function collectResponseText(
+  parts: Array<{ type?: string; text?: string; ignored?: boolean }>,
+): string {
+  return parts
+    .filter(
+      (part) =>
+        part.type === "text" && typeof part.text === "string" && !part.ignored,
+    )
+    .map((part) => part.text)
+    .join("")
+    .trim();
 }
 
 export async function executeTask(
   deps: TaskExecutorDeps,
   task: ScheduledTask,
 ): Promise<TaskExecutionResult> {
-  const { sessionClient, logger } = deps;
+  const { sessionClient, logger, sessionTracker } = deps;
+  const startedAt = new Date().toISOString();
   let sessionId: string | null = null;
 
   try {
     const createResult = await sessionClient.create({
       directory: task.projectWorktree,
-      title: `Scheduled task: ${task.scheduleSummary}`,
+      title: SCHEDULED_TASK_SESSION_TITLE,
     });
 
     if (createResult.error || !createResult.data) {
-      throw createResult.error ?? new Error("Failed to create session");
+      throw (
+        createResult.error ??
+        new Error("Failed to create temporary scheduled task session")
+      );
     }
 
     const data = isRecord(createResult.data) ? createResult.data : null;
@@ -52,26 +77,84 @@ export async function executeTask(
       throw new Error("No session ID from task session creation");
     }
 
-    await sessionClient.prompt({
+    sessionTracker?.add(sessionId);
+
+    const promptOptions: Record<string, unknown> = {
       sessionID: sessionId,
       directory: task.projectWorktree,
-      model: { providerID: task.model.providerID, modelID: task.model.modelID },
-      agent: "build",
       parts: [{ type: "text", text: task.prompt }],
-    } as Record<string, unknown>);
+      agent: SCHEDULED_TASK_AGENT,
+    };
 
-    logger.info(`[TaskExecutor] Task ${task.id} prompt dispatched`);
+    if (task.model.providerID && task.model.modelID) {
+      promptOptions.model = {
+        providerID: task.model.providerID,
+        modelID: task.model.modelID,
+      };
+    }
 
-    return { status: "success", error: null };
+    if (task.model.variant) {
+      promptOptions.variant = task.model.variant;
+    }
+
+    const promptResult = await sessionClient.prompt(promptOptions);
+
+    const response = promptResult as {
+      data?: {
+        parts?: Array<{
+          type?: string;
+          text?: string;
+          ignored?: boolean;
+        }>;
+      };
+      error?: unknown;
+    };
+
+    if (response.error || !response.data) {
+      throw (
+        response.error ?? new Error("Scheduled task prompt execution failed")
+      );
+    }
+
+    const resultText = collectResponseText(response.data.parts ?? []);
+    if (!resultText) {
+      throw new Error("Scheduled task returned an empty assistant response");
+    }
+
+    logger.info(
+      `[TaskExecutor] Task ${task.id} completed successfully (${resultText.length} chars)`,
+    );
+
+    return {
+      taskId: task.id,
+      status: "success",
+      startedAt,
+      finishedAt: new Date().toISOString(),
+      resultText,
+      errorMessage: null,
+    };
   } catch (error) {
-    logger.error(`[TaskExecutor] Task ${task.id} failed`, error);
-    return { status: "error", error: getErrorMessage(error) };
+    const errorMessage = getErrorMessage(error);
+    logger.warn(`[TaskExecutor] Task ${task.id} failed: ${errorMessage}`);
+
+    return {
+      taskId: task.id,
+      status: "error",
+      startedAt,
+      finishedAt: new Date().toISOString(),
+      resultText: null,
+      errorMessage,
+    };
   } finally {
     if (sessionId) {
+      sessionTracker?.remove(sessionId);
       try {
-        await sessionClient.abort({ sessionID: sessionId });
-      } catch {
-        // intentional: cleanup is best-effort
+        await sessionClient.delete({ sessionID: sessionId });
+      } catch (deleteError) {
+        logger.warn(
+          `[TaskExecutor] Failed to delete temporary session: sessionId=${sessionId}`,
+          deleteError,
+        );
       }
     }
   }

@@ -1,4 +1,6 @@
-import { isAbsolute, relative, resolve } from "node:path";
+import { isAbsolute, relative, resolve, dirname } from "node:path";
+import { readFileSync } from "node:fs";
+import { mkdir, writeFile, rename } from "node:fs/promises";
 import { DEFAULT_CONTROL_CATALOG_CACHE_TTL_MS, getConfig } from "../config.js";
 import type { FeishuRenderer } from "../feishu/renderer.js";
 import type { InteractionManager } from "../interaction/manager.js";
@@ -49,6 +51,7 @@ import type { StatusStore, StatusTurnState } from "./status-store.js";
 import { scanWorkdirSubdirs, type WorkdirEntry } from "./workdir-scanner.js";
 import { InMemoryTaskStore } from "../scheduled-task/store.js";
 import { ScheduledTaskRuntime } from "../scheduled-task/runtime.js";
+import { ScheduledTaskSessionTracker } from "../scheduled-task/session-tracker.js";
 
 export type ControlCommand =
   | "/help"
@@ -176,6 +179,9 @@ export interface OpenCodeSessionClient {
   }): Promise<{ data?: unknown; error?: unknown }>;
   status(parameters?: Record<string, unknown>): Promise<{ data?: unknown }>;
   abort(parameters?: Record<string, unknown>): Promise<{ data?: unknown }>;
+  delete(parameters: {
+    sessionID: string;
+  }): Promise<{ data?: unknown; error?: unknown }>;
   children?(parameters: {
     sessionID: string;
     directory?: string;
@@ -1889,16 +1895,75 @@ export class ControlRouter {
   private taskRuntime:
     | import("../scheduled-task/runtime.js").ScheduledTaskRuntime
     | null = null;
+  private taskSessionTracker: ScheduledTaskSessionTracker | null = null;
+
+  getScheduledTaskSessionTracker(): ScheduledTaskSessionTracker | null {
+    return this.taskSessionTracker;
+  }
 
   private ensureTaskInfrastructure(): void {
     if (this.taskStore && this.taskRuntime) {
       return;
     }
 
-    this.taskStore = new InMemoryTaskStore();
-    const store = this.taskStore;
+    const persistPath = getConfig().scheduledTaskPersistPath;
     const logger = this.logger;
+
+    let persistQueue: Promise<void> = Promise.resolve();
+    let writeSeq = 0;
+
+    const persistToDisk = (
+      store: import("../scheduled-task/store.js").InMemoryTaskStore,
+    ): void => {
+      const payload = JSON.stringify(store.toJSON());
+      const seq = ++writeSeq;
+      persistQueue = persistQueue
+        .catch(() => undefined)
+        .then(async () => {
+          if (seq !== writeSeq) {
+            return;
+          }
+          const dir = dirname(persistPath);
+          const tmp = `${persistPath}.${seq}.tmp`;
+          try {
+            await mkdir(dir, { recursive: true });
+            await writeFile(tmp, payload, "utf-8");
+            await rename(tmp, persistPath);
+          } catch (err: unknown) {
+            logger.warn(
+              `[ControlRouter] Failed to persist scheduled tasks to ${persistPath}`,
+              err,
+            );
+          }
+        });
+    };
+
+    const store = new InMemoryTaskStore(() => persistToDisk(store));
+    this.taskStore = store;
+
+    try {
+      const raw = readFileSync(persistPath, "utf-8");
+      const data: unknown = JSON.parse(raw);
+      if (Array.isArray(data)) {
+        store.loadFromJSON(data);
+        logger.info(
+          `[ControlRouter] Loaded ${store.listTasks().length} persisted scheduled task(s)`,
+        );
+      }
+    } catch (err: unknown) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code !== "ENOENT") {
+        logger.warn(
+          `[ControlRouter] Failed to load persisted scheduled tasks from ${persistPath}`,
+          err,
+        );
+      }
+    }
+
+    this.taskSessionTracker = new ScheduledTaskSessionTracker();
     const sessionClient = this.openCodeSession;
+    const sessionTracker = this.taskSessionTracker;
+    const renderer = this.renderer;
     this.taskRuntime = new ScheduledTaskRuntime(
       store,
       {
@@ -1906,7 +1971,7 @@ export class ControlRouter {
           task: import("../scheduled-task/types.js").ScheduledTask,
         ) {
           const { executeTask } = await import("../scheduled-task/executor.js");
-          return executeTask({ sessionClient, logger }, task);
+          return executeTask({ sessionClient, logger, sessionTracker }, task);
         },
         onTaskUpdate(
           taskId: string,
@@ -1914,10 +1979,59 @@ export class ControlRouter {
         ) {
           store.updateTask(taskId, updates);
         },
+        onTaskResult(result, task) {
+          const chatId = task.chatId;
+          if (!chatId) {
+            return;
+          }
+
+          const statusEmoji = result.status === "success" ? "✅" : "❌";
+          const promptPreview =
+            task.prompt.length > 80
+              ? `${task.prompt.slice(0, 80)}...`
+              : task.prompt;
+          const headerText = `${statusEmoji} Scheduled Task ${result.status === "success" ? "Completed" : "Failed"}`;
+          const lines: string[] = [
+            `**Prompt:** ${promptPreview}`,
+            `**Schedule:** ${task.scheduleSummary}`,
+          ];
+
+          if (result.status === "success" && result.resultText) {
+            const trimmedResult =
+              result.resultText.length > 2000
+                ? `${result.resultText.slice(0, 2000)}…`
+                : result.resultText;
+            lines.push("", "**Result:**", trimmedResult);
+          }
+
+          if (result.status === "error" && result.errorMessage) {
+            lines.push("", `**Error:** ${result.errorMessage}`);
+          }
+
+          const card: import("@larksuiteoapi/node-sdk").InteractiveCard = {
+            header: {
+              title: { tag: "plain_text", content: headerText },
+              template: result.status === "success" ? "green" : "red",
+            },
+            elements: [{ tag: "markdown", content: lines.join("\n") }],
+          };
+          renderer.sendCard(chatId, card).catch((err: unknown) => {
+            logger.error(
+              `[ControlRouter] Failed to deliver task result: taskId=${result.taskId}, chatId=${chatId}`,
+              err,
+            );
+          });
+        },
       },
       logger,
     );
     this.taskRuntime.start();
+
+    for (const task of store.listTasks()) {
+      if (task.nextRunAt) {
+        this.taskRuntime.scheduleTask(task.id);
+      }
+    }
   }
 
   private async handleTask(
@@ -1940,8 +2054,15 @@ export class ControlRouter {
         "",
         "Use `/tasklist` to view and manage scheduled tasks.",
       ].join("\n");
-      await this.renderer.sendText(receiveId, message);
-      return { success: false, message };
+      const card: import("@larksuiteoapi/node-sdk").InteractiveCard = {
+        header: {
+          title: { tag: "plain_text", content: "📋 Scheduled Task" },
+          template: "blue",
+        },
+        elements: [{ tag: "markdown", content: message }],
+      };
+      const messageId = await this.renderer.sendCard(receiveId, card);
+      return { success: false, message, cardMessageId: messageId ?? undefined };
     }
 
     const separatorIdx = args.indexOf(",");
@@ -1986,7 +2107,24 @@ export class ControlRouter {
     const { validateCronMinGap } =
       await import("../scheduled-task/next-run.js");
 
-    const parsed = parseSchedule(scheduleText);
+    const project = this.settings.getCurrentProject();
+
+    if (!project) {
+      const message = "No project selected. Use /projects first.";
+      await this.renderer.sendText(receiveId, message);
+      return { success: false, message };
+    }
+
+    const parserDeps: import("../scheduled-task/schedule-parser.js").ScheduleParserDeps =
+      {
+        sessionClient: this.openCodeSession,
+        logger: this.logger,
+      };
+    const parsed = await parseSchedule(
+      parserDeps,
+      scheduleText,
+      project.worktree,
+    );
 
     if (
       parsed.kind === "cron" &&
@@ -1998,19 +2136,12 @@ export class ControlRouter {
       return { success: false, message };
     }
 
-    const project = this.settings.getCurrentProject();
     const model = this.settings.getCurrentModel();
-
-    if (!project) {
-      const message = "No project selected. Use /projects first.";
-      await this.renderer.sendText(receiveId, message);
-      return { success: false, message };
-    }
-
     const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
     const taskId = `task_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
     const task: import("../scheduled-task/types.js").ScheduledTask = {
       id: taskId,
+      chatId: receiveId,
       projectId: project.id,
       projectWorktree: project.worktree,
       model: model ?? { providerID: "openai", modelID: "gpt-4o" },

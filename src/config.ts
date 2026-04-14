@@ -57,6 +57,7 @@ export interface AppConfig {
   logLevel: string;
   assistantName: string;
   scheduledTaskLimit: number;
+  scheduledTaskPersistPath: string;
 }
 
 export const DEFAULT_CONTROL_CATALOG_CACHE_TTL_MS = 600_000;
@@ -80,6 +81,11 @@ export const DEFAULT_FEISHU_CARD_CALLBACK_ENCRYPT_KEY = "";
 
 export const DEFAULT_ASSISTANT_NAME = "OpenCode";
 export const DEFAULT_SCHEDULED_TASK_LIMIT = 10;
+export const DEFAULT_SCHEDULED_TASK_PERSIST_PATH = join(
+  process.cwd(),
+  ".data",
+  "scheduled-tasks.json",
+);
 
 export class ConfigValidationError extends Error {
   constructor(
@@ -241,6 +247,9 @@ export function loadConfig(): AppConfig {
       "SCHEDULED_TASK_LIMIT",
       DEFAULT_SCHEDULED_TASK_LIMIT,
     ),
+    scheduledTaskPersistPath:
+      getEnvVar("SCHEDULED_TASK_PERSIST_PATH", false) ||
+      DEFAULT_SCHEDULED_TASK_PERSIST_PATH,
   };
 }
 

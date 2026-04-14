@@ -1,5 +1,6 @@
 import type { InteractionManager } from "../../interaction/manager.js";
 import type { GuardDecision } from "../../interaction/types.js";
+import type { ScheduledTaskSessionTracker } from "../../scheduled-task/session-tracker.js";
 import type { SettingsManager } from "../../settings/manager.js";
 import type { Logger } from "../../utils/logger.js";
 import { logger as defaultLogger } from "../../utils/logger.js";
@@ -119,6 +120,7 @@ export interface PromptIngressDependencies {
   botOpenId?: string | null;
   logger?: Logger;
   scheduleAsync?: (task: () => void) => void;
+  scheduledTaskSessionTracker?: ScheduledTaskSessionTracker;
 }
 
 type ReadyPromptSessionResolution = Extract<
@@ -160,8 +162,15 @@ export async function isOpenCodeSessionBusy(
   client: OpenCodeSessionStatusClient,
   directory: string,
   logger?: Logger,
+  scheduledTaskSessionTracker?: ScheduledTaskSessionTracker,
 ): Promise<boolean> {
-  const busyState = await getOpenCodeBusyState(client, directory, null, logger);
+  const busyState = await getOpenCodeBusyState(
+    client,
+    directory,
+    null,
+    logger,
+    scheduledTaskSessionTracker,
+  );
   return busyState.anyBusy;
 }
 
@@ -170,6 +179,7 @@ async function getOpenCodeBusyState(
   directory: string,
   sessionId: string | null,
   logger?: Logger,
+  scheduledTaskSessionTracker?: ScheduledTaskSessionTracker,
 ): Promise<OpenCodeBusyState> {
   try {
     const { data, error } = await client.status({ directory });
@@ -185,6 +195,9 @@ async function getOpenCodeBusyState(
     let currentSessionBusy = false;
     for (const [statusSessionId, status] of Object.entries(data)) {
       if (status.type === "busy" || status.type === "retry") {
+        if (scheduledTaskSessionTracker?.has(statusSessionId)) {
+          continue;
+        }
         anyBusy = true;
         if (sessionId && statusSessionId === sessionId) {
           currentSessionBusy = true;
@@ -213,6 +226,9 @@ export class PromptIngressHandler {
   private readonly botOpenId: string | null;
   private readonly logger: Logger;
   private readonly scheduleAsync: (task: () => void) => void;
+  private readonly scheduledTaskSessionTracker:
+    | ScheduledTaskSessionTracker
+    | undefined;
 
   constructor(dependencies: PromptIngressDependencies) {
     this.settings = dependencies.settings;
@@ -226,6 +242,7 @@ export class PromptIngressHandler {
     this.logger = dependencies.logger ?? defaultLogger;
     this.scheduleAsync =
       dependencies.scheduleAsync ?? ((task) => setImmediate(task));
+    this.scheduledTaskSessionTracker = dependencies.scheduledTaskSessionTracker;
   }
 
   private getBasePromptParts(input: PromptIngressInput): PromptPartInput[] {
@@ -666,6 +683,7 @@ export class PromptIngressHandler {
       resolution.directory,
       resolution.sessionInfo.id,
       this.logger,
+      this.scheduledTaskSessionTracker,
     );
 
     if (busyState.currentSessionBusy) {

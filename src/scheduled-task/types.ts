@@ -1,11 +1,18 @@
 export type ScheduledTaskKind = "cron" | "once";
 export type ScheduledTaskStatus = "idle" | "running" | "success" | "error";
 
+export interface ScheduledTaskModel {
+  providerID: string;
+  modelID: string;
+  variant?: string | null;
+}
+
 export interface ScheduledTask {
   id: string;
+  chatId: string;
   projectId: string;
   projectWorktree: string;
-  model: { providerID: string; modelID: string };
+  model: ScheduledTaskModel;
   kind: ScheduledTaskKind;
   cron: string | null;
   runAt: string | null;
@@ -28,4 +35,13 @@ export interface ParsedTaskSchedule {
   timezone: string;
   summary: string;
   nextRunAt: string;
+}
+
+export interface TaskExecutionResult {
+  taskId: string;
+  status: "success" | "error";
+  startedAt: string;
+  finishedAt: string;
+  resultText: string | null;
+  errorMessage: string | null;
 }

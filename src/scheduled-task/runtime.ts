@@ -1,15 +1,18 @@
 import type { Logger } from "../utils/logger.js";
 import { computeNextCronRunAt } from "./next-run.js";
 import type { TaskStore } from "./store.js";
-import type { ScheduledTask, ScheduledTaskStatus } from "./types.js";
+import type {
+  ScheduledTask,
+  ScheduledTaskStatus,
+  TaskExecutionResult,
+} from "./types.js";
 
 const MAX_TIMER_DELAY_MS = 2_147_483_647;
 
 export interface TaskRuntimeCallbacks {
-  executeTask: (
-    task: ScheduledTask,
-  ) => Promise<{ status: "success" | "error"; error: string | null }>;
+  executeTask: (task: ScheduledTask) => Promise<TaskExecutionResult>;
   onTaskUpdate: (taskId: string, updates: Partial<ScheduledTask>) => void;
+  onTaskResult?: (result: TaskExecutionResult, task: ScheduledTask) => void;
 }
 
 export class ScheduledTaskRuntime {
@@ -128,7 +131,7 @@ export class ScheduledTaskRuntime {
 
     const updates: Partial<ScheduledTask> = {
       lastStatus: result.status as ScheduledTaskStatus,
-      lastError: result.error,
+      lastError: result.errorMessage,
       runCount: task.runCount + 1,
     };
 
@@ -145,6 +148,17 @@ export class ScheduledTaskRuntime {
       this.logger.info(
         `[TaskRuntime] One-time task ${taskId} completed and removed`,
       );
+    }
+
+    if (this.callbacks.onTaskResult) {
+      try {
+        this.callbacks.onTaskResult(result, task);
+      } catch (deliveryError) {
+        this.logger.error(
+          `[TaskRuntime] onTaskResult callback failed for task ${taskId}`,
+          deliveryError,
+        );
+      }
     }
   }
 }
