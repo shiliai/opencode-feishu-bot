@@ -26,3 +26,9 @@ services:
       - type: bind
         source: ${OPENCODE_FEISHU_DATA_DIR:-../.data}
         target: /app/.data
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"require('net').connect(13000,'127.0.0.1').on('connect',()=>process.exit(0)).on('error',()=>process.exit(1))\""]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
