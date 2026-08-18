@@ -1,0 +1,28 @@
+# OpenCode Feishu Bridge — Docker Compose deployment (issue #5 migration)
+#
+# Replaces the opencode-feishu-bridge.service systemd unit (node dist/index.js).
+# Builds from the repo-root Dockerfile and preserves:
+#   - LAN entry point 0.0.0.0:13000 (SERVICE_PORT/SERVICE_HOST come from .env)
+#   - .env secrets via env_file (operator-provided, gitignored — not committed)
+#   - .data settings/dedup state via bind volume
+#   - restart: unless-stopped
+#
+# Management:
+#   cd deploy && docker compose up -d
+#   cd deploy && docker compose down
+services:
+  bridge:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    image: opencode-feishu-bridge:local
+    container_name: opencode-feishu-bridge
+    restart: unless-stopped
+    ports:
+      - "0.0.0.0:13000:13000"
+    env_file:
+      - ../.env
+    volumes:
+      - type: bind
+        source: ${OPENCODE_FEISHU_DATA_DIR:-../.data}
+        target: /app/.data
