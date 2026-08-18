@@ -1,0 +1,11 @@
+# The image only needs the dependency manifests, TypeScript configuration, and
+# application source. Keep the build context allowlisted so local secrets and
+# runtime state cannot be copied into the builder by Dockerfile's `COPY . .`.
+**
+
+!Dockerfile
+!package.json
+!package-lock.json
+!tsconfig.json
+!src/
+!src/**
